@@ -12,11 +12,11 @@ an ex-date in the range or after it, up to ``as_of``, are listed with the
 result, since those are what either side adjusted for.
 
 Mismatches are grouped into stretches: runs of mismatched bars with no
-matching bar between them. A stretch's factor is the median of Kite's close
-over ours across it, to four places. Kite adjusts for some actions we do not
-(dividends of about 2 percent or more), and between two Ex-Dates its factor
-is one constant, so a stretch that ends at an Ex-Date at a steady factor is
-explained by that action.
+matching bar and no Ex-Date between them. A stretch's factor is the median of
+Kite's close over ours across it, to four places. Kite adjusts for some
+actions we do not (dividends of about 2 percent or more), and between two
+Ex-Dates its adjustment is one constant, so a stretch that ends at an Ex-Date
+at a steady factor is explained by that action.
 
 Nothing is written: this is a read.
 """
@@ -49,7 +49,7 @@ class BarMismatch:
 
 @dataclass(frozen=True)
 class Stretch:
-    """Consecutive mismatched bars, with no matching bar between them."""
+    """Consecutive mismatched bars, with no matching bar and no Ex-Date between them."""
 
     first: date
     last: date
@@ -72,14 +72,17 @@ class SymbolComparison:
     @property
     def stretches(self) -> tuple[Stretch, ...]:
         mismatched = {m.trade_date: m for m in self.mismatches}
+        ex_dates = sorted({a.ex_date for a in self.actions})
         runs: list[list[BarMismatch]] = []
-        in_run = False
+        previous: date | None = None
         for day in self.compared:
             if day in mismatched:
-                if not in_run:
+                # An Ex-Date after the previous bar, up to this one, starts a new stretch.
+                crossed = previous is not None and any(previous < d <= day for d in ex_dates)
+                if previous not in mismatched or crossed:
                     runs.append([])
                 runs[-1].append(mismatched[day])
-            in_run = day in mismatched
+            previous = day
         return tuple(_stretch(run) for run in runs)
 
     @property
