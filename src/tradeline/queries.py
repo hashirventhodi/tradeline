@@ -315,6 +315,9 @@ class UniverseMember:
     symbol: str
     series: str
     traded_value: Decimal
+    # The Instrument ranked, under a rule that ranks Instruments; None under
+    # one that ranks Symbols.
+    instrument: str | None = None
 
 
 @dataclass(frozen=True)
@@ -363,7 +366,7 @@ def universe_membership(
             return []
         rule_version = latest[0]
     rows = conn.execute(
-        "SELECT month, rule_version, rank, symbol, series, traded_value"
+        "SELECT month, rule_version, rank, symbol, series, traded_value, instrument_key"
         " FROM universe_membership WHERE month = %s AND rule_version = %s ORDER BY rank",
         (month, rule_version),
     ).fetchall()

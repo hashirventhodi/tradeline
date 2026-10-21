@@ -1,0 +1,67 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_20250319_F_0000.csv.zip",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "x-frame-options",
+        "DENY"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "accept-ranges",
+        "bytes"
+      ],
+      [
+        "etag",
+        "W/\"169286-1742382182319\""
+      ],
+      [
+        "last-modified",
+        "Wed, 19 Mar 2025 11:03:02 GMT"
+      ],
+      [
+        "content-type",
+        "application/zip"
+      ],
+      [
+        "content-length",
+        "713"
+      ],
+      [
+        "date",
+        "Wed, 21 Oct 2026 14:24:45 GMT"
+      ],
+      [
+        "akamai-grn",
+        "0.cfebdfad.1792592685.614f75c"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "content-security-policy",
+        "default-src 'self'; script-src 'strict-dynamic' 'nonce-MC4yMDg2Mzc3MzEw' 'unsafe-inline' http: https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.nse.co.in https://*.nseindia.com; font-src 'self'; frame-src 'self'; base-uri 'self'; frame-ancestors 'self'; connect-src 'self' https://*.nseindia.com https://c.go-mpulse.net https://stats.g.doubleclick.net https://*.akstat.io/ https://*.akamaihd.net"
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000 ; includeSubDomains ; preload"
+      ]
+    ],
+    "body": "UEsDBBQAAAAIAAAAVV1A086xFQIAAA8EAAApAAAAQmhhdkNvcHlfTlNFX0NNXzBfMF8wXzIwMjUwMzE5X0ZfMDAwMC5jc3aVks9S4zAMxu/7FH0A4bH838dSwmxmSwq1YZa9QbuUDm1gEg/QffqVnbZwY8hBnz7JcX7SJHZ3y7MEp+t/FMNqS6FbwPm6rds+ddv48pHXS6hD3UBcPHVht72HsEi70PXw+6Xb0dt0cF0Ojhdps6+F1D1ddusFzF5S+/myZkultrR+rh6LTt+KTDb9YO/6VJLL7rWn4qqY63bZbXZDHlLabPe307Wp6xNMHttV3X74mDaRRlzdPG+G/OHmrmTN/ewhvvfV+yItIfQtTdf8fTvtltPndJV2MN8+9TDvX5dYoihRlqh+CC70CZcn6OFTOrmAJlQQ4i9A7RXUTcW5H3PkAsmc30J1BfmhfBZuw2haX9SxOgM0XDLOP1RbwVxWZ5jWWT3D0vdMajg2AKx0lhsHiMYrq9HxclJoLhHhHAHLF78mFs7pgVhkYnQwr6b1uJlUB+qDH9XN2XWI87qiCSLRC4WME6XQkoms0hV6oSzD7JUrU+3rxwZlBo2QPjPRSJwbqTgzhI/WOvEdfEQtTeZXxp7mjXuIk3BAj+M4Hk1mTbieRhrhdhSq+Q3Bg9SEQmxHVUYwq0m9zXuUmuuhrwVThHxoUMY1DaIAiVp4r5x3zNKUDpGq30DX3NtMbrWLefMa/swuxnF2gB/c8WcR6JimFQlb5OAk07KIG4r0jaGa92y0Ro90DpXlSI4WzIwE6VBp/wn2P1BLAQIUAxQAAAAIAAAAVV1A086xFQIAAA8EAAApAAAAAAAAAAAAAACAAQAAAABCaGF2Q29weV9OU0VfQ01fMF8wXzBfMjAyNTAzMTlfRl8wMDAwLmNzdlBLBQYAAAAAAQABAFcAAABcAgAAAAA=",
+    "body_encoding": "base64"
+  }
+}

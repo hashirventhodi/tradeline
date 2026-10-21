@@ -26,6 +26,20 @@ membership row per member. Both tables are append-only: a month already
 written under a rule version is recomputed and compared, never rewritten, and
 a difference (end-of-day rows loaded since that change the window) is
 reported as an anomaly with the stored membership kept.
+
+A rule with ``rank_by = "instrument"`` (ADR 0016) ranks Instruments instead,
+so a stock renamed inside the window is neither cut in two nor taken for a new
+listing. Each end-of-day row counts for the Instrument whose interval holds
+it: the window's days and traded value in the rule's series are summed over
+every Symbol the Instrument had, its most recent row (under any Symbol) gives
+the series and ISIN checks, and its listing date is the Instrument's
+(``instruments.listed_on``). The member's Symbol is that of its most recent
+row in the window, the Symbol in force on the window's last day, and the
+membership row also records the Instrument's key. The Instruments must be
+rebuilt over the whole window first: a month whose window has a row in an
+equity listing series that no Instrument holds is refused, never ranked
+without it. Rows stored under a rule that ranks Symbols are left as they are;
+that rule's version is unchanged.
 """
 
 from __future__ import annotations
@@ -40,6 +54,7 @@ from psycopg.types.json import Jsonb
 
 from tradeline import queries
 from tradeline.config import UniverseRule
+from tradeline.rebuild_instruments import SERIES as LISTING_SERIES
 
 log = logging.getLogger(__name__)
 
@@ -63,12 +78,15 @@ class UniverseResult:
 
 @dataclass(frozen=True)
 class _Candidate:
+    # Ranking Instruments, the Symbol of the Instrument's latest row in the window.
     symbol: str
     days: int
     traded_value: Decimal
     latest_series: str
     isin: str | None
     listing_trading_days: int
+    # The Instrument's key when the rule ranks Instruments, else None.
+    instrument: str | None = None
 
 
 def compute_universe(
@@ -86,6 +104,7 @@ def compute_universe(
             symbol=s.symbol,
             series=rule.series,
             traded_value=s.traded_value,
+            instrument=s.instrument,
         )
         for s in eligible
         if s.rank is not None and s.rank <= rule.top_n
@@ -136,6 +155,8 @@ class Standing:
     traded_value: Decimal
     # Why the symbol is not eligible; None if it is.
     excluded: str | None
+    # The Instrument ranked when the rule ranks Instruments, else None.
+    instrument: str | None = None
 
 
 def standings(conn: psycopg.Connection, rule: UniverseRule, *, month: date) -> list[Standing]:
@@ -153,18 +174,22 @@ def _rank(
     conn: psycopg.Connection, rule: UniverseRule, month: date
 ) -> tuple[date, date, list[Standing]]:
     window = _window(conn, rule, month)
-    candidates = _candidates(conn, rule, month, window[0])
-    excluded = {c.symbol: _excluded(rule, c) for c in candidates}
+    if rule.rank_by == "instrument":
+        candidates = _instrument_candidates(conn, rule, month, window[0])
+    else:
+        candidates = _candidates(conn, rule, month, window[0])
+    judged = [(c, _excluded(rule, c)) for c in candidates]
     eligible = sorted(
-        (c for c in candidates if excluded[c.symbol] is None),
+        (c for c, excluded in judged if excluded is None),
         key=lambda c: (-c.traded_value, c.symbol),
     )
     ranked = [
-        Standing(c.symbol, rank, c.traded_value, None) for rank, c in enumerate(eligible, start=1)
+        Standing(c.symbol, rank, c.traded_value, None, c.instrument)
+        for rank, c in enumerate(eligible, start=1)
     ] + [
-        Standing(c.symbol, None, c.traded_value, excluded[c.symbol])
-        for c in candidates
-        if excluded[c.symbol] is not None
+        Standing(c.symbol, None, c.traded_value, excluded, c.instrument)
+        for c, excluded in judged
+        if excluded is not None
     ]
     return window[0], window[-1], ranked
 
@@ -226,6 +251,64 @@ def _candidates(
     return [_Candidate(*row) for row in rows]
 
 
+def _instrument_candidates(
+    conn: psycopg.Connection, rule: UniverseRule, month: date, window_start: date
+) -> list[_Candidate]:
+    """Every Instrument with a row in the rule's series in the window, across its Symbols.
+
+    A window row belongs to the Instrument whose interval holds it. A row in
+    NSE's listing series that no interval holds was loaded after the last
+    rebuild and would be left out of the ranking, so the month is refused.
+    """
+    params = {
+        "start": window_start,
+        "month": month,
+        "series": rule.series,
+        "listing_series": list(LISTING_SERIES),
+    }
+    row = conn.execute(
+        "SELECT count(*) FROM eod_bhavcopy e"
+        " WHERE e.trade_date >= %(start)s AND e.trade_date < %(month)s"
+        " AND e.series = ANY(%(listing_series)s) AND NOT EXISTS ("
+        "  SELECT 1 FROM instrument_intervals i WHERE i.symbol = e.symbol"
+        "  AND i.series = e.series AND e.trade_date BETWEEN i.first_day AND i.last_day)",
+        params,
+    ).fetchone()
+    if row is not None and row[0]:
+        raise ValueError(
+            f"{row[0]} end-of-day rows in the window for {month:%Y-%m} belong to no Instrument;"
+            " run `tradeline rebuild-instruments` first"
+        )
+    rows = conn.execute(
+        # Materialized for the same reason as in ``_candidates``.
+        "WITH calendar AS MATERIALIZED ("
+        "  SELECT DISTINCT trade_date FROM eod_bhavcopy WHERE trade_date < %(month)s),"
+        " window_rows AS ("
+        "  SELECT i.instrument_key, e.* FROM eod_bhavcopy e JOIN instrument_intervals i"
+        "  ON i.symbol = e.symbol AND i.series = e.series"
+        "  AND e.trade_date BETWEEN i.first_day AND i.last_day"
+        "  WHERE e.trade_date >= %(start)s AND e.trade_date < %(month)s),"
+        " stats AS ("
+        "  SELECT instrument_key, count(DISTINCT trade_date) AS days,"
+        "  sum(traded_value) AS traded_value"
+        "  FROM window_rows WHERE series = %(series)s GROUP BY instrument_key),"
+        " latest AS ("
+        "  SELECT DISTINCT ON (instrument_key) instrument_key, symbol, series, isin"
+        "  FROM window_rows WHERE instrument_key IN (SELECT instrument_key FROM stats)"
+        "  ORDER BY instrument_key, trade_date DESC, series = %(series)s DESC)"
+        " SELECT l.symbol, st.days, st.traded_value, l.series,"
+        "  COALESCE(l.isin, (SELECT isin FROM symbols s WHERE s.symbol = l.symbol"
+        "   AND s.series = %(series)s)),"
+        "  (SELECT count(*) FROM calendar c WHERE c.trade_date >= ins.listed_on),"
+        "  st.instrument_key"
+        " FROM stats st JOIN latest l USING (instrument_key)"
+        " JOIN instruments ins ON ins.key = st.instrument_key"
+        " ORDER BY l.symbol, st.instrument_key",
+        params,
+    ).fetchall()
+    return [_Candidate(*row) for row in rows]
+
+
 def _excluded(rule: UniverseRule, candidate: _Candidate) -> str | None:
     """Why ``candidate`` is not eligible under ``rule``, or None if it is."""
     if candidate.latest_series != rule.series:
@@ -257,9 +340,10 @@ def _insert_members(conn: psycopg.Connection, members: tuple[queries.UniverseMem
     if not members:
         return 0
     cursor = conn.execute(
-        "INSERT INTO universe_membership (month, rule_version, rank, symbol, series, traded_value)"
+        "INSERT INTO universe_membership"
+        " (month, rule_version, rank, symbol, series, traded_value, instrument_key)"
         " SELECT * FROM unnest(%s::date[], %s::text[], %s::integer[], %s::text[], %s::text[],"
-        "  %s::numeric[])",
+        "  %s::numeric[], %s::text[])",
         (
             [m.month for m in members],
             [m.rule_version for m in members],
@@ -267,6 +351,7 @@ def _insert_members(conn: psycopg.Connection, members: tuple[queries.UniverseMem
             [m.symbol for m in members],
             [m.series for m in members],
             [m.traded_value for m in members],
+            [m.instrument for m in members],
         ),
     )
     return cursor.rowcount
