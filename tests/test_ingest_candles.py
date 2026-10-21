@@ -1,11 +1,9 @@
 """``ingest candles --interval day`` against Kite fixtures, asserted through the query layer.
 
 The instrument master comes from the recorded NSE and Kite fixtures of
-``test_ingest_eod``. The candle fixtures themselves are Kite's documented
-historical response shape filled with the real NSE end-of-day values for the
-same five symbols and range (2024-07-01 to 2024-08-30): a true Kite recording
-needs the Operator's daily access token, which a session cannot obtain. The
-fixture directory's README says how to replace them with a real recording.
+``test_ingest_eod``; the candle fixtures are real Kite responses for the same
+five symbols and range (2024-07-01 to 2024-08-30). Kite's bars are adjusted
+for corporate actions, so the values asserted here are Kite's, not NSE's.
 
 Time is a fake clock that advances only when the session sleeps, so the
 spacing between calls is observable without waiting.
@@ -156,13 +154,14 @@ def test_the_query_layer_returns_raw_daily_candles_for_a_symbol_and_range(
         date(2024, 7, 4),
         date(2024, 7, 5),
     ]
+    # Values as Kite returned them for 1 July 2024 on 2026-10-21.
     first = week[0]
     assert (first.symbol, first.series) == ("INFY", "EQ")
     assert (first.open, first.high, first.low, first.close) == (
-        Decimal("1559.5"),
-        Decimal("1599.9"),
-        Decimal("1559.5"),
-        Decimal("1590.8"),
+        Decimal("1526.5"),
+        Decimal("1566"),
+        Decimal("1526.5"),
+        Decimal("1557.1"),
     )
     assert first.volume == 6801771
 
@@ -230,7 +229,7 @@ def test_a_resent_bar_with_a_changed_close_keeps_the_stored_bar_and_records_an_a
         run = queries.ingest_runs(conn, source="kite_candles_daily")[0]
 
     assert (result.rows_written, result.anomalies) == (0, 1)
-    assert infy.close == Decimal("1590.8")
+    assert infy.close == Decimal("1557.1")
     assert run.details["anomalies"] == 1
     assert run.details["anomaly_bars"] == [
         {
@@ -238,17 +237,17 @@ def test_a_resent_bar_with_a_changed_close_keeps_the_stored_bar_and_records_an_a
             "series": "EQ",
             "trade_date": "2024-07-01",
             "stored": {
-                "open": "1559.5",
-                "high": "1599.9",
-                "low": "1559.5",
-                "close": "1590.8",
+                "open": "1526.5",
+                "high": "1566",
+                "low": "1526.5",
+                "close": "1557.1",
                 "volume": 6801771,
             },
             "received": {
-                "open": "1559.5",
-                "high": "1599.9",
-                "low": "1559.5",
-                "close": "1591.8",
+                "open": "1526.5",
+                "high": "1566",
+                "low": "1526.5",
+                "close": "1558.1",
                 "volume": 6801771,
             },
         }

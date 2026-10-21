@@ -8,9 +8,10 @@ next symbol starts, so an interrupted run keeps what it loaded. Without a
 symbol list, every ``EQ`` series symbol with a token is loaded: Phase 1 is
 scoped to series ``EQ``. A named symbol is loaded under every series it has
 in the master, so a symbol that moved between series (``EQ`` to ``BE`` and
-back) can be given a continuous history on purpose. A symbol in the master
-without a token is skipped and reported; a symbol not in the master is
-refused up front (``ingest eod`` loads the master).
+back) can be given a continuous history on purpose. A master row without a
+token is skipped and reported by its Kite trading symbol (``BAFNAPH-BE``),
+the name Kite's instrument dump would have had to list; a symbol not in the
+master is refused up front (``ingest eod`` loads the master).
 
 Bars are stored exactly as Kite returned them. A bar already stored is left
 as it is: Kite can resend a bar, and a resend whose values differ is an
@@ -128,7 +129,7 @@ def _load_symbols(
         with log_context(symbol=instrument.symbol, series=instrument.series):
             if instrument.token is None:
                 log.warning("symbol has no kite instrument token; skipped")
-                without_token.append(instrument.symbol)
+                without_token.append(kite.trading_symbol(instrument.symbol, instrument.series))
                 continue
             before = session.requests_sent
             candles = kite.fetch_daily_candles(session, instrument.token, start=start, end=end)

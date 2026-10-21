@@ -1,14 +1,20 @@
 # Kite daily candle fixtures
 
-These are **not Kite recordings**. They are Kite's documented historical
-response shape (`{"status": "success", "data": {"candles": [[ts, o, h, l, c, v], ...]}}`)
-filled with the real NSE end-of-day values from `../ingest_eod/` for the same
-five symbols and range (2024-07-01 to 2024-08-30), one request per symbol. A
-real recording needs the Operator's daily access token, which the implementing
-session could not obtain. `../ingest_candles_resend/` is INFY for 2024-07-01
-with the close changed by hand from 1590.8 to 1591.8.
+Real Kite Connect historical responses, recorded on 2026-10-21 through
+`ingest candles --record-fixtures` for the five symbols of `../ingest_eod/`
+over 2024-07-01 to 2024-08-30, one request per symbol. `BAFNAPH` is the
+`BE` series instrument (`BAFNAPH-BE`, token 4540161).
 
-To replace them with real responses, after `tradeline login`:
+Kite's values differ from the NSE end-of-day files for the same days
+because Kite adjusts candles for corporate actions (see
+`docs/research.md`): RELIANCE is halved by its October 2024 bonus, INFY
+carries a further factor of about 0.979 from a 2026 action. The tests
+assert the values as Kite returned them.
+
+`../ingest_candles_resend/` is the real INFY response narrowed to
+2024-07-01 with the close changed by hand from 1557.1 to 1558.1.
+
+To re-record after `tradeline login`:
 
 ```sh
 rm tests/fixtures/ingest_candles/*.json
@@ -17,6 +23,6 @@ uv run tradeline ingest candles --interval day \
   --from 2024-07-01 --to 2024-08-30 --record-fixtures tests/fixtures/ingest_candles
 ```
 
-Then re-derive the resend fixture from the real INFY file (copy it to
-`../ingest_candles_resend/`, narrow the request to 2024-07-01, change the close)
-and update any value the tests assert on if Kite's bars differ from NSE's.
+A later recording may carry a different adjustment factor if another
+corporate action has happened since; update the asserted literals from
+the new file rather than from NSE.

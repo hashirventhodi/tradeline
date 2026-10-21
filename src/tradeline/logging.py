@@ -58,6 +58,8 @@ def configure_logging(*, command: str, level: str, stream: TextIO | None = None)
         root.removeHandler(existing)
     root.addHandler(handler)
     root.setLevel(level.upper())
+    # httpx logs one INFO line per request; the adapters already log what matters.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 @contextmanager

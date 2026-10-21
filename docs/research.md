@@ -15,7 +15,7 @@ Every component in the architecture exists in some form today: event-driven back
 
 ## India-specific findings
 
-- **Zerodha Kite Connect.** Personal API free but no market data. Kite Connect at ₹500 per month per app includes live WebSocket and historical candles (the separate ₹2,000 historical fee was dropped in 2025). No paper or sandbox environment. Access tokens expire daily. Historical API rate limit about 3 requests per second; depth of daily history unconfirmed in official docs. Candles are believed unadjusted for corporate actions (forum evidence, unconfirmed).
+- **Zerodha Kite Connect.** Personal API free but no market data. Kite Connect at ₹500 per month per app includes live WebSocket and historical candles (the separate ₹2,000 historical fee was dropped in 2025). No paper or sandbox environment. Access tokens expire daily. Historical API rate limit about 3 requests per second. Depth of daily history and adjustment were verified on 2026-10-21; see the section below: history goes back to the early 2000s and candles are adjusted.
 - **SEBI retail algo framework, in force from April 2026.** API orders must originate from a static IP whitelisted with the broker (one or two per client, changeable about weekly). Orders need standard API tagging. Strategies at or under 10 orders per second per exchange need no exchange registration; above that, registration through the broker. Order records retained five years. Our system places a handful of orders a day.
 - **Delivery costs.** STT 0.1% each side, stamp duty 0.015% on buys, exchange charge about 0.003%, SEBI ₹10 per crore, GST 18% on charges, DP about ₹16 per scrip on sell. Round trip about 0.3% before slippage at a zero-brokerage broker.
 - **Pattern-day-trader minimum removal (US, June 2026)** is irrelevant here; Indian intraday has no such rule but is excluded on cost grounds anyway.
@@ -23,32 +23,44 @@ Every component in the architecture exists in some form today: event-driven back
 
 ## Kite daily history depth and adjustment
 
-**Status on 2026-10-21: not yet verified from real responses.** `login` and
-`ingest candles --interval day` exist (issue #4), but a Kite access token needs
-the Operator's interactive Session Login, so the implementing session could not
-capture a live response. Both answers must be recorded here before Phase 2
-starts; if candles turn out to be adjusted, ADR 0006 is revisited first.
+Verified on 2026-10-21 from live Kite Connect responses through `ingest candles
+--interval day` (recorded; the test fixtures under `tests/fixtures/ingest_candles/`
+are from the same session) and compared with NSE's official end-of-day files
+through the query layer.
 
 | Question | Answer | Checked on |
 |---|---|---|
-| How far back does Kite daily history go for NSE equities? | pending | |
-| Are Kite candles adjusted for corporate actions? | pending (forum evidence says unadjusted; unconfirmed) | |
+| How far back does Kite daily history go for NSE equities? | INFY from 2003-01-01, RELIANCE from 2000-01-03 (5,869 and 6,664 bars to 2026-10-21). Depth varies by instrument and is well over the ten years Phase 1 needs. | 2026-10-21 |
+| Are Kite candles adjusted for corporate actions? | **Yes.** Bonuses and splits are adjusted in price and volume; at least one other action is adjusted in price only. | 2026-10-21 |
 
-Procedure, about ten minutes once the day's login is done:
+Evidence:
 
-1. `uv run tradeline login`, open the printed URL, paste the `request_token` back.
-2. Depth: `uv run tradeline ingest candles --interval day --symbol RELIANCE --symbol INFY --from 1995-01-01 --to <today> --record-fixtures tests/fixtures/kite_depth`.
-   The earliest `trade_date` that `queries.daily_candles` returns for each symbol
-   is the depth; record the date and whether the two symbols agree.
-3. Adjustment: RELIANCE issued a 1:1 bonus with ex-date 2024-10-28. Run
-   `uv run tradeline ingest eod --from 2024-10-25` and compare the NSE end-of-day
-   close for 2024-10-25 (`queries.end_of_day`) with Kite's bar for the same day
-   (`queries.daily_candles`, loaded in step 2). Equal closes mean Kite candles are
-   raw; a Kite close of about half the NSE close means Kite adjusts for bonuses and
-   splits, and ADR 0006 must be revised before Phase 2.
-4. Fill in the table above with the date checked, and replace the synthesised
-   fixtures under `tests/fixtures/ingest_candles/` with a real recording (see the
-   README there).
+- RELIANCE, 1:1 bonus ex 2024-10-28. On 2024-10-25 Kite's close is 1327.85 and
+  NSE's official close is 2655.70: exactly half, and Kite's volume is exactly
+  double. From 2025-03-03 onward (sampled quarterly to 2026-10-01) Kite and NSE
+  agree to the paisa.
+- INFY, 1:1 bonus ex 2018-09-04. Kite's bars before the ex-date are halved and
+  volume doubled against NSE, as for RELIANCE.
+- INFY also carries a uniform factor of 0.9788 on every bar from at least
+  2024-10-25 to 2026-04-01 (sampled: 2024-10-25, 2025-03-03, 2025-06-02,
+  2025-09-01, 2025-11-03, 2025-12-01, 2026-01-05, 2026-04-01), with volume
+  unchanged, and none from 2026-07-01 on. No split or bonus explains it: the
+  action lies between 2026-04-01 and 2026-07-01 and adjusts price alone by about
+  2.1 percent. Its identity is to be settled when NSE's corporate-action list is
+  ingested (#5); until then, treat Kite's adjustment set as unknown beyond
+  splits and bonuses.
+- The Kite values are stored exactly as returned. `candles_daily` therefore holds
+  Kite's adjusted series as of the day it was fetched, not raw prices, and a
+  later corporate action will make a refetch disagree with stored bars, which the
+  ingest records as anomalies rather than applying.
+
+Consequence: **ADR 0006 is flagged for revision before Phase 2.** It states that
+Kite candles are stored raw and unadjusted and that we compute the adjusted
+series ourselves. Kite's history is already adjusted, by Kite's rules, which
+include at least one action beyond splits and bonuses. The decision to revisit
+is which source is the raw series (NSE end-of-day files are unadjusted and
+official), what Kite's bars are used for, and how a resend after a corporate
+action is reconciled. Not decided here.
 
 ## US-market findings (for reference; not the chosen market)
 
