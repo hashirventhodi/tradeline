@@ -1,0 +1,83 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "x-frame-options",
+        "DENY"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "accept-ranges",
+        "bytes"
+      ],
+      [
+        "etag",
+        "W/\"184186-1792532103129\""
+      ],
+      [
+        "last-modified",
+        "Tue, 20 Oct 2026 21:35:03 GMT"
+      ],
+      [
+        "content-type",
+        "text/csv"
+      ],
+      [
+        "vary",
+        "Accept-Encoding"
+      ],
+      [
+        "date",
+        "Wed, 21 Oct 2026 14:10:38 GMT"
+      ],
+      [
+        "content-length",
+        "158"
+      ],
+      [
+        "akamai-grn",
+        "0.06d70b17.1792591838.f00e544"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "content-security-policy",
+        "default-src 'self'; script-src 'strict-dynamic' 'nonce-MC4yMDg2Mzc3MzEw' 'unsafe-inline' http: https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.nse.co.in https://*.nseindia.com; font-src 'self'; frame-src 'self'; base-uri 'self'; frame-ancestors 'self'; connect-src 'self' https://*.nseindia.com https://c.go-mpulse.net https://stats.g.doubleclick.net https://*.akstat.io/ https://*.akamaihd.net"
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000 ; includeSubDomains ; preload"
+      ],
+      [
+        "set-cookie",
+        "_abck=E56F2798CC709F66F8C137FE322930A2~-1~YAAQBtcLF+QGEjqhAQAAIb3MXhAH2VZS4jqAGdaWNr8gcxwc5raEeqW8pjQ/s4vmO8s5EqePFhxmlkEdY2kSZ8/66cKUzlyVhUG4Ci4CEdbQnPGFGS9b6LkHnyCoj5Zb/SPVqdFhrsHVjqgGrNdvmdP0X+vMxVp1bt+rZedlxGaG8uFfaXX9W8AIJqR/Px2hKRLpIT5WDCBXjrG0lqktc0RxkHaJT2ynxyOGUBAQpIw0EXEx9Y+l3NZN1GQgLagaXOgwFrgwmcygGjOGLQWjJzB6Abi6oJA/UtmTq31f5Ly/oPqBs8Xlz4Ol7fs5WSMCQtOA1v+r3Sqz0AtpmckGon2l9uxq8deuJcUw+4J8vGAmVdTDP7pO69iPcVOp0ZyoxS3fRPsIFChjJP7r42ucqQROvBdR5hpctdfhqnKV8V/gT0BtdghVrorSUsOmI6TxvN0ujT3uVS2Zmw==~-1~-1~-1~-1~-1; Domain=.nseindia.com; Path=/; Expires=Thu, 21 Oct 2027 14:10:38 GMT; Max-Age=31536000; Secure"
+      ],
+      [
+        "set-cookie",
+        "bm_mi=4EC41F6C6937E64F78DE0856DAEECBAF~YAAQBtcLF+UGEjqhAQAAIb3MXgHHVcTdQVnieXXyJL2JVrZhl9gcQWAGag3ey6zV6hcroEwlA7DEcx3kRqBKOPTbFuxUNzONcFZhNqImosHc16ZLckOc8KD2IfBVuEoVC4ha9+CAFCLX9i8c8fglkg9q50pj5OMM6t1X+borYm22qwGliUMqQL2yPn5YQX/+HruvXgoNlhkEGksKNUc+EraPwBbyT15vwIVeHLrQG7aC26sqVWVgkoOS+n4mxPbHMuoP9V/Jas6yLpJQYcHgAkaVImL36ssFBFkBO1Af6vaimcA8eUDZipriYhS4J506a4R2AVHXheHNf00f2NgXUIRbJ+PfsMl/z3t0celNEEoaweS327Eao/J0rcKiQYEShixl20Y=~1; Domain=.nseindia.com; Path=/; Expires=Wed, 21 Oct 2026 14:10:38 GMT; Max-Age=0; Secure"
+      ],
+      [
+        "set-cookie",
+        "bm_sz=BA933B294AA40A809E87257C43EFE0D7~YAAQBtcLF+YGEjqhAQAAIb3MXgEI2ADpj53le3Uj/sRLR9AedGMKYZwBYSOg8E/vV9sycW9tUhuzDAGV13+yGo1u7Yw2TRNFnd5HGFHf4G0PizR/m8Sr2hshvpHL6JnS2B5kXJEJ35KQB9+o9wYXuVyao5RIW+vgf5J/D/+ZxFfuHM6e0GelOyNvVb3cbm3PGUG8u9lqxk5LbpXlrsfBe74C3fuqiF3Cqo+nwk/e/n2i5kXG/3Byumzj8NgQw1Yr/skwgGkbeV9fYRm9ayeOj8zlPpE+a52WTqE/NV888SxFA0Q1Q1huGLaPpp5b+NPRtFyeVfco6G0lFe/5isIDFAmrnFG0poc0y5z5UIdpovRvwl84hUl8G8avJTipsf3sANhKrjIqEwQ8g7n1QcSyOucDg+N8t+pkQHUm4oxBKAcopgSQ1lk=~3224133~4473411; Domain=.nseindia.com; Path=/; Expires=Wed, 21 Oct 2026 18:10:38 GMT; Max-Age=14400"
+      ]
+    ],
+    "body": "SYMBOL,NAME OF COMPANY, SERIES, DATE OF LISTING, PAID UP VALUE, MARKET LOT, ISIN NUMBER, FACE VALUE\nETERNAL,ETERNAL LIMITED,EQ,23-JUL-2021,1,1,INE758T01015,1\n",
+    "body_encoding": "utf-8"
+  }
+}

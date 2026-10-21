@@ -178,3 +178,14 @@ def test_the_application_role_cannot_update_or_delete_sectors(database_url: str)
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 conn.execute(statement)
             conn.rollback()
+
+
+def test_the_application_role_cannot_update_or_delete_symbol_changes(database_url: str) -> None:
+    with app_connection(database_url) as conn:
+        for statement in (
+            "UPDATE symbol_changes SET new_symbol = 'OTHER'",
+            "DELETE FROM symbol_changes",
+        ):
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                conn.execute(statement)
+            conn.rollback()

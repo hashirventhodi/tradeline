@@ -1,11 +1,14 @@
-"""NSE: end-of-day files, the equity master, index constituents, corporate actions, and
-announcements.
+"""NSE: end-of-day files, the equity master, symbol changes, index constituents, corporate
+actions, and announcements.
 
 NSE's site refuses requests that do not look like a browser and rate-limits
 aggressively. ``NseSession`` owns that: it sends browser headers on every
 request, keeps the session cookies the site sets, warms the session up before
 calling the JSON API on ``www.nseindia.com``, and backs off on throttling.
 Adapters call ``session.get`` and never touch headers themselves.
+
+The symbol-change list is one CSV file on the archives host, every rename NSE
+records (old Symbol, new Symbol, effective date), republished whole as it grows.
 
 Index constituent lists are CSV files on the archives host, one row per
 constituent with NSE's sector in a column headed ``Industry``.
@@ -49,6 +52,7 @@ log = logging.getLogger(__name__)
 ARCHIVES_HOST = "https://nsearchives.nseindia.com"
 SITE_HOST = "https://www.nseindia.com"
 EQUITY_MASTER_URL = f"{ARCHIVES_HOST}/content/equities/EQUITY_L.csv"
+SYMBOL_CHANGES_URL = f"{ARCHIVES_HOST}/content/equities/symbolchange.csv"
 CORPORATE_ACTIONS_URL = f"{SITE_HOST}/api/corporates-corporateActions"
 ANNOUNCEMENTS_URL = f"{SITE_HOST}/api/corporate-announcements"
 
@@ -249,6 +253,55 @@ def parse_equity_master(body: bytes) -> list[ListedSymbol]:
                 name=record["NAME OF COMPANY"],
                 isin=record["ISIN NUMBER"],
                 listing_date=_nse_date(record["DATE OF LISTING"]),
+            )
+        )
+    return rows
+
+
+# --- Symbol changes ---------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SymbolChange:
+    """One record of NSE's symbol-change list: from ``effective_date`` the old Symbol trades
+    under the new one."""
+
+    # NSE leaves the name blank on a few records.
+    company_name: str | None
+    old_symbol: str
+    new_symbol: str
+    effective_date: date
+
+
+def fetch_symbol_changes(session: NseSession) -> list[SymbolChange]:
+    """NSE's whole symbol-change list as it stands today: one file, every change NSE records."""
+    response = session.get(SYMBOL_CHANGES_URL)
+    if response.status != 200:
+        raise NseError(f"HTTP {response.status} fetching {SYMBOL_CHANGES_URL}")
+    return parse_symbol_changes(response.body)
+
+
+def parse_symbol_changes(body: bytes) -> list[SymbolChange]:
+    reader = csv.reader(io.StringIO(body.decode("utf-8-sig")))
+    header = [name.strip() for name in next(reader, [])]
+    expected = ["NAME OF THE COMPANY", "OLD SYMBOL", "NEW SYMBOL", "EFFECTIVE DATE"]
+    if header != expected:
+        raise NseError(f"unrecognised symbol-change list: header {header}")
+    rows: list[SymbolChange] = []
+    for values in reader:
+        if not values:
+            continue
+        if len(values) != len(expected):
+            raise NseError(f"symbol-change record has {len(values)} fields: {values}")
+        name, old, new, effective = (v.strip() for v in values)
+        if not old or not new:
+            raise NseError(f"symbol-change record without a symbol: {values}")
+        rows.append(
+            SymbolChange(
+                company_name=name or None,
+                old_symbol=old,
+                new_symbol=new,
+                effective_date=_nse_date(effective),
             )
         )
     return rows

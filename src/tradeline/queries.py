@@ -19,6 +19,8 @@ import psycopg
 
 from tradeline.adjust import KINDS, AdjustedBar, CorporateAction, Kind, RawBar, adjust
 from tradeline.dates import IST
+from tradeline.instruments import Interval, KeyFrom, Link
+from tradeline.sources.nse import SymbolChange
 
 
 @dataclass(frozen=True)
@@ -484,6 +486,94 @@ def news(
         NewsItem(feed, title, link, summary, published, fetched, tuple(symbols))
         for feed, title, link, summary, published, fetched, symbols in rows
     ]
+
+
+def symbol_changes(conn: psycopg.Connection, *, symbol: str | None = None) -> list[SymbolChange]:
+    """NSE's symbol-change records as published, oldest effective date first: every record,
+    or those naming ``symbol`` as the old or the new Symbol."""
+    rows = conn.execute(
+        "SELECT company_name, old_symbol, new_symbol, effective_date FROM symbol_changes"
+        " WHERE %s::text IS NULL OR %s IN (old_symbol, new_symbol)"
+        " ORDER BY effective_date, old_symbol, new_symbol",
+        (symbol, symbol),
+    ).fetchall()
+    return [SymbolChange(*row) for row in rows]
+
+
+@dataclass(frozen=True)
+class Instrument:
+    """An Instrument as last rebuilt (``tradeline.rebuild_instruments``)."""
+
+    key: str
+    first_symbol: str
+    listed_on: date
+    # Whether ``listed_on`` is NSE's listing date or the first end-of-day row.
+    key_from: KeyFrom
+
+
+@dataclass(frozen=True)
+class InstrumentHistory:
+    key: str
+    first_symbol: str
+    listed_on: date
+    key_from: KeyFrom
+    # Oldest first: each a run of end-of-day rows under one Symbol, series, and ISIN.
+    intervals: tuple[Interval, ...]
+    # The Instrument Links that joined them, oldest first, each with its source.
+    links: tuple[Link, ...]
+
+
+def resolve_symbol(conn: psycopg.Connection, symbol: str, *, as_of: date) -> Instrument:
+    """The Instrument ``symbol`` named on ``as_of``, or the one it last named before then.
+
+    A Symbol names at most one Instrument on any day, so this is the
+    Instrument of the latest interval under ``symbol`` starting on or before
+    ``as_of``: ZOMATO as of today is the Instrument now trading as ETERNAL. A
+    Symbol that named no Instrument on or before ``as_of`` is refused with a
+    ``LookupError``, so a Symbol is never read into a past before it existed.
+    """
+    row = conn.execute(
+        "SELECT i.key, i.first_symbol, i.listed_on, i.key_from"
+        " FROM instrument_intervals v JOIN instruments i ON i.key = v.instrument_key"
+        " WHERE v.symbol = %s AND v.first_day <= %s"
+        " ORDER BY v.first_day DESC, v.series LIMIT 1",
+        (symbol, as_of),
+    ).fetchone()
+    if row is None:
+        raise LookupError(f"{symbol} named no Instrument on or before {as_of}")
+    return Instrument(*row)
+
+
+def instrument_history(conn: psycopg.Connection, key: str) -> InstrumentHistory:
+    """An Instrument's Symbol history: its intervals and the links that joined them.
+
+    An unknown key is refused with a ``LookupError``.
+    """
+    found = conn.execute(
+        "SELECT key, first_symbol, listed_on, key_from FROM instruments WHERE key = %s", (key,)
+    ).fetchone()
+    if found is None:
+        raise LookupError(f"no Instrument {key}")
+    intervals = conn.execute(
+        "SELECT symbol, series, isin, first_day, last_day FROM instrument_intervals"
+        " WHERE instrument_key = %s ORDER BY first_day, last_day, symbol, series",
+        (key,),
+    ).fetchall()
+    links = conn.execute(
+        "SELECT kind, on_date, from_symbol, from_isin, to_symbol, to_isin, source"
+        " FROM instrument_links WHERE instrument_key = %s"
+        " ORDER BY on_date, kind, from_symbol, from_isin, to_symbol, to_isin",
+        (key,),
+    ).fetchall()
+    found_key, first_symbol, listed_on, key_from = found
+    return InstrumentHistory(
+        key=found_key,
+        first_symbol=first_symbol,
+        listed_on=listed_on,
+        key_from=key_from,
+        intervals=tuple(Interval(*row) for row in intervals),
+        links=tuple(Link(*row) for row in links),
+    )
 
 
 @dataclass(frozen=True)

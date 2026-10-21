@@ -1,0 +1,79 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://nsearchives.nseindia.com/content/equities/symbolchange.csv",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "x-frame-options",
+        "DENY"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "accept-ranges",
+        "bytes"
+      ],
+      [
+        "etag",
+        "W/\"69219-1792531809998\""
+      ],
+      [
+        "last-modified",
+        "Tue, 20 Oct 2026 21:30:09 GMT"
+      ],
+      [
+        "content-type",
+        "text/csv"
+      ],
+      [
+        "vary",
+        "Accept-Encoding"
+      ],
+      [
+        "date",
+        "Wed, 21 Oct 2026 14:05:02 GMT"
+      ],
+      [
+        "content-length",
+        "622"
+      ],
+      [
+        "akamai-grn",
+        "0.8dd70b17.1792591502.bb95d33b"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "content-security-policy",
+        "default-src 'self'; script-src 'strict-dynamic' 'nonce-MC4yMDg2Mzc3MzEw' 'unsafe-inline' http: https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.nse.co.in https://*.nseindia.com; font-src 'self'; frame-src 'self'; base-uri 'self'; frame-ancestors 'self'; connect-src 'self' https://*.nseindia.com https://c.go-mpulse.net https://stats.g.doubleclick.net https://*.akstat.io/ https://*.akamaihd.net"
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000 ; includeSubDomains ; preload"
+      ],
+      [
+        "set-cookie",
+        "_abck=F9523A37024833DC9D680F9B434B856E~-1~YAAQjdcLFxh8aUahAQAAfpvHXhAabSl+Od/0UaMYs6XfoiTgXBx95RBlQSLHSQON/x/5xw9/YPkr6r54HdlaKT00YpY2PHCbqYbJivYpXDTl/fytZlNYfl2Cpu4mOSZGoFSgqoB2Ls1huGDDvniFNRRba4nN9oMh9lpnvc1+zHUSWFtfFkydGLpB5nXqXc4mt/D43a8prpGfkZnFvxqUucTXuQ0scu56iNxP9Rb7ey6DKlCqDq5vhPncMVM42Bymf5qP70lzO13gBpTSdQDwaFvdguIVxVN/gsUIl1JZPo248EZdThe22D1N3PVuGFsOx/eay4a3XARosoU+jWM2z4hZxX5mySnkCJKmgvvf61tA+tXWM7TU3wqHOP/7hTA1h4W3qP93A73ueb4wLi8vMJY4W555+e2tOupakPd5iCbb0Fq/N0oDY2eBMVKpDXBUiOW2pcnkteulMA==~-1~-1~-1~-1~-1; Domain=.nseindia.com; Path=/; Expires=Thu, 21 Oct 2027 14:05:02 GMT; Max-Age=31536000; Secure"
+      ],
+      [
+        "set-cookie",
+        "bm_sz=8C20DF1E7F90B70938BB93C730D2E8D7~YAAQjdcLFxl8aUahAQAAfpvHXgGlb0IOz5OVHx1owbXVvrugu8WMvaJJ17NczfggS+7BXIBnvuWoT2PwGuZz6ioOkL81Bi2pa84F0uKAXMSUAurEz9LOsv3K3f6CeZOktk4mV4kDt+WvUpr7/mybq122LXH4gWrSXQnw7Sxxkgcsv+crmZLlwhYD30y5xk2Nzl211duwpQT587cKHJC7/m3fBmU8G7AQCI7Ag4YCUanH0SOGCeVESFpBPp9A8+6/G+8+UBptpVc4GnmvmltHw0tlfjxmCZ6ZLAL0EVex8tLPzDR3rhmpcHfli5OZUVIZFEV/+cuXL0nUq/nQLWCeSGblT5GYBvlkd5E2DlvD8ZiG7/T7sWm7aI2rA20/fu+e4Ihc/D1NvKPnL/5FUEBnU+a2+BWhgL19TvxWrGp0fhbNDBvb64Q=~3229249~3159617; Domain=.nseindia.com; Path=/; Expires=Wed, 21 Oct 2026 18:05:02 GMT; Max-Age=14400"
+      ]
+    ],
+    "body": "NAME OF THE COMPANY,OLD SYMBOL,NEW SYMBOL,EFFECTIVE DATE\n NIPPON INDIA MF - NIPPON INDIA Dual Advantage FTF  Sr. x Plan E -  GO,RDAXEDG,NDAXEDG,30-OCT-2019\nETERNAL LIMITED,ZOMATO,ETERNAL,09-APR-2025\nInterise Trust,INTERISE,INTERISE,12-NOV-2024\nL&T Finance Limited,L&TFH,LTF,23-APR-2024\nLTIMindtree Limited,LTI,LTIM,05-DEC-2022\nLTM Limited,LTIM,LTM,27-FEB-2026\nTata Motors Limited,TELCO,TATAMOTORS,26-DEC-2003\nTata Motors Passenger Vehicles Limited,TATAMOTORS,TMPV,24-OCT-2025\nUnited Spirits Limited,MCDOWELL-N,UNITDSPR,07-JUN-2024\nZydus Lifesciences Limited,CADILAHC,ZYDUSLIFE,07-MAR-2022\n,780LTFL30,799LTFL30,19-FEB-2025\n",
+    "body_encoding": "utf-8"
+  }
+}

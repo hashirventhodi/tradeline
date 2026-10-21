@@ -531,3 +531,29 @@ def test_verify_universe_for_a_month_not_computed_fails_with_a_json_error(
     assert code == 1
     failure = json_lines(capsys.readouterr().out)[-1]
     assert "tradeline universe --month 2010-01" in str(failure["msg"])
+
+
+INSTRUMENT_FIXTURES = REPO_ROOT / "tests" / "fixtures" / "instruments"
+
+
+def test_ingest_symbol_changes_then_rebuild_instruments_log_their_runs(
+    fresh_database_url: str,
+    repo_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", fresh_database_url)
+
+    assert main(["ingest", "symbol-changes", "--play-fixtures", str(INSTRUMENT_FIXTURES)]) == 0
+    ingested = json_lines(capsys.readouterr().out)
+    assert main(["rebuild-instruments"]) == 0
+    rebuilt = json_lines(capsys.readouterr().out)
+
+    assert all(line["command"] == "ingest" for line in ingested)
+    assert ingested[-1]["msg"] == "ingest symbol-changes finished"
+    assert (ingested[-1]["rows_seen"], ingested[-1]["rows_written"]) == (11, 11)
+    assert all(line["command"] == "rebuild-instruments" for line in rebuilt)
+    (finished,) = [line for line in rebuilt if line["msg"] == "ingest run finished"]
+    assert (finished["source"], finished["symbol_changes"]) == ("instrument_links", 11)
+    assert rebuilt[-1]["msg"] == "rebuild-instruments finished"
+    assert rebuilt[-1]["instruments"] == 0

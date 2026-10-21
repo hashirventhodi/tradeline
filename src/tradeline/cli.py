@@ -27,9 +27,11 @@ from tradeline.ingest.candles import CurrentUniverse, ingest_candles
 from tradeline.ingest.corporate_actions import ingest_corporate_actions
 from tradeline.ingest.eod import ingest_eod
 from tradeline.ingest.news import Feed, ingest_news
+from tradeline.ingest.symbol_changes import ingest_symbol_changes
 from tradeline.logging import configure_logging, log_context
 from tradeline.login import login as login_service
 from tradeline.migrations import apply_migrations
+from tradeline.rebuild_instruments import rebuild_instruments as rebuild_instruments_service
 from tradeline.reconcile import reconcile as reconcile_service
 from tradeline.secrets import (
     DATABASE_URL,
@@ -107,6 +109,8 @@ def login(ctx: Context, args: argparse.Namespace) -> int:
 def ingest(ctx: Context, args: argparse.Namespace) -> int:
     if args.source == "news":
         return _ingest_news(ctx, args)
+    if args.source == "symbol-changes":
+        return _ingest_symbol_changes(ctx, args)
     end = args.start if args.end is None else args.end
     with _scope(args.start, end, getattr(args, "symbols", None)):
         return _ingest_range(ctx, args, end)
@@ -188,6 +192,14 @@ def _ingest_news(ctx: Context, args: argparse.Namespace) -> int:
         extra=result.summary(),
     )
     return 1 if result.failed_feeds else 0
+
+
+def _ingest_symbol_changes(ctx: Context, args: argparse.Namespace) -> int:
+    transport = _transport(ctx, args)
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = ingest_symbol_changes(conn, transport)
+    log.info("ingest symbol-changes finished", extra=result.summary())
+    return 0
 
 
 def _feeds(ctx: Context, names: Sequence[str] | None = None) -> list[Feed]:
@@ -325,6 +337,14 @@ def sectors(ctx: Context, args: argparse.Namespace) -> int:
     return 0
 
 
+def rebuild_instruments(ctx: Context, args: argparse.Namespace) -> int:
+    """Rebuild the Instruments from the stored evidence, replacing the previous build."""
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = rebuild_instruments_service(conn)
+    log.info("rebuild-instruments finished", extra=result.summary())
+    return 0
+
+
 def verify_universe(ctx: Context, args: argparse.Namespace) -> int:
     """Compare the month's Universe with NSE's current NIFTY 200; a report, so exit 0.
 
@@ -353,6 +373,7 @@ COMMANDS: dict[str, Command] = {
     "reconcile": reconcile,
     "compare-adjusted": compare_adjusted,
     "sectors": sectors,
+    "rebuild-instruments": rebuild_instruments,
     "verify-universe": verify_universe,
     "collect-daily": collect_daily,
 }
@@ -455,6 +476,11 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[fixtures, date_range],
         help="NSE and BSE corporate announcements for each day in the range, matched to symbols",
     )
+    sources.add_parser(
+        "symbol-changes",
+        parents=[fixtures],
+        help="NSE's symbol-change list as it stands today, stored as published",
+    )
     news = sources.add_parser(
         "news",
         parents=[fixtures],
@@ -486,6 +512,11 @@ def build_parser() -> argparse.ArgumentParser:
         "sectors",
         parents=[fixtures],
         help="load NSE's sector classification, in force from today; changes add dated rows",
+    )
+    subparsers.add_parser(
+        "rebuild-instruments",
+        help="rebuild the Instruments from the stored end-of-day rows, symbol changes,"
+        " corporate actions, and listing dates",
     )
     verify_parser = subparsers.add_parser(
         "verify-universe",

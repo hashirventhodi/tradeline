@@ -1,0 +1,67 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_20250409_F_0000.csv.zip",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "x-frame-options",
+        "DENY"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "accept-ranges",
+        "bytes"
+      ],
+      [
+        "etag",
+        "W/\"164738-1744196582123\""
+      ],
+      [
+        "last-modified",
+        "Wed, 09 Apr 2025 11:03:02 GMT"
+      ],
+      [
+        "content-type",
+        "application/zip"
+      ],
+      [
+        "content-length",
+        "480"
+      ],
+      [
+        "date",
+        "Wed, 21 Oct 2026 14:10:38 GMT"
+      ],
+      [
+        "akamai-grn",
+        "0.06d70b17.1792591838.f00e4e5"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "content-security-policy",
+        "default-src 'self'; script-src 'strict-dynamic' 'nonce-MC4yMDg2Mzc3MzEw' 'unsafe-inline' http: https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.nse.co.in https://*.nseindia.com; font-src 'self'; frame-src 'self'; base-uri 'self'; frame-ancestors 'self'; connect-src 'self' https://*.nseindia.com https://c.go-mpulse.net https://stats.g.doubleclick.net https://*.akstat.io/ https://*.akamaihd.net"
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000 ; includeSubDomains ; preload"
+      ]
+    ],
+    "body": "UEsDBBQAAAAIACOdVV2vBZxjLAEAAOQBAAApAAAAQmhhdkNvcHlfTlNFX0NNXzBfMF8wXzIwMjUwNDA5X0ZfMDAwMC5jc3ZNT8tywiAU3fsV/YBrBhKJsvQRp0xjfECdbjWpMWOCDtxR068vRa2yOC8uh7nKbIoJwqj6cSjLxoHJYVppoS2aRp2eWhQgpMhA5Qcj22YLMsdWGgtfJ9O6126w8oPDHOt7JtEcFqbKYX5C/VqWNS7S/uq93HtOL57Gtb3ZjUUvFuZsXVh686kLU7c3LRHr5t7uatFYhPFel0I/vcJauRXL9bG+6d1641W2ne/U1SbXHAuQVrvtsu/LyBTpEZfYwqo5WFjZc0E9hh4jj71OSELWJb0u4fAixzPIZAJSfQAjvA8iS/psoAgllEGiklU2TCFZwt+527dUzIRKJhDSOCDknwgPBrFzNIi4J9cQUhZQDo/UCRYxziMKLIr7lPGI0SCkQOOQMQpTp/xXnV9QSwECFAMUAAAACAAjnVVdrwWcYywBAADkAQAAKQAAAAAAAAAAAAAAgAEAAAAAQmhhdkNvcHlfTlNFX0NNXzBfMF8wXzIwMjUwNDA5X0ZfMDAwMC5jc3ZQSwUGAAAAAAEAAQBXAAAAcwEAAAAA",
+    "body_encoding": "base64"
+  }
+}
