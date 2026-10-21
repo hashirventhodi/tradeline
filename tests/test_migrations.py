@@ -110,3 +110,17 @@ def test_the_application_role_cannot_update_or_delete_corporate_actions(
         conn.rollback()
 
     assert str(factor).startswith("0.8333333")
+
+
+def test_the_application_role_cannot_update_or_delete_universe_tables(database_url: str) -> None:
+    statements = (
+        "UPDATE universe_rule_versions SET recorded_at = now()",
+        "DELETE FROM universe_rule_versions",
+        "UPDATE universe_membership SET rank = rank + 1",
+        "DELETE FROM universe_membership",
+    )
+    with app_connection(database_url) as conn:
+        for statement in statements:
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                conn.execute(statement)
+            conn.rollback()
