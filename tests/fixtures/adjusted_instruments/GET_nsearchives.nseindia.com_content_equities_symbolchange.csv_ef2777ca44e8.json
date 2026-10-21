@@ -1,0 +1,75 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://nsearchives.nseindia.com/content/equities/symbolchange.csv",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "x-frame-options",
+        "DENY"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "accept-ranges",
+        "bytes"
+      ],
+      [
+        "etag",
+        "W/\"69219-1792531808971\""
+      ],
+      [
+        "last-modified",
+        "Tue, 20 Oct 2026 21:30:08 GMT"
+      ],
+      [
+        "content-type",
+        "text/csv"
+      ],
+      [
+        "vary",
+        "Accept-Encoding"
+      ],
+      [
+        "date",
+        "Wed, 21 Oct 2026 14:25:41 GMT"
+      ],
+      [
+        "content-length",
+        "112"
+      ],
+      [
+        "akamai-grn",
+        "0.4dd70b17.1792592741.13ac3912"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "content-security-policy",
+        "default-src 'self'; script-src 'strict-dynamic' 'nonce-MC4yMDg2Mzc3MzEw' 'unsafe-inline' http: https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.nse.co.in https://*.nseindia.com; font-src 'self'; frame-src 'self'; base-uri 'self'; frame-ancestors 'self'; connect-src 'self' https://*.nseindia.com https://c.go-mpulse.net https://stats.g.doubleclick.net https://*.akstat.io/ https://*.akamaihd.net"
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000 ; includeSubDomains ; preload"
+      ],
+      [
+        "set-cookie",
+        "bm_sz=6B38925271F1F1337C80811AE2F98C30~YAAQTdcLFwMwTjmhAQAAlIXaXgFMnzuX34Xpo4YMSPR9Da67NpDBmzi5fvrkczFjLvZ2NuDzO7EG4Kuru19XoXrfY1eaLy6zQZtjX9ssa7pzBdgEjM0Zu+AqpJuzif5/XXVxdEPXEbn1sCMNOL/0Wib0nacjMLiTd/za4p7mgbAH5b+po80nHIGLHti0pzMFRqJgY2ItxMyfcOlMrMgBBYOF5G1XS4sOIEbgRsGxJVrbTKx2fYvljO9YtYw7W824bKiRxvgj0XVm03HGvBo1xcVhap3iAR86HqI+ZtcyIi98RE4WoNFlL6j7U6Eu91yWMFQeGC31vsQQRyAQg2RE/P0IaMXmcU6TbgaPO0pS/eovdV2I9oZllfwzAMIMfi3Td204lOAfjM+2ZnfZYYK5QZZhi5rE+0CYiuDksul5OyhomjDcOIa844RKqg==~4473905~3420737; Domain=.nseindia.com; Path=/; Expires=Wed, 21 Oct 2026 18:25:41 GMT; Max-Age=14400"
+      ]
+    ],
+    "body": "NAME OF THE COMPANY,OLD SYMBOL,NEW SYMBOL,EFFECTIVE DATE\nGUJARAT ENERGY LIMITED,GUJGASLTD,GUJENERGY,01-JUL-2026\n",
+    "body_encoding": "utf-8"
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://nsearchives.nseindia.com/content/historical/EQUITIES/2019/JAN/cm14JAN2019bhav.csv.zip",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "x-frame-options",
+        "DENY"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "accept-ranges",
+        "bytes"
+      ],
+      [
+        "etag",
+        "W/\"67357-1547726273000\""
+      ],
+      [
+        "last-modified",
+        "Thu, 17 Jan 2019 11:57:53 GMT"
+      ],
+      [
+        "content-type",
+        "application/zip"
+      ],
+      [
+        "content-length",
+        "279"
+      ],
+      [
+        "date",
+        "Wed, 21 Oct 2026 14:25:41 GMT"
+      ],
+      [
+        "akamai-grn",
+        "0.4dd70b17.1792592741.13ac3932"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "content-security-policy",
+        "default-src 'self'; script-src 'strict-dynamic' 'nonce-MC4yMDg2Mzc3MzEw' 'unsafe-inline' http: https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.nse.co.in https://*.nseindia.com; font-src 'self'; frame-src 'self'; base-uri 'self'; frame-ancestors 'self'; connect-src 'self' https://*.nseindia.com https://c.go-mpulse.net https://stats.g.doubleclick.net https://*.akstat.io/ https://*.akamaihd.net"
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000 ; includeSubDomains ; preload"
+      ]
+    ],
+    "body": "UEsDBBQAAAAIAAqfVV10x9tFjwAAAMUAAAATAAAAY20xNEpBTjIwMTliaGF2LmNzdj2MwQ6DIBBE737L1gACypHWjWIQlN3a+P8/UmqbnubNm2ToXO85AmEJSJA3TDCHaYaYX/CImRCiJ4at4PGtnJnLuPP5o8NH4LAisV+3j/ORix/rWaCQoJmey+Qp8gi4g7WudQZsryuaVl1Cmb+vYQ2oThsB0lhn++4apL4tPt2UkA7kUEVIOGidhRRKQfMGUEsBAhQDFAAAAAgACp9VXXTH20WPAAAAxQAAABMAAAAAAAAAAAAAAIABAAAAAGNtMTRKQU4yMDE5Ymhhdi5jc3ZQSwUGAAAAAAEAAQBBAAAAwAAAAAAA",
+    "body_encoding": "base64"
+  }
+}

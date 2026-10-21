@@ -129,6 +129,47 @@ def test_a_split_that_issues_a_new_isin_keeps_one_instrument() -> None:
     assert built.anomalies == ()
 
 
+GUJGAS_OLD, GUJGAS_NEW = "INE844O01022", "INE844O01030"
+GUJGAS_SPLIT = "Face Value Split (Sub-Division) - From Rs 10/- Per Share To Rs 2/- Per Share"
+
+
+def test_a_split_nse_now_files_under_the_symbol_of_today_explains_the_isin_change_before_it() -> (
+    None
+):
+    # NSE lists Gujarat Gas's 2019 split under GUJENERGY, its Symbol since 2026,
+    # with the ISIN it issued.
+    refiled = CorporateAction(
+        symbol="GUJENERGY",
+        series="EQ",
+        ex_date=date(2019, 1, 15),
+        subject=GUJGAS_SPLIT,
+        kind="split",
+        factor=Fraction(1, 5),
+        isin=GUJGAS_NEW,
+    )
+    evidence = Evidence(
+        spans=[
+            span("GUJGASLTD", GUJGAS_OLD, date(2015, 10, 1), date(2019, 1, 15)),
+            span("GUJGASLTD", GUJGAS_NEW, date(2019, 1, 16), date(2026, 6, 30)),
+            span("GUJENERGY", GUJGAS_NEW, date(2026, 7, 1), date(2026, 10, 19)),
+        ],
+        symbol_changes=[rename("GUJGASLTD", "GUJENERGY", date(2026, 7, 1))],
+        corporate_actions=[refiled],
+    )
+
+    built = build_instruments(evidence)
+
+    (instrument,) = built.instruments
+    assert [(link.kind, link.from_isin, link.to_symbol) for link in instrument.links] == [
+        ("corporate_action", GUJGAS_OLD, "GUJGASLTD"),
+        ("symbol_change", GUJGAS_NEW, "GUJENERGY"),
+    ]
+    assert instrument.links[0].source == (
+        f"NSE corporate action GUJENERGY ex-date 2019-01-15: {GUJGAS_SPLIT}"
+    )
+    assert built.anomalies == ()
+
+
 def test_an_isin_change_no_corporate_action_explains_gives_two_instruments_and_an_anomaly() -> None:
     evidence = Evidence(
         spans=[

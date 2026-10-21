@@ -20,7 +20,9 @@ Instrument spans series. Stretches are joined into an Instrument only by an
 Instrument Link with a date and a source:
 
 - ``corporate_action``: the same Symbol with a new ISIN where a split or bonus
-  of that Symbol has its Ex-Date at the change, from the old ISIN's last row to
+  of that Symbol (or filed under another Symbol with the old or new ISIN, as
+  NSE files past actions under the Symbol of today) has its Ex-Date at the
+  change, from the old ISIN's last row to
   the new ISIN's first, give or take a week (``EX_DATE_SLACK``). NSE's files
   do not switch ISIN on the Ex-Date exactly: on the #13 data the new ISIN
   first appears on the Ex-Date (200 changes), the next trading day (176;
@@ -224,21 +226,32 @@ def _isin_changes(
     actions: Sequence[CorporateAction],
     anomalies: list[Anomaly],
 ) -> list[_Proposal]:
-    """Successive ISINs of one Symbol: joined on a split's or bonus's Ex-Date, else an anomaly."""
-    adjusting: dict[str, list[CorporateAction]] = defaultdict(list)
+    """Successive ISINs of one Symbol: joined on a split's or bonus's Ex-Date, else an anomaly.
+
+    The action is the Symbol's, or one filed under another Symbol with the old
+    or the new ISIN: NSE files an Instrument's past actions under its Symbol of
+    today (Gujarat Gas's 2019 split, under GUJENERGY since its 2026 rename).
+    """
+    by_symbol: dict[str, set[CorporateAction]] = defaultdict(set)
+    by_isin: dict[str, set[CorporateAction]] = defaultdict(set)
     for action in set(actions):
         if action.kind in ADJUSTED_KINDS:
-            adjusting[action.symbol].append(action)
+            by_symbol[action.symbol].add(action)
+            if action.isin is not None:
+                by_isin[action.isin].add(action)
     proposals: list[_Proposal] = []
     for symbol, found in sorted(_by_symbol(stretches).items()):
         for old, new in zip(found, found[1:], strict=False):
+            filed = by_symbol.get(symbol, set()).union(
+                *(by_isin.get(isin, set()) for isin in (old.isin, new.isin) if isin is not None)
+            )
             explaining = sorted(
                 (
                     a
-                    for a in adjusting.get(symbol, [])
+                    for a in filed
                     if old.last - EX_DATE_SLACK <= a.ex_date <= new.first + EX_DATE_SLACK
                 ),
-                key=lambda a: (a.ex_date, a.series, a.subject),
+                key=lambda a: (a.ex_date, a.symbol != symbol, a.symbol, a.series, a.subject),
             )
             if not explaining:
                 anomalies.append(

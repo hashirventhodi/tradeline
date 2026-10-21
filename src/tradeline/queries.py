@@ -78,25 +78,38 @@ class IngestRun:
 
 def end_of_day(
     conn: psycopg.Connection,
-    symbol: str,
+    instrument: str,
     *,
     start: date,
     end: date,
     series: str | None = None,
+    as_of: date | None = None,
 ) -> list[EndOfDayRow]:
-    """NSE end-of-day rows for ``symbol`` from ``start`` to ``end`` inclusive, oldest first.
+    """NSE end-of-day rows of an Instrument from ``start`` to ``end`` inclusive, oldest first.
 
-    All series are returned unless one is named; a symbol that moved between
-    series inside the range has rows under each.
+    ``instrument`` is an Instrument key, or a Symbol read as the Instrument it
+    named on ``as_of`` (``end`` when not given; see ``_owned``). The rows are
+    those of every Symbol the Instrument had, each under the Symbol it was
+    published under. All series are returned unless one is named; an
+    Instrument that moved between series inside the range has rows under each.
     """
+    owned = _owned(conn, instrument, as_of=end if as_of is None else as_of)
+    return _end_of_day(conn, owned, start=start, end=end, series=series)
+
+
+def _end_of_day(
+    conn: psycopg.Connection, owned: _Owned, *, start: date, end: date, series: str | None
+) -> list[EndOfDayRow]:
     rows = conn.execute(
-        "SELECT trade_date, symbol, series, isin, open, high, low, close, last, prev_close,"
-        " traded_qty, traded_value, trades"
-        " FROM eod_bhavcopy"
-        " WHERE symbol = %s AND trade_date BETWEEN %s AND %s"
-        " AND (%s::text IS NULL OR series = %s)"
-        " ORDER BY trade_date, series",
-        (symbol, start, end, series, series),
+        f"WITH {_OWNED} SELECT e.trade_date, e.symbol, e.series, e.isin, e.open, e.high, e.low,"
+        " e.close, e.last, e.prev_close, e.traded_qty, e.traded_value, e.trades"
+        " FROM eod_bhavcopy e JOIN owned o ON o.symbol = e.symbol"
+        " AND (o.since IS NULL OR e.trade_date >= o.since)"
+        " AND (o.until IS NULL OR e.trade_date < o.until)"
+        " WHERE e.trade_date BETWEEN %(start)s AND %(end)s"
+        " AND (%(series)s::text IS NULL OR e.series = %(series)s)"
+        " ORDER BY e.trade_date, e.series, e.symbol",
+        {**owned.params(), "start": start, "end": end, "series": series},
     ).fetchall()
     return [EndOfDayRow(*row) for row in rows]
 
@@ -177,23 +190,41 @@ def daily_candles(
 
 def corporate_actions(
     conn: psycopg.Connection,
-    symbol: str,
+    instrument: str,
     *,
     start: date | None = None,
     end: date | None = None,
+    as_of: date | None = None,
 ) -> list[CorporateAction]:
-    """NSE's corporate actions for ``symbol`` with our factors, oldest ex-date first.
+    """NSE's Corporate Actions of an Instrument with our factors, oldest Ex-Date first.
 
-    Every action is returned unless the ex-date range is narrowed at either end.
+    ``instrument`` is an Instrument key, or a Symbol read as the Instrument it
+    named on ``as_of`` (``end`` when not given, else the Instrument it last
+    named; see ``_owned``). The actions are those filed under any of the
+    Instrument's Symbols, each under the Symbol it was filed under, and one
+    action filed under two Symbols is returned under each (the Adjusted Series
+    applies it once). Every action is returned unless the Ex-Date range is
+    narrowed at either end.
     """
+    if as_of is None:
+        as_of = date.max if end is None else end
+    owned = _owned(conn, instrument, as_of=as_of)
+    return _corporate_actions(conn, owned, start=start, end=end)
+
+
+def _corporate_actions(
+    conn: psycopg.Connection, owned: _Owned, *, start: date | None, end: date | None
+) -> list[CorporateAction]:
     rows = conn.execute(
-        "SELECT symbol, series, ex_date, subject, kind, factor_numerator, factor_denominator,"
-        " isin, record_date, face_value"
-        " FROM corporate_actions"
-        " WHERE symbol = %s"
-        " AND (%s::date IS NULL OR ex_date >= %s) AND (%s::date IS NULL OR ex_date <= %s)"
-        " ORDER BY ex_date, series, subject",
-        (symbol, start, start, end, end),
+        f"WITH {_OWNED} SELECT c.symbol, c.series, c.ex_date, c.subject, c.kind,"
+        " c.factor_numerator, c.factor_denominator, c.isin, c.record_date, c.face_value"
+        " FROM corporate_actions c JOIN owned o ON o.symbol = c.symbol"
+        " AND (o.since IS NULL OR c.ex_date >= o.since)"
+        " AND (o.until IS NULL OR c.ex_date < o.until)"
+        " WHERE (%(start)s::date IS NULL OR c.ex_date >= %(start)s)"
+        " AND (%(end)s::date IS NULL OR c.ex_date <= %(end)s)"
+        " ORDER BY c.ex_date, c.series, c.subject, c.symbol",
+        {**owned.params(), "start": start, "end": end},
     ).fetchall()
     return [_corporate_action(row) for row in rows]
 
@@ -217,20 +248,23 @@ def _corporate_action(row: tuple[Any, ...]) -> CorporateAction:
 
 def adjusted_daily_candles(
     conn: psycopg.Connection,
-    symbol: str,
+    instrument: str,
     *,
     start: date,
     end: date,
     as_of: date,
     series: str | None = None,
 ) -> list[AdjustedBar]:
-    """The Adjusted Series of ``symbol`` from ``start`` to ``end`` as it stood on ``as_of``.
+    """The Adjusted Series of an Instrument from ``start`` to ``end`` as it stood on ``as_of``.
 
-    The Raw Series is NSE's end-of-day rows, the official unadjusted prices
-    (``end_of_day``); Kite's candles are already adjusted by Kite's rules and
-    are not the input here. The adjustment is computed on every read from the
-    raw rows and the stored factors (``tradeline.adjust``) and is never written
-    back. Actions are the symbol's under every series, applied once each.
+    ``instrument`` is an Instrument key, or a Symbol read as the Instrument it
+    named on ``as_of``. The Raw Series is NSE's end-of-day rows of every Symbol
+    the Instrument had, each bar under the Symbol it was published under: the
+    official unadjusted prices (``end_of_day``). Kite's candles are already
+    adjusted by Kite's rules and are not the input here. The adjustment is
+    computed on every read from the raw rows and the stored factors
+    (``tradeline.adjust``) and is never written back. Actions are those filed
+    under any of the Instrument's Symbols, in every series, applied once each.
 
     Point in time. ``as_of`` is the adjustment reference date: an action is
     applied, or flagged, only if its ex-date is on or before ``as_of``, the
@@ -247,12 +281,73 @@ def adjusted_daily_candles(
             f"range end {end} is after the as-of date {as_of}: bars after the as-of date"
             " are not known on it"
         )
-    rows = end_of_day(conn, symbol, start=start, end=end, series=series)
+    owned = _owned(conn, instrument, as_of=as_of)
+    rows = _end_of_day(conn, owned, start=start, end=end, series=series)
     bars = [
         RawBar(r.symbol, r.series, r.trade_date, r.open, r.high, r.low, r.close, r.traded_qty)
         for r in rows
     ]
-    return adjust(bars, corporate_actions(conn, symbol), as_of=as_of)
+    return adjust(bars, _corporate_actions(conn, owned, start=None, end=None), as_of=as_of)
+
+
+@dataclass(frozen=True)
+class _Owned:
+    """Whose rows an Instrument read returns: an Instrument's, or one Symbol's alone."""
+
+    key: str | None
+    # Set only when ``key`` is None: a Symbol no Instrument has had.
+    symbol: str | None = None
+
+    def params(self) -> dict[str, str | None]:
+        return {"key": self.key, "symbol": self.symbol}
+
+
+# The (Symbol, days) whose rows are the Instrument's, as ``owned``. A row of a
+# Symbol on a day belongs to the Instrument the Symbol named that day, or last
+# named before it, as ``resolve_symbol`` reads a Symbol: so rows that arrived
+# after the last rebuild are read with the Instrument their Symbol last named.
+# A row dated before its Symbol's first interval belongs to the first
+# Instrument the Symbol named (``since`` is NULL), because NSE files an
+# Instrument's past Corporate Actions under its Symbol of today (Gujarat Gas's
+# 2019 split is listed under GUJENERGY, the name it took in 2026). A Symbol no
+# Instrument has had is read alone, every day.
+_OWNED = (
+    "starts AS ("
+    "  SELECT DISTINCT symbol, first_day, instrument_key FROM instrument_intervals"
+    "  WHERE symbol IN (SELECT symbol FROM instrument_intervals WHERE instrument_key = %(key)s)),"
+    " spans AS ("
+    "  SELECT symbol, instrument_key,"
+    "   CASE WHEN first_day > min(first_day) OVER (PARTITION BY symbol) THEN first_day END"
+    "    AS since,"
+    "   lead(first_day) OVER (PARTITION BY symbol ORDER BY first_day, instrument_key) AS until"
+    "  FROM starts),"
+    " owned AS ("
+    "  SELECT symbol, since, until FROM spans WHERE instrument_key = %(key)s"
+    "  UNION ALL SELECT %(symbol)s::text, NULL::date, NULL::date WHERE %(key)s::text IS NULL)"
+)
+
+
+def _owned(conn: psycopg.Connection, instrument: str, *, as_of: date) -> _Owned:
+    """An Instrument key (``SYMBOL@YYYY-MM-DD``; no Symbol has an ``@``), or a Symbol resolved
+    as of ``as_of``, as ``resolve_symbol`` does.
+
+    An unknown key, and a Symbol that named an Instrument only after
+    ``as_of``, are refused with a ``LookupError``. A Symbol no Instrument has
+    had (Instruments not rebuilt since its rows arrived) is read alone.
+    """
+    if "@" in instrument:
+        if conn.execute("SELECT 1 FROM instruments WHERE key = %s", (instrument,)).fetchone():
+            return _Owned(instrument)
+        raise LookupError(f"no Instrument {instrument}")
+    try:
+        return _Owned(resolve_symbol(conn, instrument, as_of=as_of).key)
+    except LookupError:
+        had = conn.execute(
+            "SELECT 1 FROM instrument_intervals WHERE symbol = %s LIMIT 1", (instrument,)
+        ).fetchone()
+        if had is not None:
+            raise
+        return _Owned(None, instrument)
 
 
 @dataclass(frozen=True)
