@@ -215,6 +215,146 @@ were delisted, merged, or now trade only in BE or BZ, expect the last to show
 **series moved** and nearly all the rest **ended, reason not stated**. `ingest delistings` stores the list
 as published; a newer official source would be a new ingest, not an inference.
 
+## Instrument identity rerun on the #13 data (#29)
+
+Run on 2026-10-21 on the #13 database, after #16's Instruments (ADR 0016),
+against live NSE and Kite responses. The figures sit beside #13's, which
+stand above as they were measured.
+
+| Step | Result | Runtime |
+|---|---|---|
+| `migrate` (0011 to 0019) | Nine migrations. 0019 re-derives 14 stored splits (below). | under 1 s |
+| `ingest symbol-changes` | 1,067 NSE records. | under 1 s |
+| `ingest delistings` | 328 records, once its Windows encoding was read (below). | under 1 s |
+| `rebuild-instruments`, first | 4,486 Instruments; 811 links (410 corporate action, 400 symbol change, 1 manual); 119 anomalies; 32 Link Candidates. | 29 s |
+| `rebuild-instruments`, last | 4,449 Instruments; 848 links (424 corporate action, 400 symbol change, 24 manual); 104 anomalies, all reviewed (below); 11 Link Candidates, all reviewed. | 29 s |
+| `universe --month 2016-11 --to 2026-10`, twice | Rule version `ded30b1014c4` (`rank_by = "instrument"`): 120 months of 200 members, 544 Symbols, 514 Instruments. The second run recomputed every month and wrote nothing. | 257 s |
+| `ingest candles --interval day` for the nine renamed ever-members whose current Symbol was never a member | 9 loaded through their current Symbols' tokens (CENTURYTEX as ABREL, HEG as HEGAM, MAJESCO as AURUM, ...). | under 1 min |
+| `reconcile --from 2016-10-21 --to 2026-10-20` | 1,008,280 rows, 45,324 discrepancies (4.50 percent, from 8.88): still **fail** against 0.1 percent. **No rename extras.** | 4 min (7 s by Symbol) |
+
+### What the run found
+
+- **NSE's delisted list is in Windows encoding.** Company names hold a 0xA0
+  non-breaking space (BENTOLCHEM, "Chemox Laboratories"), so `ingest
+  delistings` failed on the live list as UTF-8. The trimmed fixture had left
+  those rows out; it now keeps one.
+- **From 2016 to 2018 NSE wrote some splits as "Fv Splt Frm Rs 10 To Re 1".**
+  The parser filed all 14 as "other", so they neither adjusted the Adjusted
+  Series nor explained the ISIN change each brought. JSWSTEEL's 10-for-1
+  (ex 2017-01-04), KARURVYSYA's 5-for-1 and SOLARINDS's were among them, all
+  ever-members. The parser reads the form now. Migration 0019 re-derives the
+  stored rows, as 0004 says a parser fix is applied, after which all 26,264
+  stored actions agree with the parser. JSWSTEEL and KARURVYSYA now hold one
+  Kite factor either side of the split.
+- **YESBANK changed ISIN with no Corporate Action.** To apply the 2020
+  Reconstruction Scheme's three-year lock-in of 75 percent of holdings
+  (G.S.R. 174(E), clause 3(8)), the depositories moved every share from
+  INE528G01027 to INE528G01035. Dealing in the new ISIN began on 2020-03-16
+  (NSE circular 17/2020). Split there, the Instrument rule would have counted
+  YESBANK, then ranked 4 to 41, as newly listed for about six months. A manual
+  link may now name one Symbol on both sides for such a change (ADR 0016).
+- **SUBEX was readmitted as SUBEXLTD under a new ISIN, with no symbol-change
+  record.** An NCLT-approved capital reduction halved the face value
+  (NSE/CML/46245, 2020-11-05). Its manual link removed the last 886 rename
+  extras in reconcile. It was added after the Universe was computed, so it
+  marks 54 months of the new version stale. Recomputed, all 54 match what is
+  stored.
+- **CCAVENUE (formerly INFIBEAM) consolidated 10 shares into 1 on
+  2026-10-13** (NSE/CML/76849, NSE/CML/76916; new ISIN INE483S01038 from
+  2026-10-19). NSE's Corporate Action list does not carry it yet, so its
+  history is split and it is reported as an anomaly. A manual link is not
+  used: it would join a tenfold unadjusted price into the Adjusted Series.
+  Once NSE lists the action, an ingest links and adjusts it. No stored month
+  is affected; November 2026's window would be.
+- **An Instrument's listing date can follow its first row.** NSE's master
+  gives the date a Symbol was last admitted, so SUBEX's Instrument is listed
+  2020-11-05 and NESTLEIND's 2023-08-01. Four ever-members are affected
+  (NESTLEIND, FORCEMOT, CAMS, SHAKTIPUMP) and none loses a month to it here:
+  the Symbol rule read the same dates. Listing age from such a date
+  understates a long history.
+
+### Manual links added
+
+23 rows, each to an official circular that was read. NSE's own circulars are
+cited throughout (MSEI's 11349 confirms PCBL's). In
+order of what they change: YESBANK's ISIN change; PHILIPCARB to PCBL
+(2022-01-13; it was outside the Universe from 2018-10 to 2024-02, so no month
+changes); SUBEX to SUBEXLTD; eight 2022 equity renames NSE's list omits
+(PDSL, RBA, SEPC, ZFCVINDIA, KEEPLEARN, ESSENTIA, and the SME DIL and
+DUGLOBAL); and twelve ETF renames (Nippon 2019 and 2022, ICICI Prudential
+2023, Kotak 2024). For KEEPLEARN and ESSENTIA the circular's date is earlier
+than the new Symbol's first row in NSE's files.
+
+### Anomalies and Link Candidates
+
+| What remains | Count | Explanation |
+|---|---|---|
+| Fund ISIN changes (INF) | 71 | ETFs whose units were reissued under a new ISIN when the scheme changed hands or was restructured (Reliance to Nippon on 2019-12-20, HDFC, ICICI, UTI, Aditya Birla, Kotak). No Corporate Action, and the Universe excludes INF ISINs. Left split. |
+| SME ISIN changes | 21 | SM and ST Symbols whose price falls four- to ten-fold on the new ISIN: SME bonuses and splits, which NSE's `index=equities` Corporate Action list does not carry. No ever-member. Left split. |
+| Other equity ISIN changes | 12 | Relistings after long suspensions (KSE from 2015, DSKULKARNI from 2018, EASTSILK, BURNPUR, MBECL, SUMEETINDS, KAUSHALYA, SHEKHAWATI), VERTOZ's consolidation 16 days before its relisting, TIDEWATER (2016) and KARDA (2020), whose prices fall about four-fold with no action NSE lists, and CCAVENUE (above). No ever-member except CCAVENUE's Instrument. |
+| Link Candidates | 11 | All end on 2015-01-29: BSE-listed companies that traded on NSE as "permitted to trade" until NSE withdrew the facility from 30 January 2015 (NSE/CML/28574), then listed on NSE directly. NSE dates them from that listing (AVANTIFEED 2015-04-15), so they are new listings, not renames. Left split. |
+
+Before the run, 119 anomalies included the 14 "Fv Splt Frm" splits; CADILAHC's
+2015 ISIN change is now joined, so ZYDUSLIFE's history runs from 2015.
+
+### Universe under the Instrument rule
+
+The 24,000 rows under `53181efb8726` are unchanged: md5 of
+`concat_ws('|', month, rule_version, rank, symbol, series, traded_value)`
+joined by `,` in month and rank order is `93edba0bea8ba0a6bcf9b3def0d80003`
+before migrating and after the rerun. Under `ded30b1014c4` the same digest
+over `month, rank, instrument_key, symbol, series, traded_value` is
+`be464f063b66c9df6de72833f9f54c17`.
+
+- **108 member-months regained by 24 renamed Instruments**, among them
+  ETERNAL 2025-05 to 2025-09, LTIM 2023-01 to 2023-06, LTM 2026-04 to 2026-08,
+  ZYDUSLIFE 2022-04 to 2022-07, TMPV 2025-12 to 2026-04, and five months each
+  for TATACONSUM, SHRIRAMFIN, NAM-INDIA, PVRINOX, COFORGE, MOTHERSON,
+  ADANIENSOL, INDUSTOWER, IDFCFIRSTB, HBLENGINE and ANGELONE. The 108
+  member-months they displace all ranked 198 to 200 under the old version.
+- **Two of #16's seven renames keep their gaps, for want of liquidity.**
+  L&TFH to LTF is out from 2024-05 to 2024-10 and MCDOWELL-N to UNITDSPR from
+  2024-02 to 2025-01. In every one of those months the Instrument has all 126
+  EQ days in its window, summed across the rename, and less traded value than
+  the 200th member: UNITDSPR's 2024-06 window was ₹13,956 crore against
+  ₹16,482 crore. No other Instrument in the seven loses a month.
+
+### Adjusted Series
+
+Read as of 2026-10-19 in EQ: ETERNAL (ZOMATO from 2021-07-23), LTM (LTI
+2016-07-21, LTIM 2022-12-05, LTM 2026-02-27), HDFCBANK (factors 1/2 and 1/4
+across the 2019 split and 2025 bonus), JSWSTEEL, YESBANK and ZYDUSLIFE each
+have a bar on every EQ trading day from their first to 2026-10-19. The close
+moves at most 1.8 percent across any rename (ZOMATO to ETERNAL, LTI to LTIM).
+The largest day in any of them is YESBANK's 58 percent on 2020-03-17, the
+rally after the rescue.
+
+### Reconcile beside #13
+
+| Cause | #13 | #29 |
+|---|---|---|
+| Rename extras | 44,408 | **0** |
+| Series-move extras (our rows continue in BE, BZ, ...; for #17) | 11,685 | 13,596, over more Instruments compared |
+| Other extras | | 8: MAZDOCK candles dated 2017-12 to 2018-07, before its 2020 listing, perhaps under a reused Kite token (unconfirmed) |
+| Close mismatches (Kite's additive adjustment and coarse rounding, as in #13) | about 29,400 | 29,670, the same causes; COFORGE's history, read as NIITTECH, is compared now (162) |
+| Muhurat sessions before 2019 | 935 | 1,044 |
+| BAFNAPH | 998 | 998 |
+| Other missing | | 8 single days |
+| **Total** | **87,502 (8.88 percent)** | **45,324 (4.50 percent)** |
+
+### Ever-members by end reason
+
+Of the 90 ever-member Symbols with no Kite token, 35 are renamed Instruments
+with candles through their current Symbol. The other 55 are 54 Instruments
+with none, each listed by the `instruments` report with its reason:
+
+| Reason | Instruments |
+|---|---|
+| delisted (NSE's list) | 1: HEXAWARE, Voluntary Delisting 2020-11-09 |
+| series moved | 8: ABAN, HDIL, HFCL, MEP, RAJESHEXPO, RCOM, RELINFRA, STLTECH |
+| ended, reason not stated | 45, among them the mergers NSE records no scheme for (HDFC, MINDTREE, GRUH, the PSU banks, JBCHEPHARM into Torrent Pharma on 2026-07-17 by NSE/CML/75178) and CCAVENUE's history before its consolidation |
+| merged | 0 |
+
 ## US-market findings (for reference; not the chosen market)
 
 Alpaca offers free paper trading with IEX data and ₹99-equivalent full SIP data; Massive (formerly Polygon) runs 29 to 199 dollars a month; SEC EDGAR is free. These made the US the easier engineering choice. The Operator chose Indian equities, which cost more in friction (no sandbox, daily login, static IP) but is the market they trade.
