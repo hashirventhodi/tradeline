@@ -1,4 +1,5 @@
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 import psycopg
@@ -20,6 +21,22 @@ def test_migrate_creates_the_schema_from_empty_and_is_a_no_op_second_time(
         assert first and first[0] == "0001_ingest_runs"
         assert second == []
         assert applied_migrations(conn) == first
+
+
+def test_concurrent_first_runs_of_migrate_apply_each_migration_exactly_once(
+    empty_database_url: str,
+) -> None:
+    def run() -> list[str]:
+        with connect(empty_database_url) as conn:
+            return apply_migrations(conn)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda _: run(), range(4)))
+
+    applied = [version for result in results for version in result]
+    assert sorted(applied) == sorted(set(applied))
+    with connect(empty_database_url) as conn:
+        assert applied_migrations(conn) == sorted(applied)
 
 
 def test_the_application_role_can_insert_an_ingest_run(database_url: str) -> None:

@@ -27,17 +27,22 @@ def available_migrations() -> list[tuple[str, str]]:
 
 
 def applied_migrations(conn: psycopg.Connection) -> list[str]:
-    _ensure_tracking_table(conn)
-    rows = conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()
+    try:
+        with conn.transaction():
+            rows = conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()
+    except psycopg.errors.UndefinedTable:
+        return []
     return [str(version) for (version,) in rows]
 
 
 def apply_migrations(conn: psycopg.Connection) -> list[str]:
     """Apply every pending migration; return the versions applied in this call."""
-    _ensure_tracking_table(conn)
     applied: list[str] = []
     with conn.transaction():
+        # The lock comes first so that two first-ever runs cannot both create
+        # the tracking table or both apply a migration.
         conn.execute("SELECT pg_advisory_xact_lock(%s)", (_LOCK_KEY,))
+        _ensure_tracking_table(conn)
         done = set(applied_migrations(conn))
         for version, sql in available_migrations():
             if version in done:
@@ -51,9 +56,8 @@ def apply_migrations(conn: psycopg.Connection) -> list[str]:
 
 
 def _ensure_tracking_table(conn: psycopg.Connection) -> None:
-    with conn.transaction():
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS schema_migrations ("
-            " version text PRIMARY KEY,"
-            " applied_at timestamptz NOT NULL DEFAULT now())"
-        )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS schema_migrations ("
+        " version text PRIMARY KEY,"
+        " applied_at timestamptz NOT NULL DEFAULT now())"
+    )

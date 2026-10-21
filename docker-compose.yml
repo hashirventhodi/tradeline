@@ -25,6 +25,9 @@ services:
       - path: .env
         required: false
     environment:
+      # The container has no .env on disk; secrets arrive through the process
+      # environment (env_file above), which is the production behaviour.
+      TRADELINE_ENV: production
       DATABASE_URL: postgresql://tradeline:tradeline@postgres:5432/tradeline
     depends_on:
       postgres:

@@ -51,9 +51,8 @@ def test_recording_writes_a_fixture_that_playback_serves_byte_identically(
     tmp_path: Path,
 ) -> None:
     body = b"\xff\xfe binary \x00 and text \xe2\x82\xb9 and \r\n newlines"
-    live = CannedTransport(
-        Response(status=201, headers={"content-type": "application/octet-stream"}, body=body)
-    )
+    headers = (("content-type", "application/octet-stream"),)
+    live = CannedTransport(Response(status=201, headers=headers, body=body))
     request = Request(
         "POST",
         "https://api.kite.trade/session/token?x=1",
@@ -64,13 +63,31 @@ def test_recording_writes_a_fixture_that_playback_serves_byte_identically(
     recorded = RecordingTransport(live, tmp_path).send(request)
     played = PlaybackTransport(tmp_path).send(request)
 
-    assert recorded == Response(201, {"content-type": "application/octet-stream"}, body)
+    assert recorded == Response(201, headers, body)
     assert played == recorded
+
+
+def test_repeated_response_headers_survive_recording_in_order(tmp_path: Path) -> None:
+    headers = (
+        ("set-cookie", "nsit=abc; Path=/"),
+        ("content-type", "text/html"),
+        ("set-cookie", "nseappid=xyz; Path=/"),
+    )
+    live = CannedTransport(Response(200, headers, b""))
+    request = Request("GET", "https://www.nseindia.com/")
+
+    RecordingTransport(live, tmp_path).send(request)
+    played = PlaybackTransport(tmp_path).send(request)
+
+    assert played.headers == headers
+    assert played.header_values("Set-Cookie") == ["nsit=abc; Path=/", "nseappid=xyz; Path=/"]
+    assert played.header("Content-Type") == "text/html"
+    assert played.header("x-missing") is None
 
 
 def test_text_responses_are_stored_readably_and_round_trip(tmp_path: Path) -> None:
     body = b'{"status": "ok", "data": [1, 2]}\n'
-    live = CannedTransport(Response(200, {"content-type": "application/json"}, body))
+    live = CannedTransport(Response(200, (("content-type", "application/json"),), body))
     request = Request("GET", "https://api.kite.trade/instruments")
 
     RecordingTransport(live, tmp_path).send(request)
@@ -83,7 +100,7 @@ def test_text_responses_are_stored_readably_and_round_trip(tmp_path: Path) -> No
 
 
 def test_request_headers_are_never_written_into_fixtures(tmp_path: Path) -> None:
-    live = CannedTransport(Response(200, {}, b"ok"))
+    live = CannedTransport(Response(200, (), b"ok"))
     request = Request("GET", "https://x", headers={"Authorization": "token s3cret"})
 
     RecordingTransport(live, tmp_path).send(request)
@@ -93,7 +110,7 @@ def test_request_headers_are_never_written_into_fixtures(tmp_path: Path) -> None
 
 
 def test_fixtures_are_keyed_by_method_url_and_body(tmp_path: Path) -> None:
-    live = CannedTransport(Response(200, {}, b"ok"))
+    live = CannedTransport(Response(200, (), b"ok"))
     recording = RecordingTransport(live, tmp_path)
     recording.send(Request("GET", "https://x/a"))
     recording.send(Request("GET", "https://x/b"))
@@ -108,7 +125,7 @@ def test_fixtures_are_keyed_by_method_url_and_body(tmp_path: Path) -> None:
 
 
 def test_playback_keeps_a_log_of_the_requests_it_served(tmp_path: Path) -> None:
-    live = CannedTransport(Response(200, {}, b"ok"))
+    live = CannedTransport(Response(200, (), b"ok"))
     RecordingTransport(live, tmp_path).send(Request("GET", "https://x/a"))
     playback = PlaybackTransport(tmp_path)
 

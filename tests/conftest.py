@@ -78,9 +78,9 @@ def database_url(request: pytest.FixtureRequest, migrated_template: str) -> Iter
     _drop_database(name)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def empty_database_url(request: pytest.FixtureRequest) -> Iterator[str]:
-    """A database with no schema at all, for tests of ``migrate`` itself."""
-    name = _database_name(f"empty_{Path(request.module.__file__).stem}")
+    """A database with no schema at all, for tests of ``migrate`` itself. Per test."""
+    name = _database_name(f"empty_{request.node.name}")
     yield _create_database(name)
     _drop_database(name)

@@ -45,8 +45,18 @@ class Request:
 @dataclass(frozen=True)
 class Response:
     status: int
-    headers: Mapping[str, str]
+    # Ordered (name, value) pairs so repeated headers such as Set-Cookie survive.
+    headers: tuple[tuple[str, str], ...]
     body: bytes
+
+    def header(self, name: str) -> str | None:
+        """The first value of ``name``, case-insensitively, or None."""
+        values = self.header_values(name)
+        return values[0] if values else None
+
+    def header_values(self, name: str) -> list[str]:
+        wanted = name.lower()
+        return [value for key, value in self.headers if key.lower() == wanted]
 
 
 class Transport(Protocol):
@@ -78,7 +88,9 @@ class LiveTransport:
         raw = self._client.request(
             request.method, request.url, headers=dict(request.headers), content=request.body
         )
-        return Response(status=raw.status_code, headers=dict(raw.headers), body=raw.content)
+        return Response(
+            status=raw.status_code, headers=tuple(raw.headers.multi_items()), body=raw.content
+        )
 
 
 class RefusingTransport:
@@ -139,19 +151,22 @@ def _fixture_path(fixture_dir: Path, request: Request) -> Path:
 
 
 def _write_fixture(path: Path, request: Request, response: Response) -> None:
-    body_text, encoding = _encode_body(response.body)
+    request_body, request_encoding = (
+        (None, None) if request.body is None else _encode_body(request.body)
+    )
+    response_body, response_encoding = _encode_body(response.body)
     document = {
         "request": {
             "method": request.method.upper(),
             "url": request.url,
-            "body": None if request.body is None else _encode_body(request.body)[0],
-            "body_encoding": None if request.body is None else _encode_body(request.body)[1],
+            "body": request_body,
+            "body_encoding": request_encoding,
         },
         "response": {
             "status": response.status,
-            "headers": dict(response.headers),
-            "body": body_text,
-            "body_encoding": encoding,
+            "headers": [list(pair) for pair in response.headers],
+            "body": response_body,
+            "body_encoding": response_encoding,
         },
     }
     path.write_text(json.dumps(document, indent=2, ensure_ascii=False) + "\n")
@@ -162,7 +177,7 @@ def _read_fixture(path: Path) -> Response:
     response = document["response"]
     return Response(
         status=int(response["status"]),
-        headers=dict(response["headers"]),
+        headers=tuple((str(name), str(value)) for name, value in response["headers"]),
         body=_decode_body(response["body"], response["body_encoding"]),
     )
 

@@ -65,12 +65,24 @@ def test_require_raises_a_named_error_for_a_missing_secret() -> None:
         secrets.require("KITE_API_SECRET")
 
 
-def test_get_falls_back_to_the_given_default() -> None:
-    secrets = EnvSecrets.for_environment(Environment.PRODUCTION, environ={})
+def test_kite_redirect_url_has_the_operators_default_unless_set() -> None:
+    unset = EnvSecrets.for_environment(Environment.PRODUCTION, environ={})
+    assert unset.get("KITE_REDIRECT_URL") == "http://127.0.0.1:8765/callback"
+    assert unset.require("KITE_REDIRECT_URL") == DEFAULT_KITE_REDIRECT_URL
 
-    assert secrets.get("KITE_REDIRECT_URL", DEFAULT_KITE_REDIRECT_URL) == (
-        "http://127.0.0.1:8765/callback"
+    overridden = EnvSecrets.for_environment(
+        Environment.PRODUCTION, environ={"KITE_REDIRECT_URL": "https://example.test/cb"}
     )
+    assert overridden.get("KITE_REDIRECT_URL") == "https://example.test/cb"
+
+
+def test_the_dotenv_file_written_by_put_is_private_to_the_owner(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    secrets = EnvSecrets.for_environment(Environment.DEVELOPMENT, env_file=env_file, environ={})
+
+    secrets.put("KITE_ACCESS_TOKEN", "tok")
+
+    assert env_file.stat().st_mode & 0o777 == 0o600
 
 
 def test_put_in_development_persists_to_the_dotenv_file_keeping_other_lines(

@@ -10,7 +10,7 @@ SSM Parameter Store (``SsmSecrets``). The daily Kite access token obtained by
 from __future__ import annotations
 
 import os
-from collections.abc import MutableMapping
+from collections.abc import Mapping, MutableMapping
 from pathlib import Path
 from typing import Protocol
 
@@ -25,6 +25,9 @@ DATABASE_URL = "DATABASE_URL"
 
 DEFAULT_KITE_REDIRECT_URL = "http://127.0.0.1:8765/callback"
 DEFAULT_ENV_FILE = Path(".env")
+
+# Values the Operator decided apply when nothing is set.
+DEFAULTS: Mapping[str, str] = {KITE_REDIRECT_URL: DEFAULT_KITE_REDIRECT_URL}
 
 
 class MissingSecret(LookupError):
@@ -77,7 +80,9 @@ class EnvSecrets:
         value = self._environ.get(name)
         if value is None:
             value = self._file_values.get(name)
-        return default if value is None else value
+        if value is None:
+            value = DEFAULTS.get(name, default)
+        return value
 
     def require(self, name: str) -> str:
         value = self.get(name)
@@ -143,3 +148,4 @@ def _write_env_file(path: Path, name: str, value: str) -> None:
     if not replaced:
         lines.append(new_line)
     path.write_text("\n".join(lines) + "\n")
+    path.chmod(0o600)  # it now holds a broker token
