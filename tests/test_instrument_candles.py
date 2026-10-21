@@ -140,5 +140,39 @@ def test_an_instrument_day_stored_under_two_kite_names_reads_the_newer_and_repor
     assert (disagreement.kept.symbol, disagreement.other.symbol) == ("ETERNAL", "ZOMATO")
     assert (disagreement.trade_date, disagreement.series) == (date(2025, 4, 8), "EQ")
     assert (str(disagreement.kept.close), str(disagreement.other.close)) == ("214.19", "215.19")
-    # Reconcile compares one candle per Instrument-day, the newer.
+    # Reconcile compares one candle per Instrument-day, the newer, and reports the other.
     assert (report.rows, len(report.missing), len(report.extra)) == (4, 0, 0)
+    assert report.candle_disagreements == (disagreement,)
+    summary = report.summary()
+    assert summary["candle_disagreements"] == 1
+    assert summary["listed_candle_disagreements"] == [
+        {
+            "instrument": ETERNAL,
+            "series": "EQ",
+            "trade_date": "2025-04-08",
+            "kept_symbol": "ETERNAL",
+            "kept_close": "214.19",
+            "other_symbol": "ZOMATO",
+            "other_close": "215.19",
+        }
+    ]
+    assert "1 candle disagreement" in report.text()
+
+
+def test_an_instruments_candles_read_through_a_symbol_are_those_of_the_instrument_it_named(
+    fresh_database_url: str,
+) -> None:
+    with app_connection(fresh_database_url) as conn:
+        load_nse(conn)
+        rebuild_instruments(conn)
+        fetch(conn, Playback(KITE), "ETERNAL")
+        by_key = queries.instrument_daily_candles(conn, ETERNAL, start=START, end=END)
+        by_new_name = queries.instrument_daily_candles(conn, "ETERNAL", start=START, end=END)
+        # ZOMATO on the day its rows end names the Instrument now trading as ETERNAL.
+        by_old_name = queries.instrument_daily_candles(
+            conn, "ZOMATO", start=START, end=END, as_of=date(2025, 4, 8)
+        )
+
+    assert closes(by_key.candles) == [("ETERNAL", day, close) for day, close in KITE_CLOSES]
+    assert by_new_name == by_key
+    assert by_old_name == by_key

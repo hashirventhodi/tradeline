@@ -237,6 +237,8 @@ def test_the_command_exits_zero_on_clean_fixtures_with_a_summary_and_a_table(
         "reconciliation_pct": "100.0000",
         "passed": True,
         "listed": [],
+        "candle_disagreements": 0,
+        "listed_candle_disagreements": [],
     }
     assert "172 rows, 0 discrepancies" in table
     assert "PASS" in table

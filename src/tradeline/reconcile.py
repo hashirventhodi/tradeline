@@ -7,7 +7,9 @@ files an Instrument's whole history under its current name, so before a
 rename its candles are under a Symbol NSE had not used yet; they belong to the
 Instrument all the same. Of two candles of one Instrument-day under different
 Kite names, the one under the more recent name is compared
-(``queries.instrument_daily_candles``). A Symbol in no Instrument (none
+(``queries.instrument_daily_candles``), and where the two differ the day is
+reported as a **candle disagreement**, listed but not counted as a
+discrepancy: the compared candle is the one Kite serves today. A Symbol in no Instrument (none
 rebuilt yet) stands for its own. Series moves are compared as before, per
 series.
 
@@ -91,6 +93,8 @@ class ReconcileReport:
     missing: tuple[Discrepancy, ...]
     extra: tuple[Discrepancy, ...]
     close_mismatches: tuple[Discrepancy, ...]
+    # Instrument-days stored under two Kite names with different values; not discrepancies.
+    candle_disagreements: tuple[queries.CandleDisagreement, ...] = ()
 
     @property
     def discrepancies(self) -> int:
@@ -129,6 +133,10 @@ class ReconcileReport:
                 d.summary()
                 for kind in (self.missing, self.extra, self.close_mismatches)
                 for d in kind[:MAX_LISTED]
+            ],
+            "candle_disagreements": len(self.candle_disagreements),
+            "listed_candle_disagreements": [
+                _disagreement_summary(d) for d in self.candle_disagreements[:MAX_LISTED]
             ],
         }
 
@@ -170,7 +178,33 @@ class ReconcileReport:
             )
         if listed and len(listed) < self.discrepancies:
             lines.append(f"... {self.discrepancies - len(listed)} more not listed")
+        if self.candle_disagreements:
+            count = len(self.candle_disagreements)
+            lines.append("")
+            lines.append(
+                f"{count} candle disagreement{'s' if count != 1 else ''}"
+                " (one Instrument-day under two Kite names; the newer is compared):"
+            )
+            lines.extend(
+                f"  {d.instrument} {d.series} {d.trade_date}: {d.kept.symbol} {d.kept.close},"
+                f" {d.other.symbol} {d.other.close}"
+                for d in self.candle_disagreements[:MAX_LISTED]
+            )
+            if count > MAX_LISTED:
+                lines.append(f"... {count - MAX_LISTED} more not listed")
         return "\n".join(lines) + "\n"
+
+
+def _disagreement_summary(d: queries.CandleDisagreement) -> dict[str, Any]:
+    return {
+        "instrument": d.instrument,
+        "series": d.series,
+        "trade_date": d.trade_date.isoformat(),
+        "kept_symbol": d.kept.symbol,
+        "kept_close": str(d.kept.close),
+        "other_symbol": d.other.symbol,
+        "other_close": str(d.other.close),
+    }
 
 
 @dataclass(frozen=True)
@@ -222,7 +256,22 @@ def reconcile(
         missing=missing,
         extra=extra,
         close_mismatches=_close_mismatches(conn, rows, tolerance),
+        candle_disagreements=_candle_disagreements(conn, rows, start, end),
     )
+
+
+def _candle_disagreements(
+    conn: psycopg.Connection, rows: list[_Row], start: date, end: date
+) -> tuple[queries.CandleDisagreement, ...]:
+    """Each compared Instrument's days stored under two Kite names that differ."""
+    found = [
+        d
+        for instrument in sorted({r.instrument for r in rows if r.has_candle})
+        for d in queries.instrument_daily_candles(
+            conn, instrument, start=start, end=end, as_of=date.max
+        ).disagreements
+    ]
+    return tuple(found)
 
 
 # The Instruments a name stands for: every one the Symbol has named, or the

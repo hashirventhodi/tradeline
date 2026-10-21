@@ -884,6 +884,7 @@ def members_without_candles(conn: psycopg.Connection) -> list[EndReason]:
 class CandleDisagreement:
     """Two stored copies of one Instrument-day under different Kite names that differ."""
 
+    instrument: str
     trade_date: date
     series: str
     kept: DailyCandle  # under Kite's more recent name, the one read
@@ -908,7 +909,9 @@ def instrument_daily_candles(
     """Kite's daily candles for an Instrument, one per day and series, oldest first.
 
     ``instrument`` is an Instrument key, or a Symbol read as the Instrument it
-    named on ``as_of`` (``end`` when not given), as for ``end_of_day``. Kite files an Instrument's history under its name of the day it is
+    named on ``as_of`` (``end`` when not given), as for ``end_of_day``.
+
+    Kite files an Instrument's history under its name of the day it is
     fetched, so one Instrument-day can be stored under an old name and a new
     one. The copy under Kite's more recent name is read, each stored as Kite
     returned it (``daily_candles``), and any other copy whose values differ
@@ -916,7 +919,7 @@ def instrument_daily_candles(
     as its own key.
     """
     owned = _owned(conn, instrument, as_of=end if as_of is None else as_of)
-    key = owned.key if owned.key is not None else owned.symbol
+    key = owned.key or owned.symbol or instrument
     rows = conn.execute(
         "SELECT trade_date, symbol, series, open, high, low, close, volume"
         " FROM candles_daily_instruments"
@@ -933,7 +936,9 @@ def instrument_daily_candles(
         if kept is None or (kept.trade_date, kept.series) != (candle.trade_date, candle.series):
             candles.append(candle)
         elif _bar_values(candle) != _bar_values(kept):
-            disagreements.append(CandleDisagreement(candle.trade_date, candle.series, kept, candle))
+            disagreements.append(
+                CandleDisagreement(key, candle.trade_date, candle.series, kept, candle)
+            )
     return InstrumentDailyCandles(candles, disagreements)
 
 
