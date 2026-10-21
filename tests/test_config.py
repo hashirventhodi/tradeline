@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from tradeline.config import Config, ConfigError, load_config
+from tradeline.config import Config, ConfigError, UniverseRule, load_config
 
 
 def test_loads_settings_from_the_toml_file(tmp_path: Path) -> None:
@@ -33,9 +33,9 @@ def test_unknown_keys_are_refused_by_name(tmp_path: Path) -> None:
 
 def test_unknown_sections_are_refused_by_name(tmp_path: Path) -> None:
     path = tmp_path / "tradeline.toml"
-    path.write_text("[universe]\ntop = 200\n")
+    path.write_text("[broker]\nname = 'kite'\n")
 
-    with pytest.raises(ConfigError, match="universe"):
+    with pytest.raises(ConfigError, match="broker"):
         load_config(path)
 
 
@@ -56,6 +56,40 @@ def test_the_committed_config_file_loads() -> None:
     config = load_config(Path(__file__).resolve().parents[1] / "tradeline.toml")
 
     assert config.logging.level == "INFO"
+
+
+def test_the_committed_config_states_the_universe_rule_of_adr_0005() -> None:
+    config = load_config(Path(__file__).resolve().parents[1] / "tradeline.toml")
+
+    assert config.universe == UniverseRule(
+        top_n=200,
+        lookback_trading_days=126,
+        min_listing_trading_days=126,
+        min_presence_percent=90,
+        series="EQ",
+        excluded_isin_prefix="INF",
+    )
+
+
+def test_universe_rule_parameters_load_and_any_change_is_a_new_version(tmp_path: Path) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text("[universe]\ntop_n = 100\n")
+
+    rule = load_config(path).universe
+
+    assert rule.top_n == 100
+    assert rule.lookback_trading_days == 126
+    assert rule.version != UniverseRule().version
+    assert len(rule.version) == 64
+    assert UniverseRule(top_n=100).version == rule.version
+
+
+def test_an_impossible_universe_rule_is_refused_by_name(tmp_path: Path) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text("[universe]\nmin_presence_percent = 120\n")
+
+    with pytest.raises(ConfigError, match="universe.min_presence_percent"):
+        load_config(path)
 
 
 def test_news_feeds_are_a_table_of_names_and_urls(tmp_path: Path) -> None:

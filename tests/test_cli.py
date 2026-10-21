@@ -278,6 +278,62 @@ def test_ingest_candles_accepts_only_the_day_interval_for_now(
     assert "invalid choice" in capsys.readouterr().err
 
 
+UNIVERSE_FIXTURES = REPO_ROOT / "tests" / "fixtures" / "universe"
+
+
+def test_universe_computes_each_month_under_the_configured_rule_and_logs_it(
+    database_url: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = tmp_path / "tradeline.toml"
+    config.write_text(
+        "[universe]\ntop_n = 3\nlookback_trading_days = 20\nmin_listing_trading_days = 21\n"
+    )
+    monkeypatch.setenv("TRADELINE_CONFIG", str(config))
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    assert (
+        main(
+            [
+                "ingest",
+                "eod",
+                "--from",
+                "2024-07-01",
+                "--to",
+                "2024-08-02",
+                "--play-fixtures",
+                str(UNIVERSE_FIXTURES),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert main(["universe", "--month", "2024-08"]) == 0
+
+    lines = json_lines(capsys.readouterr().out)
+    assert all(line["command"] == "universe" for line in lines)
+    computed = [line for line in lines if line["msg"] == "universe computed"]
+    assert [(line["month"], line["members"]) for line in computed] == [("2024-08-01", 3)]
+    assert len(str(computed[0]["rule_version"])) == 64
+
+
+def test_universe_reports_a_month_it_cannot_compute_as_a_json_error(
+    database_url: str,
+    repo_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", database_url)
+
+    assert main(["universe", "--month", "2010-01"]) == 1
+
+    failure = json_lines(capsys.readouterr().out)[-1]
+    assert failure["level"] == "ERROR"
+    assert "trading days of end-of-day files" in str(failure["msg"])
+
+
 NEWS_FIXTURES = REPO_ROOT / "tests" / "fixtures" / "ingest_news"
 
 

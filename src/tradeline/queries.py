@@ -228,6 +228,75 @@ def adjusted_daily_candles(
 
 
 @dataclass(frozen=True)
+class UniverseMember:
+    month: date
+    rule_version: str
+    rank: int
+    symbol: str
+    series: str
+    traded_value: Decimal
+
+
+@dataclass(frozen=True)
+class UniverseRuleVersion:
+    version: str
+    parameters: dict[str, Any]
+    recorded_at: datetime
+
+
+def universe_membership(
+    conn: psycopg.Connection,
+    month: date,
+    *,
+    as_of: date,
+    rule_version: str | None = None,
+) -> list[UniverseMember]:
+    """The Universe for the month starting ``month`` (a first day), best rank first.
+
+    ``rule_version`` is a Universe Rule's parameter hash
+    (``tradeline.config.UniverseRule.version``); without one, the membership
+    is the one stored under the most recently recorded rule version that has
+    any for the month. A month never computed under the version is empty.
+
+    Point in time. The Universe for a month is computed only from end-of-day
+    rows dated before its first trading day, so it is known from that day on.
+    An ``as_of`` before the month's first calendar day is refused.
+    """
+    if month.day != 1:
+        raise ValueError(f"a Universe month is given by its first day, not {month}")
+    if as_of < month:
+        raise ValueError(
+            f"the Universe for {month:%Y-%m} is not known on {as_of}, before the month starts"
+        )
+    if rule_version is None:
+        latest = conn.execute(
+            "SELECT v.version FROM universe_rule_versions v"
+            " WHERE EXISTS (SELECT 1 FROM universe_membership m"
+            "  WHERE m.month = %s AND m.rule_version = v.version)"
+            " ORDER BY v.recorded_at DESC, v.version LIMIT 1",
+            (month,),
+        ).fetchone()
+        if latest is None:
+            return []
+        rule_version = latest[0]
+    rows = conn.execute(
+        "SELECT month, rule_version, rank, symbol, series, traded_value"
+        " FROM universe_membership WHERE month = %s AND rule_version = %s ORDER BY rank",
+        (month, rule_version),
+    ).fetchall()
+    return [UniverseMember(*row) for row in rows]
+
+
+def universe_rule_versions(conn: psycopg.Connection) -> list[UniverseRuleVersion]:
+    """Every Universe Rule version recorded, oldest first."""
+    rows = conn.execute(
+        "SELECT version, parameters, recorded_at FROM universe_rule_versions"
+        " ORDER BY recorded_at, version"
+    ).fetchall()
+    return [UniverseRuleVersion(*row) for row in rows]
+
+
+@dataclass(frozen=True)
 class NewsItem:
     feed: str
     title: str

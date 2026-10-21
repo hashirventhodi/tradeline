@@ -1,0 +1,75 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_20240729_F_0000.csv.zip",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "x-frame-options",
+        "DENY"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "accept-ranges",
+        "bytes"
+      ],
+      [
+        "etag",
+        "W/\"166928-1722250922000\""
+      ],
+      [
+        "last-modified",
+        "Mon, 29 Jul 2024 11:02:02 GMT"
+      ],
+      [
+        "content-type",
+        "application/zip"
+      ],
+      [
+        "content-length",
+        "1011"
+      ],
+      [
+        "date",
+        "Wed, 21 Oct 2026 08:47:15 GMT"
+      ],
+      [
+        "connection",
+        "keep-alive"
+      ],
+      [
+        "akamai-grn",
+        "0.142a336a.1792572435.c8d4d54"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "content-security-policy",
+        "default-src 'self'; script-src 'strict-dynamic' 'nonce-MC4yMDg2Mzc3MzEw' 'unsafe-inline' http: https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.nse.co.in https://*.nseindia.com; font-src 'self'; frame-src 'self'; base-uri 'self'; frame-ancestors 'self'; connect-src 'self' https://*.nseindia.com https://c.go-mpulse.net https://stats.g.doubleclick.net https://*.akstat.io/ https://*.akamaihd.net"
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000 ; includeSubDomains ; preload"
+      ],
+      [
+        "set-cookie",
+        "bm_mi=E7C437FC72A7A613103C9D950C830F3C~YAAQFCozat6+qz2hAQAAIK2kXQGYvD4jeFpBYAYUOTTuCtig9NhQs0/7Tsq0DeacrEanEb+7u0xi2AGuMJT+VuZZws8UmqGSPX4R3U3ac7viirZyFw0CHHhaCCP6fjl/1K3ox8Q6nJkyCaDkyjRDubetdf1LXvOcSyXbnfAtd9wKJZYgR7JVrncfGE5lkBtbdm0o1oJYVImaIqGAR/7I0nVpSATLU+E8PneFiF6BoUWwHbKSPYWBlKsJTfb9FMUWfd9fMCQjbEqrp7IzbejKbmnBdP2ho9R39iknAnzs4zBE6TDvw+rJX2y8hD+1z87p8FFyzFgK4AqAMJykdjcD9kgspX04C8XQ/QLIy8BnJHuEsuFqtEus9wirEgz1mf4xrYydq6nuKc4239fQ~1; Domain=.nseindia.com; Path=/; Expires=Wed, 21 Oct 2026 08:47:15 GMT; Max-Age=0; Secure"
+      ]
+    ],
+    "body": "UEsDBBQAAAAIAEFyVV3ekxSIPwMAAN4GAAApAAAAQmhhdkNvcHlfTlNFX0NNXzBfMF8wXzIwMjQwNzI5X0ZfMDAwMC5jc3aVlM2S2jgQx+/7FH6AHpda3zraYGqUeAzBYmpnbxNIyNQAmbJdScjTb0vGTKr2snBQf8hIv279pdA97+YDlC+/aWz3Rxq6LSxeTv7UD90xvL37fge+9Q2E7WvXno+fod0O57br4e+37kz/pg9f0ofFdjhccu3Qva66ly0s34bTn4s1R0qd0tT9/luy9c9kZod+DJ/7ITmr7kdPyX0KNqdddziPfjsMh+NldVp26PoBZt9Oe396j8NwCFTi/vH7YfS/Pj4nr/m8/Bp+9dWv7bCDtj9Rdc2Xn2W3q78Pn4YzrI+vPaz7HztMI0+jSKP8izMu75i54w7+cGcP0LQVtOEjoDFCgW8qa6xnyDiHslg0xeoeygriL4XZ6r5YPxSzahP8rKjbrA5zsDJHBtbkir378jqqnDEAq3MraRkurCEGodHlSB7CAgHTDv+DUmvtIqVDEylpq7L4UHy4KzZhCdWnCyhlspjJav/gQzUHp6TLOQOnOeZMUcxcpHJKmVzHWGFO9TvpeO6IdpoAEIwLLYBb66QQtG9uGCiiUzeBM2U0gS84kx9LlJ5D4xfhqayqduJu/CrzzTyrwiJLk1ma5UZHJG5srCBGOBptx7nRMA1TFkBqNBYFIDdOG67R5mhBOM5ua7dyMnabMVdETWCs4GniJX/ZPrXXJqN1ItcM0DERm4tWy9EajMxkZe5UtDY1eZqIvEI5gaQYxq0SyHRO/eXM0jHcBIxKxDZXUpsyEjsIs2uDQxGKbLZs2k0dimb2lLXV+pEUDFJiEqmUApMV5mJtAiTLLrHJLalimqAajNSWCTAkTEkqo4WQSkRnFb+FnPSlxlbz2Go6rXVVe6KsJvopjhrZtGHtq/H2RYHGdgqmUhEpVoqsZFExgglSToxJBaT96wR5RjtuIq5UXGvqnoo3Fg0j7yZ6KUiGhI/ariK+guphtllf4cfov68HIB12EslkueXxHUHuVKyK4iR4ik28odHRqQy6U5wpGf/pOD0MSVvGWHEjOEvgSvF/omAMFOW8nrCLuvbVPCvriu5lk819G3zCFnTOtJ2gVtNzIDC9KgJFPPxoVEzKeBumLL0pdDCC00lro1DLVA6mx+Ud+F9QSwECFAMUAAAACABBclVd3pMUiD8DAADeBgAAKQAAAAAAAAAAAAAAgAEAAAAAQmhhdkNvcHlfTlNFX0NNXzBfMF8wXzIwMjQwNzI5X0ZfMDAwMC5jc3ZQSwUGAAAAAAEAAQBXAAAAhgMAAAAA",
+    "body_encoding": "base64"
+  }
+}
