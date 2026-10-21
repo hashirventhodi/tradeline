@@ -83,6 +83,10 @@ LinkKind = Literal["corporate_action", "symbol_change", "manual"]
 KeyFrom = Literal["listing_date", "first_row"]
 AnomalyKind = Literal["unexplained_isin_change", "conflicting_link"]
 
+# NSE's equity listing series, the Raw Series an Instrument is built from: EQ; BE
+# and BZ, trade-for-trade; SM and ST, SME. An Instrument spans moves between them.
+LISTING_SERIES = ("BE", "BZ", "EQ", "SM", "ST")
+
 # How far a split's or bonus's Ex-Date may fall from the old ISIN's last row, and
 # from the new one's first, and still explain the change. NSE's files switch
 # ISIN from two trading days after the Ex-Date to one before it (IRCON 2020,

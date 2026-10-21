@@ -54,6 +54,7 @@ import psycopg
 from tradeline import queries
 from tradeline.ingest import record_ingest_run
 from tradeline.instruments import (
+    LISTING_SERIES,
     Evidence,
     InstrumentBuild,
     Interval,
@@ -67,8 +68,6 @@ log = logging.getLogger(__name__)
 
 COMMAND = "instruments"
 SOURCE = "instrument_links"
-# NSE's equity listing series; an Instrument spans moves between them.
-SERIES = ("BE", "BZ", "EQ", "SM", "ST")
 
 
 @dataclass(frozen=True)
@@ -151,7 +150,7 @@ def _spans(conn: psycopg.Connection) -> list[Span]:
         "  FROM marked)"
         " SELECT symbol, series, isin, min(trade_date), max(trade_date) FROM numbered"
         " GROUP BY symbol, run, series, isin ORDER BY symbol, min(trade_date), series",
-        (list(SERIES),),
+        (list(LISTING_SERIES),),
     ).fetchall()
     return [Span(*row) for row in rows]
 

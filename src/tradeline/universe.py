@@ -54,7 +54,7 @@ from psycopg.types.json import Jsonb
 
 from tradeline import queries
 from tradeline.config import UniverseRule
-from tradeline.rebuild_instruments import SERIES as LISTING_SERIES
+from tradeline.instruments import LISTING_SERIES
 
 log = logging.getLogger(__name__)
 
