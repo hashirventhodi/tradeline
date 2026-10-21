@@ -96,6 +96,97 @@ except the two days under `tests/fixtures/ingest_minute_candles/`).
 | Is a date-only `to` inclusive of that day? | Yes: `from=2024-07-31&to=2024-08-01` returns 750 bars, 375 a day, 09:15 to 15:29 IST, each stamped with its start minute and `+0530`. | 2026-10-21 |
 | Are minute bars adjusted? | **Yes, like daily bars.** INFY's 1 July 2024 09:15 open is 1526.5, Kite's adjusted daily open for that day; February 2015 bars are at a quarter to a half of the prices then quoted. Some adjusted minute prices are not on any tick (TCS 2015-02-02 09:15 high 1243.63). `candles_minute` therefore holds Kite's adjusted series as of the fetch, as `candles_daily` does. | 2026-10-21 |
 
+## Ten-year backfill and acceptance run (#13)
+
+Run on 2026-10-21 against live NSE and Kite responses, on a laptop against the
+Compose Postgres. Universe months are November 2016 to October 2026 (120); NSE
+end-of-day files were loaded from 2015-01-01 so that the first month has its
+126-day window and every symbol's listing history before it.
+
+| Step | Result | Runtime |
+|---|---|---|
+| `ingest eod --from 2015-01-01 --to 2026-10-20` | 2,923 trading days, 6,483,258 rows, 7,653 symbols, 0 anomalies. 167 weekdays without a file (exchange holidays, about 14 a year), 11 weekend sessions. | 23 min (two runs; see below) |
+| `ingest corporate-actions --from 2015-01-01 --to 2026-10-21` | 26,264 actions in 12 requests: 412 splits, 443 bonuses, 291 rights, 15,611 dividends, 9,507 other. | 20 s |
+| `universe --month 2016-11 --to 2026-10`, twice | 120 months of 200 members; 544 distinct symbols. The second run recomputed every month and found 0 differences. | 174 s, 167 s |
+| `ingest candles --interval day --from 2016-10-21 --to 2026-10-20` for the 454 ever-members with a Kite token | 978,885 bars, 908 requests, 0 anomalies. | 5 min |
+| `reconcile --from 2016-10-21 --to 2026-10-20` | 985,902 rows, 87,502 discrepancies (8.88 percent): **fail** against 0.1 percent. Causes below. | 7 s |
+| `compare-adjusted` for 20 symbols with splits or bonuses | 26,310 of 48,699 bars equal to the paisa; IRCTC alone matches on every bar. Every mismatch is explained below. | 30 s |
+| `verify-universe` (October 2026) | 154 of 200 NIFTY 200 constituents (77 percent): **fail** against 85 percent. 0 members without a sector. | 2 s |
+
+### What the run found
+
+- **A legacy file with a two-digit year.** NSE's file for 2020-07-13 writes
+  `TIMESTAMP` as `13-Jul-20`; the parser now reads both. The first run stopped
+  there (recorded as a failed `nse_eod` run) and was resumed from 2020-07-11.
+- **A split subject without "From".** GRANULES ex 2015-03-23, "Face Value Split
+  Rs 10 To Rs 1", is now read as a split. MONNETISPA's 2018 "Capital Reduction
+  Rs 10 To Rs 3.30 / Consolidation Rs 3.30 To Rs.10" stays unparsed on purpose.
+- **The Universe query was quadratic in history.** Postgres inlined the
+  trading-calendar CTE into a per-symbol count, so a month took about 90
+  seconds with ten years loaded. Materialized, it takes under two.
+- **90 of the 544 ever-members have no Kite token today.** 38 were renamed
+  (ZOMATO to ETERNAL, LTI to LTIM to LTM, TATAMOTORS to TMPV);
+  Kite serves the whole history under the new symbol's token. 52 were delisted,
+  merged (HDFC, MINDTREE, GRUH, the merged PSU banks) or now trade only in BE
+  or BZ. NSE's end-of-day rows cover all 544 for every month they were members,
+  so the Universe and the adjusted series (both computed from NSE's rows) are
+  complete; Kite's candles, the cross-check, are not.
+
+### Why reconcile fails
+
+| Cause | Discrepancies |
+|---|---|
+| **Renames.** Kite files a renamed instrument's whole history under the new symbol; NSE's rows before the rename carry the old one, so every earlier bar is "extra" (36 symbols, LTM 2,318 bars, TMPV 2,231, ...). | 44,408 extra |
+| **Series changes.** Kite's EQ token carries on through days NSE lists the symbol in BE, BZ, or another series. | 11,685 extra |
+| **Kite's additive adjustment.** For 19 symbols (GNFC, HINDPETRO, BANKBARODA, CANBK, IOC, UNIONBANK, OFSS, VEDL, TATASTEEL, MPHASIS, M&MFIN, GAIL, BPCL, ASHOKLEY, TECHM, HEROMOTOCO, LICHSGFIN, POWERGRID and, in part, NMDC), Kite's bars before an action are NSE's times a factor *minus a constant*: GNFC before September 2023 is 0.93205 × NSE − 43.35, OFSS before May 2024 0.942 × NSE − 226.09, fitted to within a tick on every bar. Reconcile's model is a factor per stretch, so the ratio drifts with the price and the closes mismatch. Adjustments Kite has made since about mid-2024 are purely multiplicative. | about 25,500 close |
+| **Kite rounds adjusted history to a coarser tick.** After their 2025 and 2026 splits and bonuses, Kite rounds the earlier history of MCX, BSE, BAJFINANCE, TATAINVEST, GODFRYPHLP and TDPOWERSYS to whole rupees (MCX 253, 236, 292; BAJFINANCE 106, 423), seemingly the tick in force for the instrument when the action happened. On a ₹100 price that is beyond the 0.1 percent tolerance. | about 3,900 close |
+| **Muhurat sessions before 2019.** Kite has no bars for the Diwali sessions of 2016-10-30, 2017-10-19, and 2018-11-07. | 935 missing |
+| **BAFNAPH.** A BE symbol with July and August 2024 candles from earlier work; reconcile compares every day NSE lists it. | 998 missing |
+
+With renames, series changes, the muhurat days, and the additive adjustment
+accounted for, about 3,900 discrepancies remain (0.40 percent), almost all of
+them the coarse rounding. None suggests an error in NSE's rows.
+
+### How the adjusted series compares with Kite's chart
+
+The 20 symbols, with splits and bonuses across the decade: RELIANCE, INFY,
+TCS, WIPRO, HDFCBANK, BAJFINANCE, BAJAJFINSV, BEL, EICHERMOT, TATASTEEL,
+KOTAKBANK, DRREDDY, BRITANNIA, ICICIBANK, NTPC, GAIL, CONCOR, MCX, BSE, IRCTC.
+
+- **At all 35 split and bonus Ex-Dates in them, our factor equals Kite's**: the
+  ratio of Kite's close to ours is the same on the five days either side of
+  every one (the apparent jumps at WIPRO 2019, TATASTEEL 2022 and GAIL 2017 to
+  2019 sit in stretches where Kite's adjustment includes the constant above).
+- 26,310 bars are equal to the paisa.
+- 5,636 differ only in rounding, by at most 10 paisa: Kite rounds its older
+  adjusted prices to the paisa (TCS before its 2018 bonus: 1199.125 to
+  1199.13), to 10 paisa (HDFCBANK, KOTAKBANK), or to 5 paisa with ties down
+  (EICHERMOT 2477.975 to 2477.95), where ours rounds to 5 paisa ties to even.
+  The tick-rounding row of the table above is the same thing at ₹1.
+- 12,110 are at a steady Kite factor for an action we do not adjust:
+  RELIANCE 0.9532 before the Jio Financial demerger of 2023-07-20, INFY 0.9788
+  before its ₹25 dividend of 2026-06-10, WIPRO 0.9558 and 0.9748 across its
+  buybacks and dividends.
+- 4,643 fit no single factor: TATASTEEL and GAIL (the additive adjustment)
+  and MCX, BSE and BAJFINANCE (rounding to the rupee).
+
+### Why the Universe overlaps the NIFTY 200 by 77 percent
+
+All 46 NIFTY 200 constituents outside the Universe rank 201 to 448 by traded
+value, except VAML (listed 76 trading days, under the rule's 126). The 46
+members outside the index rank 18 to 197 by traded value. The cause is the
+rule, not the data: the NIFTY 200 is chosen by free-float market capitalisation,
+the Universe by six-month traded value (ADR 0005). Heavily traded small and
+mid caps come in (NETWEB, HSCL, CUPID, IFCI, OLAELEC, PCJEWELLER) and thinly
+traded large caps drop out (MRF, PAGEIND, COLPAL, DABUR, BAJAJHLDNG, IRCTC).
+
+### Reproducibility
+
+The 24,000 membership rows hash to `45fffd690fa35a94de779ca12d02f489` (md5
+of month, rank, symbol and traded value in month and rank order) under rule
+version `53181efb8726`. Nine months were stored by the query before it was
+materialized; the second run reproduced them too.
+
 ## US-market findings (for reference; not the chosen market)
 
 Alpaca offers free paper trading with IEX data and ₹99-equivalent full SIP data; Massive (formerly Polygon) runs 29 to 199 dollars a month; SEC EDGAR is free. These made the US the easier engineering choice. The Operator chose Indian equities, which cost more in friction (no sandbox, daily login, static IP) but is the market they trade.
