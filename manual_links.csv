@@ -1,0 +1,14 @@
+# Manual Instrument Links (ADR 0016): renames NSE's symbol-change list omits.
+#
+# Each row joins the old Symbol's history to the new Symbol's from the
+# effective date, the first day the new Symbol trades, as an NSE record would.
+# Every row is reviewed like code and must cite an official source: an
+# exchange circular's URL or number, or a company filing. A row without a
+# citation, or with a date that is not YYYY-MM-DD, fails `rebuild-instruments`.
+# Mergers are never links. `tradeline.manual_links` reads this file; its
+# location is `instruments.manual_links` in tradeline.toml.
+#
+# RUCHI to PATANJALI: NSE circular CML52890, "Change in name and symbol of
+# Ruchi Soya Industries Limited", w.e.f. July 13, 2022.
+old_symbol,new_symbol,effective_date,citation
+RUCHI,PATANJALI,2022-07-13,https://archives.nseindia.com/content/circulars/CML52890.pdf

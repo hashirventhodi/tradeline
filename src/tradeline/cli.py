@@ -28,8 +28,10 @@ from tradeline.ingest.corporate_actions import ingest_corporate_actions
 from tradeline.ingest.eod import ingest_eod
 from tradeline.ingest.news import Feed, ingest_news
 from tradeline.ingest.symbol_changes import ingest_symbol_changes
+from tradeline.instruments_report import instruments_report
 from tradeline.logging import configure_logging, log_context
 from tradeline.login import login as login_service
+from tradeline.manual_links import load_manual_links
 from tradeline.migrations import apply_migrations
 from tradeline.rebuild_instruments import rebuild_instruments as rebuild_instruments_service
 from tradeline.reconcile import reconcile as reconcile_service
@@ -338,10 +340,24 @@ def sectors(ctx: Context, args: argparse.Namespace) -> int:
 
 
 def rebuild_instruments(ctx: Context, args: argparse.Namespace) -> int:
-    """Rebuild the Instruments from the stored evidence, replacing the previous build."""
+    """Rebuild the Instruments from the stored evidence and the manual links file,
+    replacing the previous build."""
+    manual_links = load_manual_links(Path(ctx.config.instruments.manual_links))
     with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
-        result = rebuild_instruments_service(conn)
+        result = rebuild_instruments_service(conn, manual_links=manual_links)
     log.info("rebuild-instruments finished", extra=result.summary())
+    return 0
+
+
+def instruments(ctx: Context, args: argparse.Namespace) -> int:
+    """The anomalies, ended Instruments, and link candidates of the last rebuild; read only.
+
+    The report goes to stderr; its summary is the last JSON line on stdout.
+    """
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        report = instruments_report(conn)
+    sys.stderr.write(report.text())
+    log.info("instruments finished", extra={"report": report.summary()})
     return 0
 
 
@@ -374,6 +390,7 @@ COMMANDS: dict[str, Command] = {
     "compare-adjusted": compare_adjusted,
     "sectors": sectors,
     "rebuild-instruments": rebuild_instruments,
+    "instruments": instruments,
     "verify-universe": verify_universe,
     "collect-daily": collect_daily,
 }
@@ -516,7 +533,12 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "rebuild-instruments",
         help="rebuild the Instruments from the stored end-of-day rows, symbol changes,"
-        " corporate actions, and listing dates",
+        " corporate actions, and listing dates, and the manual links file",
+    )
+    subparsers.add_parser(
+        "instruments",
+        help="review the last rebuild: anomalies, ended Instruments, and link candidates;"
+        " writes nothing",
     )
     verify_parser = subparsers.add_parser(
         "verify-universe",

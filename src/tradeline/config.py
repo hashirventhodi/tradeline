@@ -84,10 +84,17 @@ class Config:
         # exactly at it fails (Phase 1: under 0.1).
         max_discrepancy_pct: float = 0.1
 
+    @dataclass(frozen=True)
+    class Instruments:
+        # The checked-in file of manual Instrument Links (``tradeline.manual_links``),
+        # relative to the working directory.
+        manual_links: str = "manual_links.csv"
+
     logging: Logging = field(default_factory=Logging)
     universe: UniverseRule = field(default_factory=UniverseRule)
     reconcile: Reconcile = field(default_factory=Reconcile)
     news: News = field(default_factory=News)
+    instruments: Instruments = field(default_factory=Instruments)
 
 
 def default_config_path() -> Path:

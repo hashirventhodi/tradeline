@@ -19,7 +19,7 @@ import psycopg
 
 from tradeline.adjust import KINDS, AdjustedBar, CorporateAction, Kind, RawBar, adjust
 from tradeline.dates import IST
-from tradeline.instruments import Interval, KeyFrom, Link
+from tradeline.instruments import Anomaly, Interval, KeyFrom, Link, LinkCandidate
 from tradeline.sources.nse import SymbolChange
 
 
@@ -669,6 +669,56 @@ def instrument_history(conn: psycopg.Connection, key: str) -> InstrumentHistory:
         intervals=tuple(Interval(*row) for row in intervals),
         links=tuple(Link(*row) for row in links),
     )
+
+
+def instrument_anomalies(conn: psycopg.Connection) -> list[Anomaly]:
+    """What the last rebuild would not join, oldest first: unexplained ISIN changes and
+    refused links."""
+    rows = conn.execute(
+        "SELECT kind, symbol, on_date, detail FROM instrument_anomalies"
+        " ORDER BY on_date, symbol, kind, detail"
+    ).fetchall()
+    return [Anomaly(*row) for row in rows]
+
+
+def link_candidates(conn: psycopg.Connection) -> list[LinkCandidate]:
+    """The last rebuild's link candidates, oldest new Symbol first."""
+    rows = conn.execute(
+        "SELECT old_symbol, new_symbol, isin, old_last, new_first FROM instrument_link_candidates"
+        " ORDER BY new_first, new_symbol, old_symbol, isin"
+    ).fetchall()
+    return [LinkCandidate(*row) for row in rows]
+
+
+@dataclass(frozen=True)
+class EndedInstrument:
+    key: str
+    # The Instrument's last end-of-day row, and the Symbol it was under.
+    last_day: date
+    last_symbol: str
+
+
+def instruments_last_day(conn: psycopg.Connection) -> date | None:
+    """The last day of any Instrument's history: where the Raw Series ends."""
+    row = conn.execute("SELECT max(last_day) FROM instrument_intervals").fetchone()
+    return None if row is None else row[0]
+
+
+def ended_instruments(conn: psycopg.Connection) -> list[EndedInstrument]:
+    """The Instruments whose history stops before the Raw Series does, by key.
+
+    An Instrument with no row on the last day of any Instrument's history has
+    ended, as far as the stored rows show: delisted, suspended, absorbed, or
+    renamed with no link to its new Symbol.
+    """
+    rows = conn.execute(
+        "SELECT DISTINCT ON (instrument_key) instrument_key, last_day, symbol"
+        " FROM instrument_intervals"
+        " WHERE instrument_key NOT IN (SELECT instrument_key FROM instrument_intervals"
+        "  WHERE last_day = (SELECT max(last_day) FROM instrument_intervals))"
+        " ORDER BY instrument_key, last_day DESC, series"
+    ).fetchall()
+    return [EndedInstrument(*row) for row in rows]
 
 
 @dataclass(frozen=True)
