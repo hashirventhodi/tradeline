@@ -31,6 +31,11 @@ YESBANK,YESBANK,2020-03-16,https://nsearchives.nseindia.com/content/circulars/IN
 # PHILIPCARB to PCBL: NSE/CML/50952, "Change in name and symbol of Phillips
 # Carbon Black Limited", w.e.f. January 13, 2022.
 PHILIPCARB,PCBL,2022-01-13,https://nsearchives.nseindia.com/content/circulars/CML50952.pdf
+# SUBEX to SUBEXLTD, with a new ISIN (INE754A01014 to INE754A01055): NSE/CML/46245,
+# the reduced shares (face value Rs 10 to Rs 5 under an NCLT-approved capital
+# reduction, the share count unchanged) admitted to dealings as SUBEXLTD w.e.f.
+# November 05, 2020. NSE issued no symbol-change circular.
+SUBEX,SUBEXLTD,2020-11-05,https://nsearchives.nseindia.com/content/circulars/CML46245.zip
 # DSML to DIL: NSE/CML/50948, Debock Sales And Marketing to Debock Industries, w.e.f. January 14, 2022.
 DSML,DIL,2022-01-14,https://nsearchives.nseindia.com/content/circulars/CML50948.pdf
 # PDSMFL to PDSL: NSE/CML/51294, w.e.f. February 17, 2022.
