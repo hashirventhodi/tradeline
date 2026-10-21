@@ -16,6 +16,7 @@ The adjusted prices are worked by hand from the raw rows: before the split
 every price is divided by 5 to the 5 paisa tick and the volume multiplied by 5.
 """
 
+import json
 from collections.abc import Iterator
 from datetime import date
 from decimal import Decimal
@@ -27,6 +28,7 @@ import pytest
 
 from playback import Playback
 from tradeline import queries
+from tradeline.cli import main
 from tradeline.db import app_connection
 from tradeline.ingest.corporate_actions import ingest_corporate_actions
 from tradeline.ingest.eod import ingest_eod
@@ -34,6 +36,7 @@ from tradeline.ingest.symbol_changes import ingest_symbol_changes
 from tradeline.rebuild_instruments import rebuild_instruments
 from tradeline.transport import Request
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 FIXTURES = FIXTURES_DIR / "adjusted_instruments"
 EOD_FIXTURES = FIXTURES_DIR / "ingest_eod"
@@ -154,7 +157,7 @@ def test_an_instruments_reads_by_key_or_by_any_of_its_symbols_agree(
 
 
 def test_an_unknown_instrument_key_is_refused(conn: psycopg.Connection) -> None:
-    with pytest.raises(LookupError, match="no Instrument GUJENERGY@2026-07-01"):
+    with pytest.raises(ValueError, match="no Instrument GUJENERGY@2026-07-01"):
         queries.adjusted_daily_candles(
             conn, "GUJENERGY@2026-07-01", start=FIRST, end=LAST, as_of=LAST
         )
@@ -177,5 +180,33 @@ def test_a_symbol_is_refused_as_of_a_date_before_it_named_the_instrument(
     conn: psycopg.Connection,
 ) -> None:
     before = date(2026, 6, 30)
-    with pytest.raises(LookupError, match="GUJENERGY named no Instrument on or before 2026-06-30"):
+    with pytest.raises(ValueError, match="GUJENERGY named no Instrument on or before 2026-06-30"):
         queries.adjusted_daily_candles(conn, "GUJENERGY", start=FIRST, end=before, as_of=before)
+
+
+def test_the_command_refuses_a_symbol_not_yet_naming_its_instrument_with_the_reason(
+    conn: psycopg.Connection,
+    database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("TRADELINE_CONFIG", str(REPO_ROOT / "tradeline.toml"))
+    monkeypatch.setenv("DATABASE_URL", database_url)
+
+    code = main(
+        [
+            "compare-adjusted",
+            "--symbol",
+            "GUJENERGY",
+            "--from",
+            "2026-06-29",
+            "--as-of",
+            "2026-06-30",
+        ]
+    )
+
+    assert code == 1
+    last = json.loads(capsys.readouterr().out.splitlines()[-1])
+    # A refusal naming the Symbol and the date, not a failure with a traceback.
+    assert (last["level"], "exc_info" in last) == ("ERROR", False)
+    assert last["msg"].startswith("GUJENERGY named no Instrument on or before 2026-06-30")

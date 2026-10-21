@@ -68,9 +68,9 @@ def test_a_symbol_resolves_to_the_instrument_it_named_on_a_date_on_either_side_o
 
 
 def test_a_symbol_is_refused_before_it_named_any_instrument(conn: psycopg.Connection) -> None:
-    with pytest.raises(LookupError, match="ETERNAL named no Instrument on or before 2025-04-08"):
+    with pytest.raises(ValueError, match="ETERNAL named no Instrument on or before 2025-04-08"):
         queries.resolve_symbol(conn, "ETERNAL", as_of=date(2025, 4, 8))
-    with pytest.raises(LookupError, match="NOSUCH"):
+    with pytest.raises(ValueError, match="NOSUCH"):
         queries.resolve_symbol(conn, "NOSUCH", as_of=END)
 
 
@@ -100,7 +100,7 @@ def test_an_instruments_symbol_history_runs_across_the_rename_with_its_link(
 
 
 def test_an_unknown_instrument_key_is_refused(conn: psycopg.Connection) -> None:
-    with pytest.raises(LookupError, match="ETERNAL@2025-04-09"):
+    with pytest.raises(ValueError, match="ETERNAL@2025-04-09"):
         queries.instrument_history(conn, "ETERNAL@2025-04-09")
 
 

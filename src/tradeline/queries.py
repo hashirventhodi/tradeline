@@ -336,16 +336,16 @@ def _owned(conn: psycopg.Connection, instrument: str, *, as_of: date) -> _Owned:
     as of ``as_of``, as ``resolve_symbol`` does.
 
     An unknown key, and a Symbol that named an Instrument only after
-    ``as_of``, are refused with a ``LookupError``. A Symbol no Instrument has
+    ``as_of``, are refused with ``NoInstrument``. A Symbol no Instrument has
     had (Instruments not rebuilt since its rows arrived) is read alone.
     """
     if "@" in instrument:
         if conn.execute("SELECT 1 FROM instruments WHERE key = %s", (instrument,)).fetchone():
             return _Owned(instrument)
-        raise LookupError(f"no Instrument {instrument}")
+        raise NoInstrument(_unknown_key(instrument))
     try:
         return _Owned(resolve_symbol(conn, instrument, as_of=as_of).key)
-    except LookupError:
+    except NoInstrument:
         had = conn.execute(
             "SELECT 1 FROM instrument_intervals WHERE symbol = %s LIMIT 1", (instrument,)
         ).fetchone()
@@ -614,6 +614,15 @@ def delistings(conn: psycopg.Connection, *, symbol: str | None = None) -> list[D
     return [Delisting(*row) for row in rows]
 
 
+class NoInstrument(ValueError):
+    """An Instrument key the last rebuild did not make, or a Symbol that named no Instrument
+    by the date asked: a refusal, as for any read asked of what is not there."""
+
+
+def _unknown_key(key: str) -> str:
+    return f"no Instrument {key}; run `tradeline rebuild-instruments` if its rows have arrived"
+
+
 @dataclass(frozen=True)
 class Instrument:
     """An Instrument as last rebuilt (``tradeline.rebuild_instruments``)."""
@@ -643,8 +652,8 @@ def resolve_symbol(conn: psycopg.Connection, symbol: str, *, as_of: date) -> Ins
     A Symbol names at most one Instrument on any day, so this is the
     Instrument of the latest interval under ``symbol`` starting on or before
     ``as_of``: ZOMATO as of today is the Instrument now trading as ETERNAL. A
-    Symbol that named no Instrument on or before ``as_of`` is refused with a
-    ``LookupError``, so a Symbol is never read into a past before it existed.
+    Symbol that named no Instrument on or before ``as_of`` is refused with
+    ``NoInstrument``, so a Symbol is never read into a past before it existed.
     """
     row = conn.execute(
         "SELECT i.key, i.first_symbol, i.listed_on, i.key_from"
@@ -654,20 +663,23 @@ def resolve_symbol(conn: psycopg.Connection, symbol: str, *, as_of: date) -> Ins
         (symbol, as_of),
     ).fetchone()
     if row is None:
-        raise LookupError(f"{symbol} named no Instrument on or before {as_of}")
+        raise NoInstrument(
+            f"{symbol} named no Instrument on or before {as_of}; ask as of a later date,"
+            " or run `tradeline rebuild-instruments` if its rows arrived since the last rebuild"
+        )
     return Instrument(*row)
 
 
 def instrument_history(conn: psycopg.Connection, key: str) -> InstrumentHistory:
     """An Instrument's Symbol history: its intervals and the links that joined them.
 
-    An unknown key is refused with a ``LookupError``.
+    An unknown key is refused with ``NoInstrument``.
     """
     found = conn.execute(
         "SELECT key, first_symbol, listed_on, key_from FROM instruments WHERE key = %s", (key,)
     ).fetchone()
     if found is None:
-        raise LookupError(f"no Instrument {key}")
+        raise NoInstrument(_unknown_key(key))
     intervals = conn.execute(
         "SELECT symbol, series, isin, first_day, last_day FROM instrument_intervals"
         " WHERE instrument_key = %s ORDER BY first_day, last_day, symbol, series",
@@ -769,7 +781,7 @@ _DELISTING = (
 def end_reasons(conn: psycopg.Connection, wanted: Iterable[tuple[str, str]]) -> list[EndReason]:
     """The reason each (Instrument key, series) in ``wanted`` stops, in the order given.
 
-    An unknown key is refused with a ``LookupError``.
+    An unknown key is refused with ``NoInstrument``.
     """
     raw_last = instruments_last_day(conn)
     return [_end_reason(conn, key, series, raw_last) for key, series in wanted]
@@ -780,7 +792,7 @@ def _end_reason(
 ) -> EndReason:
     intervals = [Interval(*row) for row in conn.execute(_INTERVALS_OF, (key,)).fetchall()]
     if not intervals:
-        raise LookupError(f"no Instrument {key}")
+        raise NoInstrument(_unknown_key(key))
     last = intervals[0]
     if last.last != raw_last:
         return _ended(conn, key, series, last)
