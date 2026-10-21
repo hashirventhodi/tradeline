@@ -172,6 +172,7 @@ _SPLIT = re.compile(
 )
 _RIGHTS = re.compile(r"\brights?\b", re.IGNORECASE)
 _DIVIDEND = re.compile(r"\bdiv(?:idend)?\b|\bdistribution\b", re.IGNORECASE)
+# "Split", and "Splt" as in "Fv Splt Frm".
 _ADJUSTING_WORDS = re.compile(r"bonus|spli?t|sub-?division|consolidation", re.IGNORECASE)
 # A bonus of debentures or preference shares, or a split of something else, is not an equity action.
 _NOT_EQUITY = re.compile(r"ncrps|debenture|preference|warrant", re.IGNORECASE)

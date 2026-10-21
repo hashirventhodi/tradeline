@@ -58,7 +58,6 @@ from tradeline.config import UniverseRule
 from tradeline.db import app_connection
 from tradeline.ingest.eod import ingest_eod
 from tradeline.ingest.news import Feed
-from tradeline.manual_links import load_manual_links
 from tradeline.secrets import MissingSecret
 from tradeline.sources.kite import KiteSession
 from tradeline.transport import PlaybackTransport, Request, Response
@@ -215,8 +214,7 @@ def test_the_instruments_are_rebuilt_after_end_of_day_and_corporate_actions_and_
     assert rebuild.finished_at <= candles.started_at
     assert runs["nse_symbol_changes"].rows_seen == 11  # the trimmed list
     assert rebuild.details["symbol_changes"] == 11
-    # The configured file is read on every rebuild.
-    assert rebuild.details["manual_links"] == len(load_manual_links(REPO_ROOT / "manual_links.csv"))
+    assert rebuild.details["manual_links"] == 24  # the repo's file, read on every rebuild
     assert rebuild.details["instruments"] == 8  # the eight symbols of July and August
     # A week either side of the day: an ISIN change explained by an action within
     # EX_DATE_SLACK of it finds the action stored, even one going ex days later.
