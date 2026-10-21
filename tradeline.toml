@@ -4,6 +4,13 @@
 [logging]
 level = "INFO"
 
+[reconcile]
+# A close mismatch: further than this fraction of the price (plus half a
+# 5 paisa tick) from the end-of-day close, after Kite's own adjustment.
+close_tolerance = 0.001
+# The command fails above this percentage of discrepant rows.
+max_discrepancy_pct = 0.1
+
 # RSS feeds for `ingest news`: a name for each feed and its URL. Items carried
 # by more than one feed are stored once, under the first feed listed.
 [news.feeds]

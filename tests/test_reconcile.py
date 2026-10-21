@@ -1,0 +1,294 @@
+"""``reconcile``: Kite's daily candles against NSE's end-of-day files, per symbol per day.
+
+Each test loads its own database from the recorded fixtures: the master and
+end-of-day rows (``ingest_eod``), NSE's corporate actions, and Kite's candles
+for the four ``EQ`` symbols over 2024-07-01 to 2024-08-30. Kite's bars are
+adjusted by Kite's rules (RELIANCE halved by a later bonus, INFY and
+BAJAJ-AUTO scaled by about 0.98 for large dividends), so the clean fixtures
+already differ from NSE's closes by a factor per symbol that reconcile must
+not report.
+
+A discrepancy is injected by passing the real recorded Kite responses through
+``Tamper``, which drops one bar or changes one close on its way to the
+ingest, so no fixture file is edited and none is written by hand.
+"""
+
+import json
+from collections.abc import Callable
+from datetime import date
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from tradeline.cli import main
+from tradeline.config import Config
+from tradeline.db import app_connection
+from tradeline.ingest.candles import ingest_candles
+from tradeline.ingest.corporate_actions import ingest_corporate_actions
+from tradeline.ingest.eod import ingest_eod
+from tradeline.reconcile import Discrepancy, ReconcileReport, reconcile
+from tradeline.sources.kite import KiteSession
+from tradeline.transport import PlaybackTransport, Request, Response
+
+FIXTURES = Path(__file__).parent / "fixtures"
+START, END = date(2024, 7, 1), date(2024, 8, 30)
+ACTIONS_START, ACTIONS_END = date(2024, 7, 1), date(2024, 12, 31)
+TRADING_DAYS = 43
+EQ_SYMBOLS = 4
+ROWS = TRADING_DAYS * EQ_SYMBOLS
+SETTINGS = Config.Reconcile(close_tolerance=0.001, max_discrepancy_pct=0.1)
+
+Candle = list[Any]  # Kite's [timestamp, open, high, low, close, volume]
+Edit = Callable[[str, list[Candle]], list[Candle]]
+
+
+class Tamper:
+    """Plays the recorded Kite responses back with ``edit`` applied to each one's candles.
+
+    ``edit`` is called with the request URL and the candles Kite returned.
+    """
+
+    def __init__(self, edit: Edit) -> None:
+        self._inner = PlaybackTransport(FIXTURES / "ingest_candles")
+        self._edit = edit
+
+    def send(self, request: Request) -> Response:
+        response = self._inner.send(request)
+        body = json.loads(response.body)
+        body["data"]["candles"] = self._edit(request.url, body["data"]["candles"])
+        return Response(response.status, response.headers, json.dumps(body).encode())
+
+
+INFY_TOKEN = "408065"
+
+
+def untouched(url: str, candles: list[Candle]) -> list[Candle]:
+    return candles
+
+
+def load(url: str, edit: Edit = untouched) -> None:
+    with app_connection(url) as conn:
+        ingest_eod(conn, PlaybackTransport(FIXTURES / "ingest_eod"), start=START, end=END)
+        ingest_corporate_actions(
+            conn,
+            PlaybackTransport(FIXTURES / "ingest_corporate_actions"),
+            start=ACTIONS_START,
+            end=ACTIONS_END,
+        )
+        session = KiteSession(Tamper(edit), api_key="key", access_token="tok", sleep=lambda _: None)
+        ingest_candles(conn, session, start=START, end=END)
+
+
+def run(url: str, settings: Config.Reconcile = SETTINGS) -> ReconcileReport:
+    with app_connection(url) as conn:
+        return reconcile(conn, settings, start=START, end=END)
+
+
+def test_clean_fixtures_reconcile_fully_with_no_discrepancies(fresh_database_url: str) -> None:
+    load(fresh_database_url)
+
+    report = run(fresh_database_url)
+
+    assert report.rows == ROWS
+    assert report.missing == ()
+    assert report.extra == ()
+    assert report.close_mismatches == ()
+    assert report.discrepancies == 0
+    assert report.reconciliation_pct == Decimal(100)
+    assert report.passed
+
+
+def drop_day(token: str, day: str) -> Edit:
+    def edit(url: str, candles: list[Candle]) -> list[Candle]:
+        if f"/historical/{token}/" not in url:
+            return candles
+        return [c for c in candles if not c[0].startswith(day)]
+
+    return edit
+
+
+def shift_close(token: str, day: str, by: str) -> Edit:
+    """Kite's close for one day moved by ``by`` rupees, its high and low kept consistent."""
+
+    def edit(url: str, candles: list[Candle]) -> list[Candle]:
+        if f"/historical/{token}/" not in url:
+            return candles
+        for candle in candles:
+            if candle[0].startswith(day):
+                close = Decimal(str(candle[4])) + Decimal(by)
+                candle[4] = float(close)
+                candle[2] = max(candle[2], candle[4])
+                candle[3] = min(candle[3], candle[4])
+        return candles
+
+    return edit
+
+
+def test_a_deleted_candle_day_is_reported_as_missing_for_that_symbol_and_date_alone(
+    fresh_database_url: str,
+) -> None:
+    load(fresh_database_url, drop_day(INFY_TOKEN, "2024-07-15"))
+
+    report = run(fresh_database_url)
+
+    assert report.missing == (
+        Discrepancy(
+            kind="missing",
+            symbol="INFY",
+            series="EQ",
+            trade_date=date(2024, 7, 15),
+            candle_close=None,
+            eod_close=Decimal("1707.05"),  # NSE's close in the 15 July 2024 file,
+        ),
+    )
+    assert report.extra == ()
+    assert report.close_mismatches == ()
+    assert report.rows == ROWS
+    assert report.discrepancies == 1
+
+
+def test_a_close_altered_beyond_tolerance_is_reported_for_that_row_alone(
+    fresh_database_url: str,
+) -> None:
+    # 1557.1 to 1573.1: about 1 percent, ten times the tolerance.
+    load(fresh_database_url, shift_close(INFY_TOKEN, "2024-07-01", "16"))
+
+    report = run(fresh_database_url)
+
+    ((mismatch),) = report.close_mismatches
+    assert (mismatch.symbol, mismatch.series, mismatch.trade_date) == (
+        "INFY",
+        "EQ",
+        date(2024, 7, 1),
+    )
+    assert mismatch.candle_close == Decimal("1573.1")
+    assert mismatch.eod_close == Decimal("1590.8")  # NSE's close in the 1 July 2024 file
+    # NSE's close times INFY's Kite factor of about 0.9788.
+    assert Decimal("1557.0") < mismatch.expected_close < Decimal("1557.2")  # type: ignore[operator]
+    assert report.missing == report.extra == ()
+
+
+def test_a_close_altered_within_tolerance_is_not_reported(fresh_database_url: str) -> None:
+    # 1557.1 to 1558.1: about 0.06 percent, inside the 0.1 percent tolerance.
+    load(fresh_database_url, shift_close(INFY_TOKEN, "2024-07-01", "1"))
+
+    report = run(fresh_database_url)
+
+    assert report.close_mismatches == ()
+    assert report.discrepancies == 0
+
+
+def test_the_run_fails_when_discrepancies_exceed_the_threshold_and_passes_within_it(
+    fresh_database_url: str,
+) -> None:
+    load(fresh_database_url, drop_day(INFY_TOKEN, "2024-07-15"))
+
+    strict = run(fresh_database_url, Config.Reconcile(max_discrepancy_pct=0.1))
+    lenient = run(fresh_database_url, Config.Reconcile(max_discrepancy_pct=1.0))
+
+    # One row in 172 is 0.58 percent.
+    assert strict.discrepancy_pct == lenient.discrepancy_pct
+    assert Decimal("0.58") < strict.discrepancy_pct < Decimal("0.59")
+    assert Decimal("99.41") < strict.reconciliation_pct < Decimal("99.42")
+    assert not strict.passed
+    assert lenient.passed
+
+
+def test_an_empty_database_cannot_pass(fresh_database_url: str) -> None:
+    with pytest.raises(ValueError, match="no candles or end-of-day rows"):
+        run(fresh_database_url)
+
+
+def test_symbols_can_be_narrowed_and_one_without_candles_is_refused(
+    fresh_database_url: str,
+) -> None:
+    load(fresh_database_url, drop_day(INFY_TOKEN, "2024-07-15"))
+
+    with app_connection(fresh_database_url) as conn:
+        tcs = reconcile(conn, SETTINGS, start=START, end=END, symbols=["TCS"])
+        with pytest.raises(ValueError, match="KHADIM"):
+            reconcile(conn, SETTINGS, start=START, end=END, symbols=["TCS", "KHADIM"])
+
+    assert tcs.rows == TRADING_DAYS
+    assert tcs.discrepancies == 0
+
+
+REPO_CONFIG = Path(__file__).resolve().parents[1] / "tradeline.toml"
+
+
+def reconcile_command(
+    url: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> tuple[int, list[dict[str, Any]], str]:
+    monkeypatch.setenv("DATABASE_URL", url)
+    code = main(["reconcile", "--from", START.isoformat(), "--to", END.isoformat()])
+    captured = capsys.readouterr()
+    return code, [json.loads(line) for line in captured.out.splitlines()], captured.err
+
+
+def test_the_command_exits_zero_on_clean_fixtures_with_a_summary_and_a_table(
+    fresh_database_url: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("TRADELINE_CONFIG", str(REPO_CONFIG))
+    load(fresh_database_url)
+
+    code, lines, table = reconcile_command(fresh_database_url, monkeypatch, capsys)
+
+    assert code == 0
+    summary = lines[-1]
+    assert summary["command"] == "reconcile"
+    assert summary["msg"] == "reconcile finished"
+    assert summary["report"] == {
+        "start": "2024-07-01",
+        "end": "2024-08-30",
+        "close_tolerance": "0.001",
+        "max_discrepancy_pct": "0.1",
+        "rows": ROWS,
+        "discrepancies": 0,
+        "missing": 0,
+        "extra": 0,
+        "close_mismatches": 0,
+        "discrepancy_pct": "0.0000",
+        "reconciliation_pct": "100.0000",
+        "passed": True,
+        "listed": [],
+    }
+    assert "172 rows, 0 discrepancies" in table
+    assert "PASS" in table
+
+
+def test_the_command_exits_non_zero_above_the_configured_threshold(
+    fresh_database_url: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    load(fresh_database_url, drop_day(INFY_TOKEN, "2024-07-15"))
+    config = tmp_path / "tradeline.toml"
+
+    config.write_text("[reconcile]\nmax_discrepancy_pct = 0.1\n")
+    monkeypatch.setenv("TRADELINE_CONFIG", str(config))
+    strict_code, strict_lines, strict_table = reconcile_command(
+        fresh_database_url, monkeypatch, capsys
+    )
+    config.write_text("[reconcile]\nmax_discrepancy_pct = 1.0\n")
+    lenient_code, _, _ = reconcile_command(fresh_database_url, monkeypatch, capsys)
+
+    assert strict_code == 1
+    assert lenient_code == 0
+    report = strict_lines[-1]["report"]
+    assert report["passed"] is False
+    assert report["listed"] == [
+        {
+            "kind": "missing",
+            "symbol": "INFY",
+            "series": "EQ",
+            "trade_date": "2024-07-15",
+            "candle_close": None,
+            "eod_close": "1707.05",
+            "expected_close": None,
+        }
+    ]
+    assert "FAIL" in strict_table
+    assert "missing  INFY" in strict_table

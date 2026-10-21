@@ -26,6 +26,7 @@ from tradeline.ingest.news import Feed, ingest_news
 from tradeline.logging import configure_logging
 from tradeline.login import login as login_service
 from tradeline.migrations import apply_migrations
+from tradeline.reconcile import reconcile as reconcile_service
 from tradeline.secrets import (
     DATABASE_URL,
     KITE_ACCESS_TOKEN,
@@ -184,6 +185,25 @@ def _ingest_news(ctx: Context, args: argparse.Namespace) -> int:
     return 1 if result.failed_feeds else 0
 
 
+def reconcile(ctx: Context, args: argparse.Namespace) -> int:
+    """Compare candles with end-of-day rows; fail above the configured threshold.
+
+    The summary is the last JSON line on stdout; the table goes to stderr.
+    """
+    end = args.start if args.end is None else args.end
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        report = reconcile_service(
+            conn, ctx.config.reconcile, start=args.start, end=end, symbols=args.symbols
+        )
+    sys.stderr.write(report.table())
+    log.log(
+        logging.INFO if report.passed else logging.ERROR,
+        "reconcile finished",
+        extra={"report": report.summary()},
+    )
+    return 0 if report.passed else 1
+
+
 def _transport(ctx: Context, args: argparse.Namespace) -> Transport:
     """Live by default (refused under test); fixtures can be played back or recorded."""
     if args.play_fixtures is not None:
@@ -200,6 +220,7 @@ COMMANDS: dict[str, Command] = {
     "migrate": migrate,
     "login": login,
     "ingest": ingest,
+    "reconcile": reconcile,
 }
 
 
@@ -298,6 +319,18 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="NAME",
         action="append",
         help="a feed named in [news.feeds] to load; repeatable; defaults to every feed",
+    )
+    reconcile_parser = subparsers.add_parser(
+        "reconcile",
+        parents=[date_range],
+        help="compare daily candles with NSE end-of-day files; exit 1 above the threshold",
+    )
+    reconcile_parser.add_argument(
+        "--symbol",
+        dest="symbols",
+        metavar="SYMBOL",
+        action="append",
+        help="an NSE symbol to compare; repeatable; defaults to every symbol with candles",
     )
     return parser
 
