@@ -1,0 +1,79 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_20250419_F_0000.csv.zip",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 404,
+    "headers": [
+      [
+        "x-frame-options",
+        "DENY"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "content-type",
+        "text/html;charset=UTF-8"
+      ],
+      [
+        "x-akamai-transformed",
+        "0 - 0 -"
+      ],
+      [
+        "expires",
+        "Wed, 21 Oct 2026 14:26:53 GMT"
+      ],
+      [
+        "cache-control",
+        "max-age=0, no-cache, no-store"
+      ],
+      [
+        "pragma",
+        "no-cache"
+      ],
+      [
+        "date",
+        "Wed, 21 Oct 2026 14:26:53 GMT"
+      ],
+      [
+        "content-length",
+        "3811"
+      ],
+      [
+        "akamai-grn",
+        "0.cfebdfad.1792592813.6157a76"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "content-security-policy",
+        "default-src 'self'; script-src 'strict-dynamic' 'nonce-MC4yMDg2Mzc3MzEw' 'unsafe-inline' http: https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.nse.co.in https://*.nseindia.com; font-src 'self'; frame-src 'self'; base-uri 'self'; frame-ancestors 'self'; connect-src 'self' https://*.nseindia.com https://c.go-mpulse.net https://stats.g.doubleclick.net https://*.akstat.io/ https://*.akamaihd.net"
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000 ; includeSubDomains ; preload"
+      ],
+      [
+        "set-cookie",
+        "bm_mi=B8967BDBA8E3A2F46C26E74D2263DEF0~YAAQz+vfrc+MLU+hAQAANp3bXgHbpu2W5aqgarouPXrc53PuvOi3aFRjrV4+VGG22T2pSOc29ZahCRUbBxNDraKUXrHXxSfHFBFwkoghp91rIsXGyGue/t5dbxBGTZK6yRpeeXa4MtAxqrPVkeECXhahG5ytYxsB8GYjJM8cSeEzB0WcdR0U+DGj/jtoEYATs382O1DI/ibiemUp8tYzN/0/KpP4+8GhY+6hVQ0RlVVYZBBllbIR92NUbUJH75wgfVQi4e0hpB+iJWBKp/4JRx98cwogPvC27zp2XNL6aIPY8fVc9COacwNql3j5P7kjpmjGhNsmWS0y03ZXrUl3Ys94NU9xkwW7aZIFhsPhm3rtGFAusoDtyznOOeE4Qiz3vzSH4BE=~1; Domain=.nseindia.com; Path=/; Expires=Wed, 21 Oct 2026 14:26:53 GMT; Max-Age=0; Secure"
+      ],
+      [
+        "set-cookie",
+        "bm_sv=570D2937A7DFECB7AC3785F34294ECB3~YAAQz+vfrdCMLU+hAQAANp3bXgETo9jO7PylYsiYDm9neDF0YbVN+qHVWziABin4Z5A9lvvDz0PHMnU31ogYg6ILokT527Ecp1l2vQ+W2abSfG7TN6SBM5qp7l/jFzys0rH8dk4ZtoNDFwE7Hlmg/D2JVUkNtWeaqeoaDo+PqZoOgXXVETdlPrNtw3gPaUHG6u4NSRuIIuXbgB3rmPfUhR9IBki5iTOnedoovCdf4G/jzevyOk0RMaElsEJf6jozYo6g~1; Domain=.nseindia.com; Path=/; Expires=Wed, 21 Oct 2026 16:26:52 GMT; Max-Age=7199; Secure"
+      ]
+    ],
+    "body": "PCFET0NUWVBFIGh0bWw+DQo8aHRtbCBsYW5nPSJlbiI+DQoNCjxoZWFkPg0KICAgIDxtZXRhIGNoYXJzZXQ9IlVURi04Ij4NCiAgICA8bWV0YSBuYW1lPSJ2aWV3cG9ydCIgY29udGVudD0id2lkdGg9ZGV2aWNlLXdpZHRoLCBpbml0aWFsLXNjYWxlPTEuMCI+DQogICAgPG1ldGEgaHR0cC1lcXVpdj0iQ29udGVudC1UeXBlIiBjb250ZW50PSJ0ZXh0L2h0bWw7IGNoYXJzZXQ9dXRmLTgiIC8+DQogICAgPG1ldGEgaHR0cC1lcXVpdj0iQ29udGVudC1UeXBlIiBjb250ZW50PSJ0ZXh0L2h0bWw7IGNoYXJzZXQ9SVNPLTg4NTktMSI+DQogICAgPG1ldGEgaHR0cC1lcXVpdj0iWC1VQS1Db21wYXRpYmxlIiBjb250ZW50PSJJRT1lZGdlLGNocm9tZT0xIiAvPg0KICAgIDxtZXRhIG5hbWU9InZpZXdwb3J0IiBjb250ZW50PSJ3aWR0aD1kZXZpY2Utd2lkdGgsIGluaXRpYWwtc2NhbGU9MS4wLCBtYXhpbXVtLXNjYWxlPTEuMCwgdXNlci1zY2FsYWJsZT0wIiAvPg0KICAgIDxzdHlsZT4NCiAgICAgICAgYm9keXsNCiAgICAgICAgICAgIGRpc3BsYXk6IGZsZXg7DQogICAgICAgICAgICBhbGlnbi1pdGVtczogY2VudGVyOw0KICAgICAgICAgICAgZmxleC1kaXJlY3Rpb246IGNvbHVtbjsNCiAgICAgICAgICAgIGhlaWdodDogOTB2aDsNCiAgICAgICAgICAgIGp1c3RpZnktY29udGVudDogY2VudGVyOw0KICAgICAgICB9DQogICAgICAgIC5lcnJvckNvbnRhaW5lciBoMiB7DQogICAgICAgICAgICBmb250LXNpemU6IDI2MHB4Ow0KICAgICAgICAgICAgY29sb3I6ICNlOTdlNjI7DQogICAgICAgICAgICBmb250LWZhbWlseTogIk1vbnRzZXJyYXQiOw0KICAgICAgICAgICAgZm9udC13ZWlnaHQ6IGJvbGQ7DQogICAgICAgICAgICBtYXJnaW46IDAgMTBweDsNCiAgICAgICAgICAgIGxpbmUtaGVpZ2h0OiAzMTdweDsNCiAgICAgICAgICAgIGRpc3BsYXk6IGlubGluZS1ibG9jazsNCiAgICAgICAgICAgIHZlcnRpY2FsLWFsaWduOiBtaWRkbGU7DQogICAgICAgIH0NCg0KICAgICAgICAuaW1nLWFsaWduIHsNCiAgICAgICAgICAgIGRpc3BsYXk6IGZsZXg7DQogICAgICAgICAgICBqdXN0aWZ5LWNvbnRlbnQ6IGNlbnRlcjsNCiAgICAgICAgICAgIGFsaWduLWl0ZW1zOiBjZW50ZXI7DQogICAgICAgIH0NCg0KICAgICAgICAuZXJyb3JDb250YWluZXIgaDMgew0KICAgICAgICAgICAgY29sb3I6ICMzYTJkN2Q7DQogICAgICAgICAgICBmb250LWZhbWlseTogIk1vbnRzZXJyYXQiOw0KICAgICAgICAgICAgbGluZS1oZWlnaHQ6IDI0cHg7DQogICAgICAgICAgICBmb250LXdlaWdodDogNTAwOw0KICAgICAgICAgICAgdGV4dC1hbGlnbjogY2VudGVyOw0KICAgICAgICAgICAgbWFyZ2luLWJvdHRvbTogMzJweDsNCiAgICAgICAgfQ0KDQogICAgICAgIC5idG4tY29tbW9uIHsNCiAgICAgICAgICAgIGZvbnQtZmFtaWx5OiAiTW9udHNlcnJhdCI7DQogICAgICAgICAgICBmb250LXNpemU6IDAuODc1cmVtOw0KICAgICAgICAgICAgZm9udC13ZWlnaHQ6IDUwMDsNCiAgICAgICAgICAgIGZvbnQtc3R5bGU6IG5vcm1hbDsNCiAgICAgICAgICAgIGZvbnQtc3RyZXRjaDogbm9ybWFsOw0KICAgICAgICAgICAgbGluZS1oZWlnaHQ6IDEuMjk7DQogICAgICAgICAgICBsZXR0ZXItc3BhY2luZzogbm9ybWFsOw0KICAgICAgICAgICAgYm9yZGVyOiBzb2xpZCAxcHggI0MzNTUxNjsNCiAgICAgICAgICAgIHBhZGRpbmc6IDE1cHggNDVweCAxNXB4IDI1cHg7DQogICAgICAgICAgICBib3JkZXItcmFkaXVzOiAyNXB4Ow0KICAgICAgICAgICAgY29sb3I6ICNDMzU1MTY7DQogICAgICAgICAgICBmb250LWZhbWlseTogIk1vbnRzZXJyYXQiOw0KICAgICAgICAgICAgZm9udC13ZWlnaHQ6IG5vcm1hbDsNCiAgICAgICAgICAgIHBvc2l0aW9uOiByZWxhdGl2ZTsNCiAgICAgICAgICAgIHRyYW5zaXRpb246IGFsbCAwLjNzOw0KICAgICAgICB9DQoNCiAgICAgICAgLmJ0biB7DQogICAgICAgICAgICBmb250LXNpemU6IDAuODc1cmVtOw0KICAgICAgICB9DQoNCiAgICAgICAgLmJ0bjpub3QoOmRpc2FibGVkKTpub3QoLmRpc2FibGVkKSB7DQogICAgICAgICAgICBjdXJzb3I6IHBvaW50ZXI7DQogICAgICAgIH0NCg0KICAgICAgICAuYnRuLWNvbW1vbjpiZWZvcmUgew0KICAgICAgICAgICAgdG9wOiA1MCU7DQogICAgICAgICAgICByaWdodDogMTVweDsNCiAgICAgICAgICAgIHdpZHRoOiA5cHg7DQogICAgICAgICAgICBoZWlnaHQ6IDlweDsNCiAgICAgICAgICAgIC13ZWJraXQtdHJhbnNmb3JtLW9yaWdpbjogNTAlIDUwJTsNCiAgICAgICAgICAgIHRyYW5zZm9ybS1vcmlnaW46IDUwJSA1MCU7DQogICAgICAgICAgICAtd2Via2l0LXRyYW5zZm9ybTogdHJhbnNsYXRlKDAsIC01cHgpIHJvdGF0ZSg0NWRlZyk7DQogICAgICAgICAgICB0cmFuc2Zvcm06IHRyYW5zbGF0ZSgwLCAtNXB4KSByb3RhdGUoNDVkZWcpOw0KICAgICAgICAgICAgYm94LXNoYWRvdzogaW5zZXQgLTJweCAycHggMCAwICNDMzU1MTY7DQogICAgICAgICAgICBib3JkZXItcmFkaXVzOiAwOw0KICAgICAgICB9DQoNCiAgICAgICAgLmJ0bi1jb21tb246YWZ0ZXIsDQogICAgICAgIC5idG4tY29tbW9uOmJlZm9yZSB7DQogICAgICAgICAgICBjb250ZW50OiAiIjsNCiAgICAgICAgICAgIGRpc3BsYXk6IGJsb2NrOw0KICAgICAgICAgICAgcG9zaXRpb246IGFic29sdXRlOw0KICAgICAgICAgICAgdHJhbnNpdGlvbjogYWxsIDAuNXMgZWFzZS1pbi1vdXQ7DQogICAgICAgIH0NCg0KICAgICAgICAuYnRuLWFsaWduIHsNCiAgICAgICAgICAgIGRpc3BsYXk6IGZsZXg7DQogICAgICAgICAgICBqdXN0aWZ5LWNvbnRlbnQ6IGNlbnRlcjsNCiAgICAgICAgICAgIGZsZXgtZGlyZWN0aW9uOiBjb2x1bW47DQogICAgICAgICAgICB0ZXh0LWFsaWduOiBjZW50ZXI7DQogICAgICAgIH0NCiAgICA8L3N0eWxlPg0KPHNjcmlwdCA+YmF6YWRlYmV6b2xrb2hwZXBhZHI9IjI1NzQ3MDEwIjwvc2NyaXB0PjxzY3JpcHQgdHlwZT0idGV4dC9qYXZhc2NyaXB0IiBzcmM9Imh0dHBzOi8vbnNlYXJjaGl2ZXMubnNlaW5kaWEuY29tL2FrYW0vMTMvMTg4ZGM5YSIgIGRlZmVyPjwvc2NyaXB0PjwvaGVhZD4NCg0KPGJvZHk+DQogICAgPGRpdiBjbGFzcz0iZXJyb3JDb250YWluZXIgaW1nLWFsaWduIj4NCiAgICAgICAgPGgyPjQ8L2gyPg0KICAgICAgICA8aW1nIHNyYz0iaHR0cHM6Ly9uc2VpbmRpYS5jb20vYXNzZXRzL2ltYWdlcy9lcnJvci1sb2dvLnBuZyIgIGFsdD0iZXJyb3IiIHRpdGxlPSJlcnJvciI+DQogICAgICAgIDxoMj40PC9oMj4NCiAgICA8L2Rpdj4NCiAgICA8ZGl2IGNsYXNzPSJlcnJvckNvbnRhaW5lciBidG4tYWxpZ24iPg0KICAgICAgICA8aDM+VGhlIGZpbGUgeW91IGFyZSB0cnlpbmcgdG8gYWNjZXNzIGRvZXNuJ3QgYXBwZWFyIHRvIGV4aXN0LjwvaDM+DQogICAgICAgIDxkaXYgY2xhc3M9ImdvdG9Ib21lIj4NCiAgICAgICAgICAgIDxhIGNsYXNzPSJidG4gYnRuLWNvbW1vbiIgaHJlZj0iaHR0cHM6Ly93d3cubnNlaW5kaWEuY29tLyI+R28gdG8gSG9tZXBhZ2U8L2E+DQogICAgICAgIDwvZGl2Pg0KICAgIDwvZGl2Pg0KPG5vc2NyaXB0PjxpbWcgc3JjPSJodHRwczovL25zZWFyY2hpdmVzLm5zZWluZGlhLmNvbS9ha2FtLzEzL3BpeGVsXzE4OGRjOWE/YT1kRDAyT1Rsa1pHVTNOakpoTkRoa01XUXpPREV4Tm1VeFlqY3laR1ppWlRVd1lqSXdNR0UyTjJFeUptcHpQVzltWmc9PSIgc3R5bGU9InZpc2liaWxpdHk6IGhpZGRlbjsgcG9zaXRpb246IGFic29sdXRlOyBsZWZ0OiAtOTk5cHg7IHRvcDogLTk5OXB4OyIgLz48L25vc2NyaXB0PjwvYm9keT4NCg0KPC9odG1sPg==",
+    "body_encoding": "base64"
+  }
+}

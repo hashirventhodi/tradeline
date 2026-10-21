@@ -84,6 +84,34 @@ def test_universe_rule_parameters_load_and_any_change_is_a_new_version(tmp_path:
     assert UniverseRule(top_n=100).version == rule.version
 
 
+def test_the_rule_ranking_symbols_keeps_the_version_its_memberships_were_stored_under() -> None:
+    # The #13 acceptance run stored ten years of membership under this version.
+    assert UniverseRule().version == (
+        "53181efb872605eba686125c8fa9127b98abb79a9fe00158117e1f08222d62e5"
+    )
+    assert UniverseRule(rank_by="symbol").version == UniverseRule().version
+    assert "rank_by" not in UniverseRule().parameters
+
+
+def test_ranking_instruments_is_a_new_rule_version_that_records_it(tmp_path: Path) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text('[universe]\nrank_by = "instrument"\n')
+
+    rule = load_config(path).universe
+
+    assert rule.rank_by == "instrument"
+    assert rule.version != UniverseRule().version
+    assert rule.parameters == UniverseRule().parameters | {"rank_by": "instrument"}
+
+
+def test_a_universe_rule_ranking_anything_else_is_refused_by_name(tmp_path: Path) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text('[universe]\nrank_by = "isin"\n')
+
+    with pytest.raises(ConfigError, match="universe.rank_by"):
+        load_config(path)
+
+
 def test_an_impossible_universe_rule_is_refused_by_name(tmp_path: Path) -> None:
     path = tmp_path / "tradeline.toml"
     path.write_text("[universe]\nmin_presence_percent = 120\n")
