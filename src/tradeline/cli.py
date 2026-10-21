@@ -305,6 +305,7 @@ def collect_daily(ctx: Context, args: argparse.Namespace) -> int:
                 transport=_transport(ctx, args),
                 browser_transport=_transport(ctx, args, browser_tls=True),
                 kite=kite,
+                manual_links=Path(ctx.config.instruments.manual_links),
             )
         log.log(
             logging.INFO if result.succeeded else logging.ERROR,

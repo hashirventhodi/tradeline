@@ -15,6 +15,9 @@ own real recorded responses back:
   warm-up is the one recorded in ``fixtures/ingest_announcements/``.
 - ``fixtures/ingest_news/``: two Economic Times RSS feeds, five items each,
   three of them in both.
+- ``fixtures/instruments/``: NSE's symbol-change list, trimmed to eleven
+  records. None of them names a symbol loaded here, so the rebuild links
+  nothing, but its counts show it ran on the list and the manual links file.
 
 The Universe Rule is shrunk as in ``test_universe.py``, with four places, so
 August's Universe is RELIANCE, INFY, TCS, and BAJAJ-AUTO.
@@ -58,10 +61,13 @@ FEEDS = (
     Feed("et_markets", "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms"),
     Feed("et_stocks", "https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms"),
 )
+MANUAL_LINKS = REPO_ROOT / "manual_links.csv"  # one row, RUCHI to PATANJALI
 SOURCES = {
     "nse_equity_master",
     "nse_eod",
     "kite_instruments",
+    "nse_symbol_changes",
+    "instrument_links",
     "kite_candles_daily",
     "nse_announcements",
     "bse_announcements",
@@ -85,12 +91,26 @@ class FailingHost:
         return self._inner.send(request)
 
 
+class FailingPath(FailingHost):
+    """Cannot fetch the one path ``path``, as when NSE fails a single file on a host it serves."""
+
+    def __init__(self, inner: Playback, path: str) -> None:
+        super().__init__(inner, host="")
+        self._path = path
+
+    def send(self, request: Request) -> Response:
+        if urlsplit(request.url).path == self._path:
+            raise httpx.ConnectError(f"cannot fetch {self._path}")
+        return self._inner.send(request)
+
+
 def sources() -> Playback:
     return Playback(
         FIXTURES / "universe",
         FIXTURES / "collect_daily",
         FIXTURES / "ingest_announcements",
         FIXTURES / "ingest_news",
+        FIXTURES / "instruments",
     )
 
 
@@ -112,6 +132,7 @@ def collect(conn: psycopg.Connection, transport: Playback | FailingHost) -> Coll
         transport=transport,
         browser_transport=transport,
         kite=kite,
+        manual_links=MANUAL_LINKS,
     )
 
 
@@ -155,6 +176,47 @@ def test_a_collection_loads_every_source_for_the_day_and_records_one_run_each(
     (infy,) = queries.daily_candles(conn, "INFY", start=DAY, end=DAY)
     assert infy.close == Decimal("1813.4")
     assert queries.end_of_day(conn, "INFY", start=DAY, end=DAY, series="EQ")
+
+
+def test_the_instruments_are_rebuilt_after_end_of_day_and_before_candles_and_the_universe(
+    conn: psycopg.Connection,
+) -> None:
+    result = collect(conn, sources())
+
+    assert [r.source for r in result.runs][:6] == [
+        "nse_equity_master",
+        "nse_eod",
+        "kite_instruments",
+        "nse_symbol_changes",
+        "instrument_links",
+        "kite_candles_daily",
+    ]
+    runs = {r.source: r for r in result.runs}
+    rebuild, candles = runs["instrument_links"], runs["kite_candles_daily"]
+    # The Universe is computed inside the candle step, so it reads the rebuilt Instruments.
+    assert rebuild.finished_at <= candles.started_at
+    assert runs["nse_symbol_changes"].rows_seen == 11  # the trimmed list
+    assert rebuild.details["symbol_changes"] == 11
+    assert rebuild.details["manual_links"] == 1  # the configured file is read on every rebuild
+    assert rebuild.details["instruments"] == 8  # the eight symbols of July and August
+
+
+def test_a_failed_symbol_change_fetch_is_recorded_and_the_instruments_are_still_rebuilt(
+    conn: psycopg.Connection,
+) -> None:
+    result = collect(conn, FailingPath(sources(), "/content/equities/symbolchange.csv"))
+
+    assert result.failed_sources == ("nse_symbol_changes",)
+    runs = {r.source: r for r in result.runs}
+    assert sorted(runs) == sorted(SOURCES)
+    assert runs["nse_symbol_changes"].error == (
+        "ConnectError: cannot fetch /content/equities/symbolchange.csv"
+    )
+    # The rebuild runs on the symbol changes already stored, if any.
+    assert runs["instrument_links"].status == "succeeded"
+    assert runs["instrument_links"].details["instruments"] == 8
+    assert runs["kite_candles_daily"].rows_seen == 4
+    assert runs["rss"].rows_seen == 10
 
 
 def test_a_failing_source_is_recorded_as_failed_and_the_sources_after_it_still_run(
@@ -213,6 +275,7 @@ def test_a_source_that_fails_before_its_service_starts_is_still_recorded(
         transport=sources(),
         browser_transport=sources(),
         kite=no_token,
+        manual_links=MANUAL_LINKS,
     )
 
     assert result.failed_sources == ("kite_candles_daily",)
@@ -237,7 +300,10 @@ def test_news_with_every_feed_failing_is_a_failed_source(conn: psycopg.Connectio
 def test_the_command_records_every_source_it_could_not_reach_and_exits_non_zero(
     database_url: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Under test the network is refused, so every source fails; the command still finishes."""
+    """Under test the network is refused, so every source fails; the command still finishes.
+
+    The Instruments are rebuilt from what is stored, which needs no network.
+    """
     monkeypatch.setenv("TRADELINE_CONFIG", str(REPO_ROOT / "tradeline.toml"))
     monkeypatch.setenv("DATABASE_URL", database_url)
     monkeypatch.delenv("KITE_ACCESS_TOKEN", raising=False)
@@ -262,13 +328,15 @@ def test_the_command_records_every_source_it_could_not_reach_and_exits_non_zero(
         "nse_equity_master",
         "nse_eod",
         "kite_instruments",
+        "nse_symbol_changes",
         "kite_candles_daily",
         "nse_announcements",
         "bse_announcements",
         "rss",
     ]
     assert last["failed_sources"] == expected
+    assert last["runs"]["instrument_links"]["status"] == "succeeded"
     with app_connection(database_url) as conn:
         runs = queries.ingest_runs(conn, collection_id=uuid.UUID(str(last["collection_id"])))
-    assert sorted(r.source for r in runs) == sorted(expected)
-    assert {r.status for r in runs} == {"failed"}
+    assert sorted(r.source for r in runs) == sorted([*expected, "instrument_links"])
+    assert {r.status for r in runs if r.source != "instrument_links"} == {"failed"}
