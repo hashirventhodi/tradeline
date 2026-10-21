@@ -59,3 +59,19 @@ def test_and_and_ampersand_are_one_spelling() -> None:
 def test_a_name_inside_a_longer_matched_name_does_not_count() -> None:
     assert MATCHER.match("Tata Motors Passenger Vehicles sales") == ("TMPV",)
     assert MATCHER.match("Tata Motors sales") == ("TATAMOTORS",)
+
+
+def test_an_exchange_name_alone_is_ambiguous_and_matches_no_listed_exchange() -> None:
+    matcher = TextMatcher(
+        [("BSE", "BSE Limited"), ("MCX", "Multi Commodity Exchange of India Limited")]
+    )
+
+    assert matcher.match("BSE Sensex climbs 400 points as IT stocks rally") == ()
+    # An Economic Times feed's own description, as recorded in fixtures/ingest_news.
+    assert (
+        matcher.match("Find Stock Market Live Updates, BSE, NSE Top Gainers, Losers and more.")
+        == ()
+    )
+    assert matcher.match("MCX gold futures rise") == ()
+    assert matcher.match("BSE Ltd shares jump 8 percent on record volumes") == ("BSE",)
+    assert matcher.match("Multi Commodity Exchange of India shares slip") == ("MCX",)
