@@ -1,0 +1,79 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "x-frame-options",
+        "DENY"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "accept-ranges",
+        "bytes"
+      ],
+      [
+        "etag",
+        "W/\"184186-1792532103129\""
+      ],
+      [
+        "last-modified",
+        "Tue, 20 Oct 2026 21:35:03 GMT"
+      ],
+      [
+        "content-type",
+        "text/csv"
+      ],
+      [
+        "vary",
+        "Accept-Encoding"
+      ],
+      [
+        "date",
+        "Wed, 21 Oct 2026 14:25:41 GMT"
+      ],
+      [
+        "content-length",
+        "167"
+      ],
+      [
+        "akamai-grn",
+        "0.4dd70b17.1792592741.13ac38ff"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "content-security-policy",
+        "default-src 'self'; script-src 'strict-dynamic' 'nonce-MC4yMDg2Mzc3MzEw' 'unsafe-inline' http: https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.nse.co.in https://*.nseindia.com; font-src 'self'; frame-src 'self'; base-uri 'self'; frame-ancestors 'self'; connect-src 'self' https://*.nseindia.com https://c.go-mpulse.net https://stats.g.doubleclick.net https://*.akstat.io/ https://*.akamaihd.net"
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000 ; includeSubDomains ; preload"
+      ],
+      [
+        "set-cookie",
+        "_abck=0548D0D2B840B8EA7EDDCE523718673B~-1~YAAQTdcLFwEwTjmhAQAAOoXaXhBhcIUVBLfZvO5ljwVqxS8HWCdB5wJIzMxOCRhFkQtK0fIlJwYj75uPrUy2CYcGNTp9g8jB4kWyBSbZbReCzEvqHxQpmv8Sa5qNC73VM9rtWWPjmR+j8zfSKIUCluC7dGJLOkpgM8V+j9bDShLMfkR1//liBH3tMImxbIz33/PVtG6UnnlwlrjwX9XFMi2VHX5kzwD8wGYHH76w+QveQ0MjzPx732SqBUt5wh/o+bNWUkPjdidh9+QB/3IbOEWpQ0yk0JvF1w5c2D5lhbV9aOZAjGr7wTsEq5qoRvlSSgVnYGYQuDUpROHt6gwV55RfolOM0t2o1bkm6jbhcsB7hnUSdyBZJKWQ6sGtd2ZHxnRBchaZoJMna2GQnXfaVf9EEUuMv0z30VJNb24fmwpQiS2MM6t7bCtmOzMnfILTf7IowdJ4CpjwNw==~-1~-1~-1~-1~-1; Domain=.nseindia.com; Path=/; Expires=Thu, 21 Oct 2027 14:25:41 GMT; Max-Age=31536000; Secure"
+      ],
+      [
+        "set-cookie",
+        "bm_sz=6B38925271F1F1337C80811AE2F98C30~YAAQTdcLFwIwTjmhAQAAOoXaXgFAUr5ahU9bxgQTfzkB3JEucqWT63U68hwKA32vYJpuv3f6GXaGu6QrMTh0ejZFSefg/MzT+zhvCfatyPqsVkWzNh5bSo2xA73ECTei/lzlyO3b+W11Rm/6n27kafd2BFoucLleBypciynGdyQRkeiytLohpDS5KQ5E2ztSJITbT6A+sBfnhU4Gg25dyiorT0AzsYkOd+mKmX4Va1o8qoOV/M7CLjUR16V/ZOzMPbNvSTbJWWYoChYM3VzUjRd8ME+MRhHrjRFwXIz4H6GTnyQU7Cs9N4WGhgr4h6w1KSH9JuBa8cX18WN44M9wTmFDwckuc+5sspMshV0lomk3+49rwXitaK/pJOTHgpRprBNQ2V07frkMx0JS9OQ5LF9nVmN9619mHnORmieuTy+jgBAF9C8=~4473905~3420737; Domain=.nseindia.com; Path=/; Expires=Wed, 21 Oct 2026 18:25:41 GMT; Max-Age=14400"
+      ]
+    ],
+    "body": "SYMBOL,NAME OF COMPANY, SERIES, DATE OF LISTING, PAID UP VALUE, MARKET LOT, ISIN NUMBER, FACE VALUE\nGUJENERGY,GUJARAT ENERGY LIMITED,EQ,15-SEP-2015,2,1,INE844O01030,2\n",
+    "body_encoding": "utf-8"
+  }
+}
