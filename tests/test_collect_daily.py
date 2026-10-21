@@ -269,7 +269,16 @@ def test_the_command_records_every_source_it_could_not_reach_and_exits_non_zero(
     code = main(["collect-daily", "--date", "2024-08-01"])
 
     assert code == 1
-    last = json.loads(capsys.readouterr().out.splitlines()[-1])
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    collection = [line for line in lines if line["msg"].startswith("collect")]
+    assert {"collection started", "collection finished", "collect-daily finished"} <= {
+        line["msg"] for line in collection
+    }
+    assert all(
+        (line["range_start"], line["range_end"]) == ("2024-08-01", "2024-08-01")
+        for line in collection
+    )
+    last = lines[-1]
     assert last["command"] == "collect-daily"
     assert last["msg"] == "collect-daily finished"
     assert last["day"] == "2024-08-01"

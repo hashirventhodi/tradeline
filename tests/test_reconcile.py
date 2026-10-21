@@ -256,6 +256,9 @@ def test_the_command_exits_zero_on_clean_fixtures_with_a_summary_and_a_table(
     code, lines, table = reconcile_command(fresh_database_url, monkeypatch, capsys)
 
     assert code == 0
+    assert all(
+        (line["range_start"], line["range_end"]) == ("2024-07-01", "2024-08-30") for line in lines
+    )
     summary = lines[-1]
     assert summary["command"] == "reconcile"
     assert summary["msg"] == "reconcile finished"
@@ -312,3 +315,21 @@ def test_the_command_exits_non_zero_above_the_configured_threshold(
     ]
     assert "FAIL" in strict_table
     assert "missing  INFY" in strict_table
+
+
+def test_every_line_of_the_command_carries_its_range_and_the_symbols_named(
+    fresh_database_url: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("TRADELINE_CONFIG", str(REPO_CONFIG))
+    monkeypatch.setenv("DATABASE_URL", fresh_database_url)
+    load(fresh_database_url)
+    capsys.readouterr()
+
+    code = main(["reconcile", "--from", "2024-07-01", "--to", "2024-07-31", "--symbol", "INFY"])
+
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert code == 0
+    assert lines
+    for line in lines:
+        assert (line["range_start"], line["range_end"]) == ("2024-07-01", "2024-07-31")
+        assert line["symbols"] == ["INFY"]

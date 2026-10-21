@@ -10,12 +10,14 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from tradeline.collect import CollectResult
 from tradeline.collect import collect_daily as collect_daily_service
 from tradeline.config import Config, default_config_path, load_config
 from tradeline.db import app_connection, connect
@@ -25,7 +27,7 @@ from tradeline.ingest.candles import CurrentUniverse, ingest_candles
 from tradeline.ingest.corporate_actions import ingest_corporate_actions
 from tradeline.ingest.eod import ingest_eod
 from tradeline.ingest.news import Feed, ingest_news
-from tradeline.logging import configure_logging
+from tradeline.logging import configure_logging, log_context
 from tradeline.login import login as login_service
 from tradeline.migrations import apply_migrations
 from tradeline.reconcile import reconcile as reconcile_service
@@ -109,6 +111,11 @@ def ingest(ctx: Context, args: argparse.Namespace) -> int:
     if args.source == "news":
         return _ingest_news(ctx, args)
     end = args.start if args.end is None else args.end
+    with _scope(args.start, end, getattr(args, "symbols", None)):
+        return _ingest_range(ctx, args, end)
+
+
+def _ingest_range(ctx: Context, args: argparse.Namespace, end: date) -> int:
     if args.source == "eod":
         return _ingest_eod(ctx, args, end)
     if args.source == "corporate-actions":
@@ -240,17 +247,40 @@ def reconcile(ctx: Context, args: argparse.Namespace) -> int:
     The summary is the last JSON line on stdout; the table goes to stderr.
     """
     end = args.start if args.end is None else args.end
-    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
-        report = reconcile_service(
-            conn, ctx.config.reconcile, start=args.start, end=end, symbols=args.symbols
+    with _scope(args.start, end, args.symbols):
+        with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+            report = reconcile_service(
+                conn, ctx.config.reconcile, start=args.start, end=end, symbols=args.symbols
+            )
+        sys.stderr.write(report.table())
+        log.log(
+            logging.INFO if report.passed else logging.ERROR,
+            "reconcile finished",
+            extra={"report": report.summary()},
         )
-    sys.stderr.write(report.table())
-    log.log(
-        logging.INFO if report.passed else logging.ERROR,
-        "reconcile finished",
-        extra={"report": report.summary()},
-    )
     return 0 if report.passed else 1
+
+
+@contextmanager
+def _scope(start: date, end: date, symbols: Sequence[str] | None = None) -> Iterator[None]:
+    """Every line the command logs inside carries its range, and its symbols when named.
+
+    An ingest run inside binds its own source and range over these.
+    """
+    fields: dict[str, object] = {"range_start": start.isoformat(), "range_end": end.isoformat()}
+    if symbols is not None:
+        fields["symbols"] = list(symbols)
+    with log_context(**fields):
+        yield
+
+
+def _month_end(month: date) -> date:
+    """The last day of the month starting ``month``."""
+    return _next_month(month) - timedelta(days=1)
+
+
+def _next_month(month: date) -> date:
+    return (month.replace(day=28) + timedelta(days=4)).replace(day=1)
 
 
 def _transport(ctx: Context, args: argparse.Namespace, *, browser_tls: bool = False) -> Transport:
@@ -281,16 +311,23 @@ def collect_daily(ctx: Context, args: argparse.Namespace) -> int:
             access_token=ctx.secrets.require(KITE_ACCESS_TOKEN),
         )
 
-    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
-        result = collect_daily_service(
-            conn,
-            day=day,
-            rule=ctx.config.universe,
-            feeds=feeds,
-            transport=_transport(ctx, args),
-            browser_transport=_transport(ctx, args, browser_tls=True),
-            kite=kite,
-        )
+    with _scope(day, day):
+        with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+            result = collect_daily_service(
+                conn,
+                day=day,
+                rule=ctx.config.universe,
+                feeds=feeds,
+                transport=_transport(ctx, args),
+                browser_transport=_transport(ctx, args, browser_tls=True),
+                kite=kite,
+            )
+        _log_collection(result)
+    return 0 if result.succeeded else 1
+
+
+def _log_collection(result: CollectResult) -> None:
+    day = result.day
     log.log(
         logging.INFO if result.succeeded else logging.ERROR,
         "collect-daily finished",
@@ -310,7 +347,6 @@ def collect_daily(ctx: Context, args: argparse.Namespace) -> int:
             "failed_feeds": list(result.failed_feeds),
         },
     )
-    return 0 if result.succeeded else 1
 
 
 def universe(ctx: Context, args: argparse.Namespace) -> int:
@@ -318,11 +354,14 @@ def universe(ctx: Context, args: argparse.Namespace) -> int:
     end = args.month if args.to is None else args.to
     if end < args.month:
         raise ValueError(f"month {end:%Y-%m} is before {args.month:%Y-%m}")
-    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+    with (
+        _scope(args.month, _month_end(end)),
+        app_connection(ctx.secrets.require(DATABASE_URL)) as conn,
+    ):
         month = args.month
         while month <= end:
             compute_universe(conn, ctx.config.universe, month=month)
-            month = (month.replace(day=28) + timedelta(days=4)).replace(day=1)
+            month = _next_month(month)
     return 0
 
 
@@ -354,12 +393,13 @@ def verify_universe(ctx: Context, args: argparse.Namespace) -> int:
     today = datetime.now(IST).date()
     month = today.replace(day=1) if args.month is None else args.month
     transport = _transport(ctx, args)
-    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
-        check = verify_universe_service(
-            conn, transport, ctx.config.universe, month=month, as_of=today
-        )
-    sys.stderr.write(check.report())
-    log.info("verify-universe finished", extra={"report": check.summary()})
+    with _scope(month, _month_end(month)):
+        with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+            check = verify_universe_service(
+                conn, transport, ctx.config.universe, month=month, as_of=today
+            )
+        sys.stderr.write(check.report())
+        log.info("verify-universe finished", extra={"report": check.summary()})
     return 0
 
 
