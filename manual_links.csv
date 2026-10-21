@@ -6,7 +6,9 @@
 # exchange circular's URL or number, or a company filing. A row without a
 # citation, or with a date that is not YYYY-MM-DD, fails `rebuild-instruments`.
 # A row may name one Symbol on both sides: an ISIN change under that Symbol that
-# no split or bonus explains, effective the new ISIN's first day.
+# no split or bonus explains. Its date must be the new ISIN's first day, and the
+# old ISIN's last row within 7 days before it, as for a split; a row that joins
+# nothing is reported by `tradeline instruments`.
 # Mergers are never links. `tradeline.manual_links` reads this file; its
 # location is `instruments.manual_links` in tradeline.toml.
 #

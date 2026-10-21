@@ -40,9 +40,12 @@ Instrument Link with a date and a source:
   (``tradeline.manual_links``), for a rename NSE's list omits (RUCHI to
   PATANJALI). It joins by the same rule as an NSE record, and its source
   carries the row's citation. A row naming one Symbol on both sides joins
-  that Symbol's ISIN change where no split or bonus does, if its effective
-  date is the new ISIN's first day or falls in the gap before it (YESBANK
-  2020-03-16, the depositories applying its reconstruction scheme's lock-in).
+  that Symbol's ISIN change where no split or bonus does (YESBANK 2020-03-16,
+  the depositories applying its reconstruction scheme's lock-in), held to
+  what an action is held to: its effective date is the new ISIN's first day,
+  and the old ISIN's last row is within ``EX_DATE_SLACK`` before it. A row
+  that joins nothing (dated elsewhere, or across a longer gap such as a
+  relisting years later) is recorded as an ``unmatched_manual_link`` anomaly.
 
 Anything else splits the history. An ISIN change under one Symbol with no
 split, bonus, or manual link to explain it is never joined and is recorded as
@@ -85,7 +88,7 @@ from tradeline.sources.nse import SymbolChange
 
 LinkKind = Literal["corporate_action", "symbol_change", "manual"]
 KeyFrom = Literal["listing_date", "first_row"]
-AnomalyKind = Literal["unexplained_isin_change", "conflicting_link"]
+AnomalyKind = Literal["unexplained_isin_change", "conflicting_link", "unmatched_manual_link"]
 
 # NSE's equity listing series, the Raw Series an Instrument is built from: EQ; BE
 # and BZ, trade-for-trade; SM and ST, SME. An Instrument spans moves between them.
@@ -121,13 +124,19 @@ class Listing:
 @dataclass(frozen=True)
 class ManualLink:
     """A reviewed rename NSE's symbol-change list omits: from ``effective_date`` the old
-    Symbol trades under the new one, as the official source ``citation`` says."""
+    Symbol trades under the new one, as the official source ``citation`` says. Or, with
+    one Symbol on both sides, an ISIN change no Corporate Action explains: from
+    ``effective_date``, the new ISIN's first day, the Symbol trades under it."""
 
     old_symbol: str
     new_symbol: str
     effective_date: date
     # An official URL or circular number.
     citation: str
+
+    @property
+    def across_isin_change(self) -> bool:
+        return self.old_symbol == self.new_symbol
 
 
 @dataclass(frozen=True)
@@ -274,9 +283,17 @@ def _propose(
     stretches: list[_Stretch], evidence: Evidence, anomalies: list[Anomaly]
 ) -> list[_Proposal]:
     """Every link the rules propose, in a fixed order."""
+    manual = evidence.manual_links
     proposals = [
-        *_isin_changes(stretches, evidence.corporate_actions, evidence.manual_links, anomalies),
-        *_renames(stretches, evidence.symbol_changes, evidence.manual_links),
+        *_isin_changes(
+            stretches,
+            evidence.corporate_actions,
+            [m for m in manual if m.across_isin_change],
+            anomalies,
+        ),
+        *_renames(
+            stretches, evidence.symbol_changes, [m for m in manual if not m.across_isin_change]
+        ),
     ]
     return sorted(proposals, key=lambda p: (p.link.on, p.link.kind, p.joins[0].id, p.joins[1].id))
 
@@ -288,7 +305,9 @@ def _isin_changes(
     anomalies: list[Anomaly],
 ) -> list[_Proposal]:
     """Successive ISINs of one Symbol: joined on a split's or bonus's Ex-Date, else by a
-    manual link under the Symbol dated at the change, else an anomaly.
+    manual link under the Symbol dated on the new ISIN's first day with the old one's
+    last row within ``EX_DATE_SLACK`` before it, else an anomaly. A manual link that
+    joins nothing is an anomaly too.
 
     The action is the Symbol's, or one filed under another Symbol with the old
     or the new ISIN: NSE files an Instrument's past actions under its Symbol of
@@ -301,10 +320,11 @@ def _isin_changes(
             by_symbol[action.symbol].add(action)
             if action.isin is not None:
                 by_isin[action.isin].add(action)
-    manual_by_symbol: dict[str, set[ManualLink]] = defaultdict(set)
-    for m in manual_links:
-        if m.old_symbol == m.new_symbol:
-            manual_by_symbol[m.old_symbol].add(m)
+    # The manual links by Symbol and effective date; each is taken off once it matches.
+    unmatched: dict[tuple[str, date], list[ManualLink]] = defaultdict(list)
+    for m in sorted(set(manual_links), key=_manual_order):
+        unmatched[(m.old_symbol, m.effective_date)].append(m)
+    too_far: dict[tuple[str, date], date] = {}
     proposals: list[_Proposal] = []
     for symbol, found in sorted(_by_symbol(stretches).items()):
         for old, new in zip(found, found[1:], strict=False):
@@ -315,19 +335,28 @@ def _isin_changes(
                 (a for a in filed if _at_change(a.ex_date, old.last, new.first)),
                 key=lambda a: (a.ex_date, a.symbol != symbol, a.symbol, a.series, a.subject),
             )
-            if not explaining:
-                manual = sorted(
-                    (
-                        m
-                        for m in manual_by_symbol.get(symbol, set())
-                        if old.last < m.effective_date <= new.first
+            # A manual link at a change an action explains is redundant, not unmatched.
+            at_change = unmatched.pop((symbol, new.first), [])
+            if explaining:
+                action = explaining[0]
+                link = Link(
+                    kind="corporate_action",
+                    on=action.ex_date,
+                    from_symbol=symbol,
+                    from_isin=old.isin,
+                    to_symbol=symbol,
+                    to_isin=new.isin,
+                    source=(
+                        f"NSE corporate action {action.symbol}"
+                        f" ex-date {action.ex_date.isoformat()}: {action.subject}"
                     ),
-                    key=_manual_order,
                 )
-                if manual:
-                    link = _manual_link(manual[0], from_isin=old.isin, to_isin=new.isin)
-                    proposals.append(_Proposal(link, (old, new)))
-                    continue
+            elif at_change and new.first - old.last <= EX_DATE_SLACK:
+                link = _manual_link(at_change[0], from_isin=old.isin, to_isin=new.isin)
+            else:
+                if at_change:
+                    unmatched[(symbol, new.first)] = at_change
+                    too_far[(symbol, new.first)] = old.last
                 anomalies.append(
                     Anomaly(
                         kind="unexplained_isin_change",
@@ -340,20 +369,24 @@ def _isin_changes(
                     )
                 )
                 continue
-            action = explaining[0]
-            link = Link(
-                kind="corporate_action",
-                on=action.ex_date,
-                from_symbol=symbol,
-                from_isin=old.isin,
-                to_symbol=symbol,
-                to_isin=new.isin,
-                source=(
-                    f"NSE corporate action {action.symbol} ex-date {action.ex_date.isoformat()}:"
-                    f" {action.subject}"
-                ),
-            )
             proposals.append(_Proposal(link, (old, new)))
+    for (symbol, effective), rows in sorted(unmatched.items()):
+        if (symbol, effective) in too_far:
+            why = (
+                f"the old ISIN's last row, {too_far[(symbol, effective)].isoformat()},"
+                f" is more than {EX_DATE_SLACK.days} days before"
+            )
+        else:
+            why = f"no new ISIN of {symbol} starts on {effective.isoformat()}"
+        anomalies.extend(
+            Anomaly(
+                kind="unmatched_manual_link",
+                symbol=symbol,
+                on=effective,
+                detail=f"{_manual_source(m)} joins nothing: {why}",
+            )
+            for m in rows
+        )
     return proposals
 
 

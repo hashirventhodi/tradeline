@@ -1,25 +1,27 @@
-"""The manual Instrument Links: a checked-in file of renames NSE's list omits (ADR 0016).
+"""The manual Instrument Links: a checked-in file of what NSE's records omit (ADR 0016).
 
-NSE's symbol-change list misses some renames (RUCHI, now PATANJALI). The
-Operator joins those by hand in a CSV file in the repository, at the location
+NSE's symbol-change list misses some renames (RUCHI, now PATANJALI), and NSE's
+Corporate Actions miss some ISIN changes (YESBANK's in 2020). The Operator
+joins those by hand in a CSV file in the repository, at the location
 ``instruments.manual_links`` in ``tradeline.toml`` configures, and each row is
-reviewed like code. A row is one rename::
+reviewed like code. A row is a rename, or, with one Symbol on both sides, an
+ISIN change under that Symbol::
 
     old_symbol,new_symbol,effective_date,citation
     RUCHI,PATANJALI,2022-07-13,https://archives.nseindia.com/content/circulars/CML52890.pdf
+    YESBANK,YESBANK,2020-03-16,https://nsearchives.nseindia.com/content/circulars/INSP43833.pdf
 
-``effective_date`` is ISO (``YYYY-MM-DD``), the first day the new Symbol
-trades, and ``citation`` an official source: an exchange circular's URL or
-number, or a company filing. A row may also name one Symbol on both sides: an
-ISIN change under that Symbol that no split or bonus explains (YESBANK's,
-when the depositories applied its 2020 reconstruction scheme's lock-in),
-effective the new ISIN's first day. Lines starting with ``#`` are comments, and blank
-lines are skipped. The builder joins a manual link by the same rules as an NSE
-record, and records the citation as the link's source.
+``effective_date`` is ISO (``YYYY-MM-DD``): the first day the new Symbol, or
+the new ISIN, trades. ``citation`` is an official source: an exchange
+circular's URL or number, or a company filing. Lines starting with ``#`` are
+comments, and blank lines are skipped. The builder joins a rename by the same
+rule as an NSE record and an ISIN change by the rule an action is held to
+(``tradeline.instruments``), records the citation as the link's source, and
+reports a row that joins nothing as an anomaly.
 
 A malformed row (the wrong number of columns, a blank Symbol, an unparseable
-date) or a row without a citation refuses the
-whole file, naming the line, so a rebuild never runs on part of it.
+date) or a row without a citation refuses the whole file, naming the line, so
+a rebuild never runs on part of it.
 """
 
 from __future__ import annotations

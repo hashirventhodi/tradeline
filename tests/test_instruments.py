@@ -567,16 +567,53 @@ def test_a_manual_link_under_one_symbol_joins_an_isin_change_no_action_explains(
     assert built.link_candidates == ()
 
 
-def test_a_manual_link_under_one_symbol_dated_away_from_its_isin_change_joins_nothing() -> None:
+def test_a_manual_link_under_one_symbol_not_dated_on_the_new_isins_first_day_joins_nothing() -> (
+    None
+):
     evidence = Evidence(
         spans=[
             span("YESBANK", YESBANK_OLD, date(2017, 9, 22), date(2020, 3, 13)),
             span("YESBANK", YESBANK_NEW, date(2020, 3, 16), date(2026, 10, 19)),
         ],
-        manual_links=[yesbank_lock_in(date(2020, 3, 23))],
+        # A day before the new ISIN's first row, and a week after it.
+        manual_links=[yesbank_lock_in(date(2020, 3, 15)), yesbank_lock_in(date(2020, 3, 23))],
     )
 
     built = build_instruments(evidence)
 
     assert len(built.instruments) == 2
-    assert [a.kind for a in built.anomalies] == ["unexplained_isin_change"]
+    assert [(a.kind, a.on) for a in built.anomalies] == [
+        ("unmatched_manual_link", date(2020, 3, 15)),
+        ("unexplained_isin_change", date(2020, 3, 16)),
+        ("unmatched_manual_link", date(2020, 3, 23)),
+    ]
+    assert built.anomalies[0].detail == (
+        f"manual link YESBANK to YESBANK effective 2020-03-15: {YESBANK_SCHEME}"
+        " joins nothing: no new ISIN of YESBANK starts on 2020-03-15"
+    )
+
+
+KSE_OLD = "INE953E01014"
+KSE_NEW = "INE953E01022"
+
+
+def test_a_manual_link_under_one_symbol_across_a_long_gap_is_refused_however_it_is_dated() -> None:
+    # KSE's last row under its old ISIN is in January 2015, and it was relisted under
+    # a new one in August 2026: a link dated on the relisting's first day still
+    # bridges eleven years, which no Corporate Action could.
+    evidence = Evidence(
+        spans=[
+            span("KSE", KSE_OLD, date(2015, 1, 1), date(2015, 1, 29), series="BE"),
+            span("KSE", KSE_NEW, date(2026, 8, 17), date(2026, 10, 19)),
+        ],
+        manual_links=[ManualLink("KSE", "KSE", date(2026, 8, 17), "a relisting circular")],
+    )
+
+    built = build_instruments(evidence)
+
+    assert len(built.instruments) == 2
+    assert [a.kind for a in built.anomalies] == ["unexplained_isin_change", "unmatched_manual_link"]
+    assert built.anomalies[1].detail == (
+        "manual link KSE to KSE effective 2026-08-17: a relisting circular joins nothing:"
+        " the old ISIN's last row, 2015-01-29, is more than 7 days before"
+    )
