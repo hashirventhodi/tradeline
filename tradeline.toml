@@ -4,6 +4,16 @@
 [logging]
 level = "INFO"
 
+# The Universe Rule (ADR 0005). Every key is part of the rule version recorded
+# with each membership table, so changing one starts a new version.
+[universe]
+top_n = 200
+lookback_trading_days = 126     # the trailing window before the month's first trading day
+min_listing_trading_days = 126  # trading days since listing
+min_presence_percent = 90       # rows required on this share of the window's days
+series = "EQ"                   # excludes SME (SM, ST) and trade-for-trade (BE, BZ)
+excluded_isin_prefix = "INF"    # ETFs and other fund units trade in EQ with INF ISINs
+
 [reconcile]
 # A close mismatch: further than this fraction of the price (plus half a
 # 5 paisa tick) from the end-of-day close, after Kite's own adjustment.

@@ -1,0 +1,99 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://api.kite.trade/instruments/NSE",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "date",
+        "Wed, 21 Oct 2026 08:47:17 GMT"
+      ],
+      [
+        "content-type",
+        "text/csv"
+      ],
+      [
+        "content-length",
+        "659"
+      ],
+      [
+        "connection",
+        "keep-alive"
+      ],
+      [
+        "x-amz-request-id",
+        "HBFJWP9AW94MWBNF"
+      ],
+      [
+        "x-amz-id-2",
+        "i5S8X3JWLiEs2enrmpWnVBAexSkhX3bL5X+6/mFMAus3/UUoc0SgrZ+YFGtBrq5xRDjIHaOnwxg="
+      ],
+      [
+        "accept-ranges",
+        "bytes"
+      ],
+      [
+        "server",
+        "cloudflare"
+      ],
+      [
+        "last-modified",
+        "Wed, 21 Oct 2026 08:11:17 GMT"
+      ],
+      [
+        "etag",
+        "\"3b2382fc8ba368debbecbc3b361e0063\""
+      ],
+      [
+        "x-amz-version-id",
+        "null"
+      ],
+      [
+        "content-encoding",
+        "gzip"
+      ],
+      [
+        "x-amz-server-side-encryption",
+        "AES256"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-frame-options",
+        "DENY"
+      ],
+      [
+        "cf-cache-status",
+        "DYNAMIC"
+      ],
+      [
+        "set-cookie",
+        "_cfuvid=oFsIxELzzQET2.nkt._tNjQzZBs820pLA43FPZVvgcc-1792572437.37555-1.0.1.1-GImXmvhdDrYxdnBejeQMjXO82nD606aZu2KXcX6WOKI; HttpOnly; SameSite=None; Secure; Path=/; Domain=kite.trade"
+      ],
+      [
+        "vary",
+        "accept-encoding"
+      ],
+      [
+        "strict-transport-security",
+        "max-age=15552000; includeSubDomains"
+      ],
+      [
+        "cf-ray",
+        "a4deff259af2897b-MAA"
+      ],
+      [
+        "alt-svc",
+        "h3=\":443\"; ma=86400"
+      ]
+    ],
+    "body": "instrument_token,exchange_token,tradingsymbol,name,last_price,expiry,strike,tick_size,lot_size,instrument_type,segment,exchange\n408065,1594,INFY,\"INFOSYS\",0,,0,0.05,1,EQ,NSE,NSE\n738561,2885,RELIANCE,\"RELIANCE INDUSTRIES\",0,,0,0.1,1,EQ,NSE,NSE\n2707457,10576,NIFTYBEES,\"NIPPON INDIA ETF NIFTY 50 BEES\",0,,0,0.01,1,EQ,NSE,NSE\n2953217,11536,TCS,\"TATA CONSULTANCY SERV LT\",0,,0,0.1,1,EQ,NSE,NSE\n4267265,16669,BAJAJ-AUTO,\"BAJAJ AUTO\",0,,0,1,1,EQ,NSE,NSE\n4540161,17735,BAFNAPH-BE,\"BAFNA PHARMACEUTICALS\",0,,0,0.05,1,EQ,NSE,NSE\n6222849,24308,ABDL,\"ALLIED BLEND N DISTILS L\",0,,0,0.05,1,EQ,NSE,NSE\n6245889,24398,EMCURE,\"EMCURE PHARMACEUTICALS L\",0,,0,0.1,1,EQ,NSE,NSE\n",
+    "body_encoding": "utf-8"
+  }
+}

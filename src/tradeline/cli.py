@@ -12,7 +12,7 @@ import logging
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -41,6 +41,7 @@ from tradeline.transport import (
     Transport,
     transport_for,
 )
+from tradeline.universe import compute_universe
 
 log = logging.getLogger(__name__)
 
@@ -188,12 +189,31 @@ def _transport(ctx: Context, args: argparse.Namespace) -> Transport:
     return transport
 
 
+def universe(ctx: Context, args: argparse.Namespace) -> int:
+    """The Universe for each month from ``--month`` to ``--to`` under the configured rule."""
+    end = args.month if args.to is None else args.to
+    if end < args.month:
+        raise ValueError(f"month {end:%Y-%m} is before {args.month:%Y-%m}")
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        month = args.month
+        while month <= end:
+            compute_universe(conn, ctx.config.universe, month=month)
+            month = (month.replace(day=28) + timedelta(days=4)).replace(day=1)
+    return 0
+
+
+def _month(text: str) -> date:
+    """A month as YYYY-MM, as its first day."""
+    return datetime.strptime(text, "%Y-%m").date()
+
+
 Command = Callable[[Context, argparse.Namespace], int]
 
 COMMANDS: dict[str, Command] = {
     "migrate": migrate,
     "login": login,
     "ingest": ingest,
+    "universe": universe,
     "reconcile": reconcile,
 }
 
@@ -282,6 +302,21 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         help="an NSE symbol to load; repeatable; defaults to every symbol NSE lists",
     )
+
+    universe_parser = subparsers.add_parser(
+        "universe",
+        help="compute and record the Universe for months from loaded end-of-day files",
+    )
+    universe_parser.add_argument(
+        "--month", metavar="YYYY-MM", type=_month, required=True, help="the first month"
+    )
+    universe_parser.add_argument(
+        "--to",
+        metavar="YYYY-MM",
+        type=_month,
+        help="the last month; defaults to --month",
+    )
+
     reconcile_parser = subparsers.add_parser(
         "reconcile",
         parents=[date_range],

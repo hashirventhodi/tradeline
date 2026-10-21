@@ -92,3 +92,11 @@ def empty_database_url(request: pytest.FixtureRequest) -> Iterator[str]:
     name = _database_name(f"empty_{request.node.name}")
     yield _create_database(name)
     _drop_database(name)
+
+
+@pytest.fixture
+def another_database_url(request: pytest.FixtureRequest, migrated_template: str) -> Iterator[str]:
+    """A second migrated, empty database, per test, for comparing independent runs."""
+    name = _database_name(f"another_{request.node.name}")
+    yield _create_database(name, template=migrated_template)
+    _drop_database(name)
