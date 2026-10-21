@@ -898,21 +898,25 @@ class InstrumentDailyCandles:
 
 def instrument_daily_candles(
     conn: psycopg.Connection,
-    key: str,
+    instrument: str,
     *,
     start: date,
     end: date,
     series: str | None = None,
+    as_of: date | None = None,
 ) -> InstrumentDailyCandles:
-    """Kite's daily candles for the Instrument ``key``, one per day and series, oldest first.
+    """Kite's daily candles for an Instrument, one per day and series, oldest first.
 
-    Kite files an Instrument's history under its name of the day it is
+    ``instrument`` is an Instrument key, or a Symbol read as the Instrument it
+    named on ``as_of`` (``end`` when not given), as for ``end_of_day``. Kite files an Instrument's history under its name of the day it is
     fetched, so one Instrument-day can be stored under an old name and a new
     one. The copy under Kite's more recent name is read, each stored as Kite
     returned it (``daily_candles``), and any other copy whose values differ
     from it is reported. A Symbol in no Instrument (none rebuilt yet) is read
     as its own key.
     """
+    owned = _owned(conn, instrument, as_of=end if as_of is None else as_of)
+    key = owned.key if owned.key is not None else owned.symbol
     rows = conn.execute(
         "SELECT trade_date, symbol, series, open, high, low, close, volume"
         " FROM candles_daily_instruments"
