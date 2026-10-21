@@ -5,6 +5,7 @@ description = "A long-only swing trading platform for NSE cash equities."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "curl-cffi>=0.13",
     "httpx>=0.28",
     "psycopg[binary]>=3.3",
 ]

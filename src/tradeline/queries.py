@@ -10,14 +10,18 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from fractions import Fraction
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 import psycopg
 
 from tradeline.adjust import KINDS, AdjustedBar, CorporateAction, Kind, RawBar, adjust
+
+# Exchange days are Indian calendar days.
+IST = ZoneInfo("Asia/Kolkata")
 
 
 @dataclass(frozen=True)
@@ -228,6 +232,58 @@ def adjusted_daily_candles(
 
 
 @dataclass(frozen=True)
+class Announcement:
+    source: str  # 'nse' or 'bse'
+    source_id: str
+    # The official timestamp: when the exchange made the filing public.
+    disseminated_at: datetime
+    received_at: datetime | None
+    exchange_code: str  # NSE symbol or BSE scrip code, as the exchange gives it
+    company_name: str | None
+    symbol: str | None  # the matched NSE symbol; None when the match was not certain
+    subject: str
+    body: str | None
+    attachment_url: str | None
+
+
+_ANNOUNCEMENT_COLUMNS = (
+    "source, source_id, disseminated_at, received_at, exchange_code, company_name, symbol,"
+    " subject, body, attachment_url"
+)
+
+
+def announcements(
+    conn: psycopg.Connection,
+    symbol: str | None,
+    *,
+    start: date,
+    end: date,
+    as_of: datetime,
+) -> list[Announcement]:
+    """NSE and BSE announcements for ``symbol`` from ``start`` to ``end``, as known at ``as_of``.
+
+    ``symbol=None`` returns the filings matched to no symbol. Days are Indian
+    calendar days of the official timestamp, the moment the exchange
+    disseminated the filing; an announcement disseminated after ``as_of`` is
+    left out, so a decision replayed at ``as_of`` sees only what was public
+    then. Oldest first.
+    """
+    if as_of.tzinfo is None:
+        raise ValueError("as_of must be timezone-aware: announcements are timestamped in IST")
+    after = datetime.combine(start, time(), IST)
+    before = datetime.combine(end + timedelta(days=1), time(), IST)
+    rows = conn.execute(
+        f"SELECT {_ANNOUNCEMENT_COLUMNS} FROM announcements"
+        f" WHERE {'symbol IS NULL' if symbol is None else 'symbol = %(symbol)s'}"
+        " AND disseminated_at >= %(after)s AND disseminated_at < %(before)s"
+        " AND disseminated_at <= %(as_of)s"
+        " ORDER BY disseminated_at, source, source_id",
+        {"symbol": symbol, "after": after, "before": before, "as_of": as_of},
+    ).fetchall()
+    return [Announcement(*row) for row in rows]
+
+
+@dataclass(frozen=True)
 class UniverseMember:
     month: date
     rule_version: str
@@ -294,6 +350,54 @@ def universe_rule_versions(conn: psycopg.Connection) -> list[UniverseRuleVersion
         " ORDER BY recorded_at, version"
     ).fetchall()
     return [UniverseRuleVersion(*row) for row in rows]
+
+
+@dataclass(frozen=True)
+class NewsItem:
+    feed: str
+    title: str
+    link: str
+    summary: str | None
+    published_at: datetime | None
+    fetched_at: datetime
+    symbols: tuple[str, ...]
+
+
+def news(
+    conn: psycopg.Connection,
+    symbol: str | None,
+    *,
+    start: datetime,
+    end: datetime,
+    as_of: datetime,
+) -> list[NewsItem]:
+    """RSS news items dated from ``start`` to ``end`` inclusive that were knowable at ``as_of``.
+
+    With a symbol, only items matched to it; with ``None``, every item. An
+    item is dated by its feed's publication timestamp, or, when the feed gave
+    none, by when this collector first saw it; it is returned only if that
+    date is on or before ``as_of``, so a decision replayed at ``as_of`` sees
+    no later story. Oldest first. All three times must carry a zone.
+
+    What this does not model: an item backfilled from a feed after the fact
+    is dated by its publication timestamp, not by when it was collected.
+    """
+    for name, value in (("start", start), ("end", end), ("as_of", as_of)):
+        if value.tzinfo is None:
+            raise ValueError(f"{name} {value} has no time zone")
+    rows = conn.execute(
+        "SELECT feed, title, link, summary, published_at, fetched_at, symbols"
+        " FROM news_items"
+        " WHERE coalesce(published_at, fetched_at) BETWEEN %s AND %s"
+        " AND coalesce(published_at, fetched_at) <= %s"
+        " AND (%s::text IS NULL OR %s = ANY(symbols))"
+        " ORDER BY coalesce(published_at, fetched_at), content_hash",
+        (start, end, as_of, symbol, symbol),
+    ).fetchall()
+    return [
+        NewsItem(feed, title, link, summary, published, fetched, tuple(symbols))
+        for feed, title, link, summary, published, fetched, symbols in rows
+    ]
 
 
 @dataclass(frozen=True)

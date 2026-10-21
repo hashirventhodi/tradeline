@@ -48,9 +48,9 @@ def _drop_database(name: str) -> None:
 
 
 def _database_name(label: str) -> str:
-    # The random part comes first so truncating a long label to Postgres's 63
-    # characters cannot drop it and make concurrent runs collide.
-    return f"tradeline_test_{secrets.token_hex(4)}_{label}"[:63].lower()
+    """A unique Postgres name: the label is cut to fit 63 bytes, never the random suffix."""
+    prefix, suffix = "tradeline_test_", f"_{secrets.token_hex(4)}"
+    return f"{prefix}{label[: 63 - len(prefix) - len(suffix)]}{suffix}".lower()
 
 
 @pytest.fixture(autouse=True)

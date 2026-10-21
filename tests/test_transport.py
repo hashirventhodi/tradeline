@@ -27,9 +27,12 @@ class CannedTransport:
         return self.response
 
 
-def test_live_transport_cannot_be_constructed_under_the_test_environment() -> None:
+@pytest.mark.parametrize("browser_tls", [False, True])
+def test_live_transport_cannot_be_constructed_under_the_test_environment(
+    browser_tls: bool,
+) -> None:
     with pytest.raises(LiveTransportForbidden):
-        LiveTransport()
+        LiveTransport(browser_tls=browser_tls)
 
 
 def test_the_default_transport_under_test_refuses_every_call() -> None:
@@ -38,6 +41,10 @@ def test_the_default_transport_under_test_refuses_every_call() -> None:
     assert isinstance(transport, RefusingTransport)
     with pytest.raises(TransportRefused, match="GET https://api.kite.trade/instruments"):
         transport.send(Request("GET", "https://api.kite.trade/instruments"))
+
+
+def test_the_default_browser_transport_under_test_refuses_every_call() -> None:
+    assert isinstance(transport_for(Environment.TEST, browser_tls=True), RefusingTransport)
 
 
 def test_an_unrecorded_request_under_playback_fails_loudly(tmp_path: Path) -> None:

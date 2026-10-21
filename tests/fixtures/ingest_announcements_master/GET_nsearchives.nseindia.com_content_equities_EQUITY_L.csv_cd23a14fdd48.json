@@ -1,0 +1,83 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "x-frame-options",
+        "DENY"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "accept-ranges",
+        "bytes"
+      ],
+      [
+        "etag",
+        "W/\"184186-1792532103129\""
+      ],
+      [
+        "last-modified",
+        "Tue, 20 Oct 2026 21:35:03 GMT"
+      ],
+      [
+        "content-type",
+        "text/csv"
+      ],
+      [
+        "vary",
+        "Accept-Encoding"
+      ],
+      [
+        "content-encoding",
+        "gzip"
+      ],
+      [
+        "date",
+        "Wed, 21 Oct 2026 08:55:08 GMT"
+      ],
+      [
+        "connection",
+        "keep-alive"
+      ],
+      [
+        "akamai-grn",
+        "0.0d2a336a.1792572908.222f1de"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "content-security-policy",
+        "default-src 'self'; script-src 'strict-dynamic' 'nonce-MC4yMDg2Mzc3MzEw' 'unsafe-inline' http: https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.nse.co.in https://*.nseindia.com; font-src 'self'; frame-src 'self'; base-uri 'self'; frame-ancestors 'self'; connect-src 'self' https://*.nseindia.com https://c.go-mpulse.net https://stats.g.doubleclick.net https://*.akstat.io/ https://*.akamaihd.net"
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000 ; includeSubDomains ; preload"
+      ],
+      [
+        "set-cookie",
+        "_abck=2E2792FFD10E58687E901B0E33CD492F~-1~YAAQDSozajlTf1ihAQAAMuOrXRA4t0pf/xQbKZtWj86MqVY4EFOt7K+Jhe/OxRIHVJr2sdGKa9naqTMmQpEohTeW7WHPG8EWMmOQ6cWPd20xinQnibi0IPqU6GK3SGjpOOgfSiPEUOy16ehx10Jxjnd7cqfNBs53f5W9n8eEXDZLJMVhs7+UECMpCe2JupgSo+vuHiC6qPUWCa6gLcL/I81VgwcHk3piSVlIgHrmr7seQ/K9HhHTVlAi1AyLpXT6IPg+DuC355ll8+CfI/a+9U2evdjx1y9KlDqDMQ3GgkVxOG4r2Yb8J/Kgg6/kTU8TNONOFstQhzTtRFuCrpem94kp+DptZ8NHbIF0XHDsiHr9SJrx8EhNvENSzll7lnJuJTIM9jUNXRP8TWn8cspmNMKvkMB4msBsbLz4U4ekQsbmtkV8KQoh2EUrLjzCD7hehRs7sYmnQk21hw==~-1~-1~-1~-1~-1; Domain=.nseindia.com; Path=/; Expires=Thu, 21 Oct 2027 08:55:08 GMT; Max-Age=31536000; Secure"
+      ],
+      [
+        "set-cookie",
+        "bm_sz=788D9FAE18771088E137101DB90FF1F3~YAAQDSozajpTf1ihAQAAMuOrXQGZ7ggu7t0HD0gIRRU8Gj/TnbA15tFCB3RWmO5iAD6DUPjzUi9Un1+l1arOwpQoHxp3D6Ve13exvrQJng3vfylu4Yn8QX8d555cShjUd5By6vVmdj0am1Zhn5dfamejOfGz5VuKh928TEhAnguNKgttrSVjO8+3hn1jy2vV4IuACU7OLwn//wdpunXy+GxPSRjFLUSGs5YNiJSy6RSfihjig9/dYd4mlVyUZ1CDXOKUOdt0G8L1upANfK0YDR7e7qKRzT7+VQ5w3i3/q0W3YWG0i8VyJ6GnV2+7KEWtULWSR9x74oX/PPysClI5gWaS4h+KZp2vGLcmbpJ8N18BW/VMqN/nhUp9/Dv40GyoHzit0w15~3687737~4473909; Domain=.nseindia.com; Path=/; Expires=Wed, 21 Oct 2026 12:55:08 GMT; Max-Age=14400"
+      ]
+    ],
+    "body": "SYMBOL,NAME OF COMPANY, SERIES, DATE OF LISTING, PAID UP VALUE, MARKET LOT, ISIN NUMBER, FACE VALUE\nBAFNAPH,Bafna Pharmaceuticals Limited,BE,27-FEB-2020,10,1,INE878I01022,10\nBAJAJ-AUTO,Bajaj Auto Limited,EQ,26-MAY-2008,10,1,INE917I01010,10\nINFY,Infosys Limited,EQ,08-FEB-1995,5,1,INE009A01021,5\nJISLDVREQS,Jain Irrigation Systems Limited,EQ,30-NOV-2011,2,1,IN9175A01010,2\nJISLJALEQS,Jain Irrigation Systems Limited,EQ,13-AUG-2001,2,1,INE175A01038,2\nRELIANCE,Reliance Industries Limited,EQ,29-NOV-1995,10,1,INE002A01018,10\nTCS,Tata Consultancy Services Limited,EQ,25-AUG-2004,1,1,INE467B01029,1\n",
+    "body_encoding": "utf-8"
+  }
+}
