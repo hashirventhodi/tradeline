@@ -95,7 +95,7 @@ Rules that hold in every mode:
 
 Postgres, plain tables, partitioned where volume justifies it. Append-only tables are enforced by revoking UPDATE and DELETE from the application role.
 
-- `candles_daily`, `candles_minute` (partitioned by month): raw, unadjusted, as received from Kite.
+- `candles_daily`, `candles_minute` (partitioned by month): exactly as received from Kite, never modified. Kite's daily bars turned out to be adjusted by Kite's own rules (see docs/research.md), so the adjusted series is computed from `eod_bhavcopy` and Kite's bars serve as the cross-check; ADR 0006's wording is to be revised.
 - `corporate_actions`: from NSE, with the adjustment factor we compute.
 - `eod_bhavcopy`: NSE end-of-day file rows, source for the Universe Rule.
 - `universe_membership`: symbol, effective month, rank, traded value. Point-in-time.

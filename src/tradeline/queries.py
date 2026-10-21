@@ -12,9 +12,12 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
+from fractions import Fraction
+from typing import Any, cast
 
 import psycopg
+
+from tradeline.adjust import KINDS, AdjustedBar, CorporateAction, Kind, RawBar, adjust
 
 
 @dataclass(frozen=True)
@@ -126,11 +129,12 @@ def daily_candles(
     end: date,
     series: str | None = None,
 ) -> list[DailyCandle]:
-    """Raw daily candles for ``symbol`` from ``start`` to ``end`` inclusive, oldest first.
+    """Kite's daily candles for ``symbol`` from ``start`` to ``end`` inclusive, oldest first.
 
-    Exactly as Kite returned them: unadjusted. The adjusted series arrives
-    with corporate actions and is computed on read, never stored. All series
-    are returned unless one is named, as for ``end_of_day``.
+    Exactly as Kite returned them, which is adjusted by Kite's own rules as of
+    the day they were fetched (docs/research.md). Our adjusted series is
+    ``adjusted_daily_candles``, computed from NSE's end-of-day rows. All
+    series are returned unless one is named, as for ``end_of_day``.
     """
     rows = conn.execute(
         "SELECT trade_date, symbol, series, open, high, low, close, volume"
@@ -141,3 +145,70 @@ def daily_candles(
         (symbol, start, end, series, series),
     ).fetchall()
     return [DailyCandle(*row) for row in rows]
+
+
+def corporate_actions(
+    conn: psycopg.Connection,
+    symbol: str,
+    *,
+    start: date | None = None,
+    end: date | None = None,
+) -> list[CorporateAction]:
+    """NSE's corporate actions for ``symbol`` with our factors, oldest ex-date first.
+
+    Every action is returned unless the ex-date range is narrowed at either end.
+    """
+    rows = conn.execute(
+        "SELECT symbol, series, ex_date, subject, kind, factor_numerator, factor_denominator,"
+        " isin, record_date, face_value"
+        " FROM corporate_actions"
+        " WHERE symbol = %s"
+        " AND (%s::date IS NULL OR ex_date >= %s) AND (%s::date IS NULL OR ex_date <= %s)"
+        " ORDER BY ex_date, series, subject",
+        (symbol, start, start, end, end),
+    ).fetchall()
+    return [_corporate_action(row) for row in rows]
+
+
+def _corporate_action(row: tuple[Any, ...]) -> CorporateAction:
+    symbol, series, ex_date, subject, kind, numerator, denominator, isin, record_date, fv = row
+    if kind not in KINDS:
+        raise ValueError(f"unknown corporate action kind {kind!r} stored for {symbol}")
+    return CorporateAction(
+        symbol=symbol,
+        series=series,
+        ex_date=ex_date,
+        subject=subject,
+        kind=cast(Kind, kind),
+        factor=None if numerator is None else Fraction(int(numerator), int(denominator)),
+        isin=isin,
+        record_date=record_date,
+        face_value=fv,
+    )
+
+
+def adjusted_daily_candles(
+    conn: psycopg.Connection,
+    symbol: str,
+    *,
+    start: date,
+    end: date,
+    as_of: date,
+    series: str | None = None,
+) -> list[AdjustedBar]:
+    """The daily bars of ``symbol`` from ``start`` to ``end``, adjusted as known on ``as_of``.
+
+    The raw series is NSE's end-of-day rows, the official unadjusted prices
+    (``end_of_day``); Kite's candles are already adjusted by Kite's rules and
+    are not the input here. The adjustment is computed on every read from the
+    raw rows and the stored factors (``tradeline.adjust``) and is never written
+    back. Actions are the symbol's under every series, applied once each. An
+    action with an ex-date after ``as_of`` is neither applied nor flagged, so
+    a backtest sees the series as it stood on its own date.
+    """
+    rows = end_of_day(conn, symbol, start=start, end=end, series=series)
+    bars = [
+        RawBar(r.symbol, r.series, r.trade_date, r.open, r.high, r.low, r.close, r.traded_qty)
+        for r in rows
+    ]
+    return adjust(bars, corporate_actions(conn, symbol), as_of=as_of)

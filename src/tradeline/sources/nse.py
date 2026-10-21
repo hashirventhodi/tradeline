@@ -1,10 +1,14 @@
-"""NSE: end-of-day files and the equity master.
+"""NSE: end-of-day files, the equity master, and corporate actions.
 
 NSE's site refuses requests that do not look like a browser and rate-limits
 aggressively. ``NseSession`` owns that: it sends browser headers on every
 request, keeps the session cookies the site sets, warms the session up before
 calling the JSON API on ``www.nseindia.com``, and backs off on throttling.
 Adapters call ``session.get`` and never touch headers themselves.
+
+Corporate actions come from the site's JSON API, filtered by ex-date range and
+optionally by symbol. Each record is a free-text ``subject`` ("Bonus 1:1",
+"Dividend - Rs 10 Per Share"); reading it is ``tradeline.adjust``'s job.
 
 End-of-day files come in two layouts. Up to 2024-07-05 NSE published the
 legacy ``cmDDMMMYYYYbhav.csv.zip``; from 2024-07-08 only the UDiFF
@@ -17,14 +21,16 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import logging
 import time
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
-from decimal import Decimal
-from urllib.parse import urlsplit
+from decimal import Decimal, InvalidOperation
+from typing import Any
+from urllib.parse import urlencode, urlsplit
 
 from tradeline.transport import Request, Response, Transport
 
@@ -33,6 +39,7 @@ log = logging.getLogger(__name__)
 ARCHIVES_HOST = "https://nsearchives.nseindia.com"
 SITE_HOST = "https://www.nseindia.com"
 EQUITY_MASTER_URL = f"{ARCHIVES_HOST}/content/equities/EQUITY_L.csv"
+CORPORATE_ACTIONS_URL = f"{SITE_HOST}/api/corporates-corporateActions"
 
 # The first trading day with no legacy file; UDiFF is used from here on.
 UDIFF_FROM = date(2024, 7, 8)
@@ -249,6 +256,71 @@ def parse_equity_master(body: bytes) -> list[ListedSymbol]:
     return rows
 
 
+# --- Corporate actions ------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CorporateActionNotice:
+    """One record of NSE's corporate-action list, before we read its subject."""
+
+    symbol: str
+    series: str
+    isin: str | None
+    ex_date: date
+    record_date: date | None
+    face_value: Decimal | None
+    # NSE's text with its whitespace collapsed; otherwise identical records differ by a space.
+    subject: str
+
+
+def corporate_actions_url(start: date, end: date, *, symbol: str | None = None) -> str:
+    params = {"index": "equities", "from_date": f"{start:%d-%m-%Y}", "to_date": f"{end:%d-%m-%Y}"}
+    if symbol is not None:
+        params["symbol"] = symbol
+    return f"{CORPORATE_ACTIONS_URL}?{urlencode(params)}"
+
+
+def fetch_corporate_actions(
+    session: NseSession, *, start: date, end: date, symbol: str | None = None
+) -> list[CorporateActionNotice]:
+    """Every action with an ex-date from ``start`` to ``end`` inclusive (one symbol's, if named)."""
+    url = corporate_actions_url(start, end, symbol=symbol)
+    response = session.get(url)
+    if response.status != 200:
+        raise NseError(f"HTTP {response.status} fetching {url}")
+    return parse_corporate_actions(response.body)
+
+
+def parse_corporate_actions(body: bytes) -> list[CorporateActionNotice]:
+    try:
+        records = json.loads(body)
+    except ValueError as error:
+        raise NseError("corporate-actions response is not JSON") from error
+    if not isinstance(records, list):
+        raise NseError(f"corporate-actions response is not a list: {str(records)[:80]}")
+    return [_notice(record) for record in records]
+
+
+def _notice(record: dict[str, Any]) -> CorporateActionNotice:
+    return CorporateActionNotice(
+        symbol=_required(record, "symbol"),
+        series=_required(record, "series"),
+        isin=_text(record.get("isin")),
+        ex_date=_nse_date(_required(record, "exDate")),
+        record_date=_optional_nse_date(record.get("recDate")),
+        face_value=_lenient_decimal(record.get("faceVal")),
+        subject=" ".join(_required(record, "subject").split()),
+    )
+
+
+def _required(record: dict[str, Any], key: str) -> str:
+    value = record.get(key)
+    text = _text(None if value is None else str(value))
+    if text is None:
+        raise NseError(f"corporate-action record has no {key}: {str(record)[:120]}")
+    return text
+
+
 # --- Helpers ----------------------------------------------------------------
 
 
@@ -266,6 +338,23 @@ def _unzip_single(body: bytes) -> str:
 def _nse_date(text: str) -> date:
     """NSE's ``04-JAN-2019`` form."""
     return datetime.strptime(text.strip(), "%d-%b-%Y").date()
+
+
+def _optional_nse_date(value: Any) -> date | None:
+    """An NSE date, or None where NSE writes ``-`` (or nothing) for a date it has not set."""
+    text = _text(None if value is None else str(value))
+    return None if text is None or text == "-" else _nse_date(text)
+
+
+def _lenient_decimal(value: Any) -> Decimal | None:
+    """A number where NSE gives one, None where it gives ``-``, blank, or anything else."""
+    text = _text(None if value is None else str(value))
+    if text is None:
+        return None
+    try:
+        return Decimal(text)
+    except InvalidOperation:
+        return None
 
 
 def _text(value: str | None) -> str | None:

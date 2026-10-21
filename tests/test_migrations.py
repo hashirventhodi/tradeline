@@ -81,3 +81,32 @@ def test_the_application_role_cannot_update_or_delete_daily_candles(database_url
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             conn.execute("DELETE FROM candles_daily")
         conn.rollback()
+
+
+def test_the_application_role_cannot_update_or_delete_corporate_actions(
+    database_url: str,
+) -> None:
+    with app_connection(database_url) as conn:
+        conn.execute(
+            "INSERT INTO corporate_actions (symbol, series, ex_date, subject, kind,"
+            " factor_numerator, factor_denominator)"
+            " VALUES ('ROLE', 'EQ', '2024-07-05', 'Bonus 1:5', 'bonus', 5, 6)"
+        )
+        (factor,) = conn.execute(
+            "SELECT factor FROM corporate_actions WHERE symbol = 'ROLE'"
+        ).fetchone()  # type: ignore[misc]
+        conn.rollback()
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("UPDATE corporate_actions SET kind = 'other'")
+        conn.rollback()
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("DELETE FROM corporate_actions")
+        conn.rollback()
+        with pytest.raises(psycopg.errors.CheckViolation):  # a bonus must carry a factor
+            conn.execute(
+                "INSERT INTO corporate_actions (symbol, series, ex_date, subject, kind)"
+                " VALUES ('ROLE', 'EQ', '2024-07-05', 'Bonus 1:1', 'bonus')"
+            )
+        conn.rollback()
+
+    assert str(factor).startswith("0.8333333")

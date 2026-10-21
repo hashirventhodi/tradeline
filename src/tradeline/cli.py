@@ -20,6 +20,7 @@ from tradeline.config import Config, default_config_path, load_config
 from tradeline.db import app_connection, connect
 from tradeline.environment import Environment
 from tradeline.ingest.candles import ingest_candles
+from tradeline.ingest.corporate_actions import ingest_corporate_actions
 from tradeline.ingest.eod import ingest_eod
 from tradeline.logging import configure_logging
 from tradeline.login import login as login_service
@@ -95,6 +96,8 @@ def ingest(ctx: Context, args: argparse.Namespace) -> int:
     end = args.start if args.end is None else args.end
     if args.source == "eod":
         return _ingest_eod(ctx, args, end)
+    if args.source == "corporate-actions":
+        return _ingest_corporate_actions(ctx, args, end)
     return _ingest_candles(ctx, args, end)
 
 
@@ -131,6 +134,24 @@ def _ingest_candles(ctx: Context, args: argparse.Namespace, end: date) -> int:
             "symbols_without_token": list(result.symbols_without_token),
             "rows_written": result.rows_written,
             "anomalies": result.anomalies,
+            "requests": result.requests,
+        },
+    )
+    return 0
+
+
+def _ingest_corporate_actions(ctx: Context, args: argparse.Namespace, end: date) -> int:
+    transport = _transport(ctx, args)
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = ingest_corporate_actions(
+            conn, transport, start=args.start, end=end, symbols=args.symbols
+        )
+    log.info(
+        "ingest corporate-actions finished",
+        extra={
+            "rows_seen": result.rows_seen,
+            "rows_written": result.rows_written,
+            "unparsed": result.unparsed,
             "requests": result.requests,
         },
     )
@@ -227,6 +248,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         help="an NSE symbol to load under every series it has; repeatable;"
         " defaults to every EQ series symbol with a Kite token",
+    )
+    actions = sources.add_parser(
+        "corporate-actions",
+        parents=[fixtures, date_range],
+        help="NSE corporate actions with an ex-date in the range, with our adjustment factors",
+    )
+    actions.add_argument(
+        "--symbol",
+        dest="symbols",
+        metavar="SYMBOL",
+        action="append",
+        help="an NSE symbol to load; repeatable; defaults to every symbol NSE lists",
     )
     return parser
 

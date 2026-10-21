@@ -31,7 +31,8 @@ through the query layer.
 | Question | Answer | Checked on |
 |---|---|---|
 | How far back does Kite daily history go for NSE equities? | INFY from 2003-01-01, RELIANCE from 2000-01-03 (5,869 and 6,664 bars to 2026-10-21). Depth varies by instrument and is well over the ten years Phase 1 needs. | 2026-10-21 |
-| Are Kite candles adjusted for corporate actions? | **Yes.** Bonuses and splits are adjusted in price and volume; at least one other action is adjusted in price only. | 2026-10-21 |
+| Are Kite candles adjusted for corporate actions? | **Yes.** Bonuses and splits are adjusted in price and volume; a dividend of about 2 percent of the price was adjusted in price only, an ordinary dividend was not. | 2026-10-21 |
+| How does Kite round an adjusted price? | To the 5 paisa tick, ties to the even tick. Checked on RELIANCE's 43 bars of July and August 2024 across its 1:1 bonus: 172 prices, 55 of them exact ties, all reproduced; rounding to the paisa or ties away from zero does not. `tradeline.adjust` uses this rule. | 2026-10-21 |
 
 Evidence:
 
@@ -44,11 +45,15 @@ Evidence:
 - INFY also carries a uniform factor of 0.9788 on every bar from at least
   2024-10-25 to 2026-04-01 (sampled: 2024-10-25, 2025-03-03, 2025-06-02,
   2025-09-01, 2025-11-03, 2025-12-01, 2026-01-05, 2026-04-01), with volume
-  unchanged, and none from 2026-07-01 on. No split or bonus explains it: the
-  action lies between 2026-04-01 and 2026-07-01 and adjusts price alone by about
-  2.1 percent. Its identity is to be settled when NSE's corporate-action list is
-  ingested (#5); until then, treat Kite's adjustment set as unknown beyond
-  splits and bonuses.
+  unchanged, and none from 2026-07-01 on. No split or bonus explains it. NSE's
+  corporate-action list (ingested by #5) shows one INFY action in that window:
+  a dividend of Rs 25 ex 2026-06-10, which is 2.12 percent of the 2026-06-09
+  close of 1180.30. Kite left RELIANCE's Rs 10 dividend of 2024-08-19 (0.3
+  percent) unadjusted. A hypothesis from these two data points, not a finding:
+  Kite follows the index convention of adjusting only dividends of 2 percent or
+  more of the price. We adjust no dividends (#5), so our series and Kite's
+  chart agree across splits and bonuses and differ by that factor before a
+  large dividend.
 - The Kite values are stored exactly as returned. `candles_daily` therefore holds
   Kite's adjusted series as of the day it was fetched, not raw prices, and a
   later corporate action will make a refetch disagree with stored bars, which the
@@ -57,10 +62,13 @@ Evidence:
 Consequence: **ADR 0006 is flagged for revision before Phase 2.** It states that
 Kite candles are stored raw and unadjusted and that we compute the adjusted
 series ourselves. Kite's history is already adjusted, by Kite's rules, which
-include at least one action beyond splits and bonuses. The decision to revisit
-is which source is the raw series (NSE end-of-day files are unadjusted and
-official), what Kite's bars are used for, and how a resend after a corporate
-action is reconciled. Not decided here.
+include large dividends. The decision to revisit is which source is the raw
+series, what Kite's bars are used for, and how a resend after a corporate
+action is reconciled. #5 took the first part as far as its query needed: the
+adjusted daily series (`queries.adjusted_daily_candles`) is computed from NSE's
+end-of-day rows, the official unadjusted prices, and Kite's bars serve as the
+cross-check (the RELIANCE comparison is a test). The ADR's wording and the role
+of `candles_daily` remain to be settled.
 
 ## US-market findings (for reference; not the chosen market)
 

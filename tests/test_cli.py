@@ -215,6 +215,42 @@ def test_ingest_candles_plays_fixtures_end_to_end_and_logs_the_run(
     assert lines[-1]["symbols_loaded"] == 1
 
 
+ACTION_FIXTURES = REPO_ROOT / "tests" / "fixtures" / "ingest_corporate_actions"
+
+
+def test_ingest_corporate_actions_plays_fixtures_end_to_end_and_logs_the_run(
+    database_url: str,
+    repo_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", database_url)
+
+    code = main(
+        [
+            "ingest",
+            "corporate-actions",
+            "--from",
+            "2024-07-01",
+            "--to",
+            "2024-12-31",
+            "--play-fixtures",
+            str(ACTION_FIXTURES),
+        ]
+    )
+
+    assert code == 0
+    lines = json_lines(capsys.readouterr().out)
+    assert all(line["command"] == "ingest" for line in lines)
+    (finished,) = [line for line in lines if line["msg"] == "ingest run finished"]
+    assert finished["source"] == "nse_corporate_actions"
+    assert (finished["range_start"], finished["range_end"]) == ("2024-07-01", "2024-12-31")
+    assert (finished["rows_seen"], finished["rows_written"]) == (20, 19)
+    assert finished["by_kind"] == {"bonus": 2, "dividend": 8, "other": 7, "rights": 1, "split": 2}
+    assert lines[-1]["msg"] == "ingest corporate-actions finished"
+    assert lines[-1]["unparsed"] == 0
+
+
 def test_ingest_candles_without_an_access_token_fails_by_name(
     database_url: str,
     repo_config: None,

@@ -1,0 +1,59 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://www.nseindia.com/",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 403,
+    "headers": [
+      [
+        "server",
+        "AkamaiGHost"
+      ],
+      [
+        "content-type",
+        "text/html"
+      ],
+      [
+        "content-length",
+        "370"
+      ],
+      [
+        "expires",
+        "Wed, 21 Oct 2026 08:25:51 GMT"
+      ],
+      [
+        "date",
+        "Wed, 21 Oct 2026 08:25:51 GMT"
+      ],
+      [
+        "connection",
+        "close"
+      ],
+      [
+        "server-timing",
+        "cdn-cache; desc=HIT"
+      ],
+      [
+        "server-timing",
+        "edge; dur=1"
+      ],
+      [
+        "akamai-grn",
+        "0.242a336a.1792571151.109d7ec1"
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000 ; includeSubDomains ; preload"
+      ],
+      [
+        "server-timing",
+        "ak_p; desc=\"1792571151848_1781738020_278757057_19_17779_5_17_-\";dur=1"
+      ]
+    ],
+    "body": "<HTML><HEAD>\n<TITLE>Access Denied</TITLE>\n</HEAD><BODY>\n<H1>Access Denied</H1>\n \nYou don't have permission to access \"http&#58;&#47;&#47;www&#46;nseindia&#46;com&#47;\" on this server.<P>\nReference&#32;&#35;18&#46;242a336a&#46;1792571151&#46;109d7ec1\n<P>https&#58;&#47;&#47;errors&#46;edgesuite&#46;net&#47;18&#46;242a336a&#46;1792571151&#46;109d7ec1</P>\n</BODY>\n</HTML>\n",
+    "body_encoding": "utf-8"
+  }
+}
