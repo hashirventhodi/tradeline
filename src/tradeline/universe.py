@@ -196,7 +196,9 @@ def _candidates(
 ) -> list[_Candidate]:
     """Every symbol with a row in the rule's series in the window, with what eligibility needs."""
     rows = conn.execute(
-        "WITH calendar AS ("
+        # Materialized: inlined into the per-symbol count below, the calendar
+        # would be rebuilt from every end-of-day row once per candidate.
+        "WITH calendar AS MATERIALIZED ("
         "  SELECT DISTINCT trade_date FROM eod_bhavcopy WHERE trade_date < %(month)s),"
         " window_rows AS ("
         "  SELECT * FROM eod_bhavcopy WHERE trade_date >= %(start)s AND trade_date < %(month)s),"
