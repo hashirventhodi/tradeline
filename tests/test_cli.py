@@ -3,14 +3,13 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import pytest
 
 from tradeline.cli import main
+from tradeline.dates import IST
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-IST = ZoneInfo("Asia/Kolkata")
 
 
 def json_lines(text: str) -> list[dict[str, object]]:
@@ -370,6 +369,9 @@ def test_universe_computes_each_month_under_the_configured_rule_and_logs_it(
 
     lines = json_lines(capsys.readouterr().out)
     assert all(line["command"] == "universe" for line in lines)
+    assert all(
+        (line["range_start"], line["range_end"]) == ("2024-08-01", "2024-08-31") for line in lines
+    )
     computed = [line for line in lines if line["msg"] == "universe computed"]
     assert [(line["month"], line["members"]) for line in computed] == [("2024-08-01", 3)]
     assert len(str(computed[0]["rule_version"])) == 64
@@ -506,7 +508,11 @@ def test_sectors_then_verify_universe_print_the_report_and_log_its_summary(
     assert "Overlap: 4 of 5 NIFTY 200 constituents (80.00%)\n" in captured.err
     assert "In NIFTY 200, not in the Universe: 1\n" in captured.err
     assert captured.err.endswith("Universe members without a sector: 0\n")
-    summary = json_lines(captured.out)[-1]
+    checked = json_lines(captured.out)
+    assert all(
+        (line["range_start"], line["range_end"]) == ("2024-08-01", "2024-08-31") for line in checked
+    )
+    summary = checked[-1]
     assert summary["msg"] == "verify-universe finished"
     assert summary["report"]["universe_only"] == ["ABDL"]  # type: ignore[index]
     assert summary["report"]["index_only"] == ["HDFCBANK"]  # type: ignore[index]

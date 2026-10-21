@@ -11,8 +11,9 @@ monthly partitions.
 Kite's minute bars are adjusted for corporate actions like its daily bars
 (see `docs/research.md`); the tests assert the values as Kite returned them.
 
-`../ingest_minute_candles_resend/` is the real INFY response for 2024-07-31
-alone with the 09:15 close changed by hand from 1842.6 to 1843.6.
+A resend with a changed close is not a fixture: the test plays the INFY
+response back narrowed to 2024-07-31 with the 09:15 close moved from 1842.6
+to 1843.6 (`tests/playback.py`).
 
 To re-record after `tradeline login`, with the master and August 2024's
 Universe (top 2, 20-day window, 21-day listing) loaded in a scratch database:

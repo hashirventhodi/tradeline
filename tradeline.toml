@@ -18,7 +18,8 @@ excluded_isin_prefix = "INF"    # ETFs and other fund units trade in EQ with INF
 # A close mismatch: further than this fraction of the price (plus half a
 # 5 paisa tick) from the end-of-day close, after Kite's own adjustment.
 close_tolerance = 0.001
-# The command fails above this percentage of discrepant rows.
+# The command fails at or above this percentage of discrepant rows (missing,
+# extra, and close mismatches together).
 max_discrepancy_pct = 0.1
 
 # RSS feeds for `ingest news`: a name for each feed and its URL. Items carried

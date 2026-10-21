@@ -21,9 +21,10 @@ rounds its adjusted prices to the tick. Bars of one stretch fetched on
 different days, either side of a new action, carry different factors and are
 reported as mismatches, which they are.
 
-The run passes when all discrepancies together are at most
-``max_discrepancy_pct`` of the rows compared, a row being one (symbol,
-series, day) present on either side. Nothing is written: reconcile is a read.
+The run passes when all discrepancies together, close mismatches as well as
+missing and extra rows, are under ``max_discrepancy_pct`` of the rows
+compared, a row being one (symbol, series, day) present on either side; a
+run exactly at the threshold fails. Nothing is written: reconcile is a read.
 """
 
 from __future__ import annotations
@@ -85,6 +86,7 @@ class ReconcileReport:
 
     @property
     def discrepancies(self) -> int:
+        """Every discrepancy of the three kinds: missing, extra, and close mismatches."""
         return len(self.missing) + len(self.extra) + len(self.close_mismatches)
 
     @property
@@ -97,7 +99,8 @@ class ReconcileReport:
 
     @property
     def passed(self) -> bool:
-        return self.discrepancy_pct <= self.max_discrepancy_pct
+        """Discrepancies strictly under the threshold."""
+        return self.discrepancy_pct < self.max_discrepancy_pct
 
     def summary(self) -> dict[str, Any]:
         """The machine-readable report: same data, same output, key for key."""
@@ -121,14 +124,14 @@ class ReconcileReport:
             ],
         }
 
-    def table(self) -> str:
+    def text(self) -> str:
         """The human-readable report."""
         lines = [
             f"reconcile {self.start} to {self.end}: {self.rows} rows,"
             f" {self.discrepancies} discrepancies ({len(self.missing)} missing,"
             f" {len(self.extra)} extra, {len(self.close_mismatches)} close),"
             f" {_pct(self.reconciliation_pct)}% reconciled,"
-            f" threshold {self.max_discrepancy_pct}%: {'PASS' if self.passed else 'FAIL'}",
+            f" must be under {self.max_discrepancy_pct}%: {'PASS' if self.passed else 'FAIL'}",
         ]
         listed = [
             d

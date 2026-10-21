@@ -6,7 +6,7 @@ The NIFTY 200 list and the sector list are NSE's, recorded on 2026-10-21 and
 trimmed (``fixtures/sectors/``): the NIFTY 200 to BAJAJ-AUTO, HDFCBANK, INFY,
 RELIANCE, and TCS. HDFCBANK has no rows in the end-of-day fixtures, so it is
 the constituent the rule cannot rank. A symbol without a sector is made by
-passing the real recorded sector list through ``Omit``, which drops one
+playing the real recorded sector list back through ``omit``, which drops one
 symbol's line on its way to the service.
 """
 
@@ -19,11 +19,12 @@ from pathlib import Path
 import psycopg
 import pytest
 
+from playback import Playback, lines
 from tradeline.config import UniverseRule
 from tradeline.db import app_connection
 from tradeline.ingest.eod import ingest_eod
 from tradeline.sectors import load_sectors
-from tradeline.transport import PlaybackTransport, Request, Response
+from tradeline.transport import PlaybackTransport
 from tradeline.universe import compute_universe
 from tradeline.verify_universe import verify_universe
 
@@ -40,21 +41,12 @@ RULE = UniverseRule(
 )
 
 
-class Omit:
-    """Plays the recorded lists back without ``symbol``'s line."""
-
-    def __init__(self, symbol: str) -> None:
-        self._inner = PlaybackTransport(SECTOR_FIXTURES)
-        self._symbol = symbol
-
-    def send(self, request: Request) -> Response:
-        response = self._inner.send(request)
-        lines = [
-            line
-            for line in response.body.decode().split("\n")
-            if line.split(",")[2:3] != [self._symbol]
-        ]
-        return Response(response.status, response.headers, "\n".join(lines).encode())
+def omit(symbol: str) -> Playback:
+    """The recorded lists played back without ``symbol``'s line."""
+    return Playback(
+        SECTOR_FIXTURES,
+        edit=lines(lambda rows: [row for row in rows if row.split(",")[2:3] != [symbol]]),
+    )
 
 
 @pytest.fixture(scope="module")
@@ -98,7 +90,7 @@ def test_the_report_prints_overlap_and_both_difference_lists_in_a_stable_format(
         conn, PlaybackTransport(SECTOR_FIXTURES), RULE, month=AUGUST, as_of=AUGUST
     )
 
-    assert check.report() == (
+    assert check.text() == (
         f"Universe 2024-08 (rule {RULE.version[:12]}) against NIFTY 200 as of 2024-08-01\n"
         "Overlap: 4 of 5 NIFTY 200 constituents (80.00%)\n"
         "\n"
@@ -116,7 +108,7 @@ def test_the_report_prints_overlap_and_both_difference_lists_in_a_stable_format(
     again = verify_universe(
         conn, PlaybackTransport(SECTOR_FIXTURES), RULE, month=AUGUST, as_of=AUGUST
     )
-    assert again.report() == check.report()
+    assert again.text() == check.text()
 
 
 def test_a_constituent_outside_the_universe_shows_where_the_rule_ranks_it(
@@ -138,14 +130,14 @@ def test_a_constituent_outside_the_universe_shows_where_the_rule_ranks_it(
 
 
 def test_universe_members_without_a_sector_are_listed(other: psycopg.Connection) -> None:
-    load_sectors(other, Omit("ABDL"), effective_date=SECTORS_LOADED)
+    load_sectors(other, omit("ABDL"), effective_date=SECTORS_LOADED)
 
     check = verify_universe(
         other, PlaybackTransport(SECTOR_FIXTURES), RULE, month=AUGUST, as_of=AUGUST
     )
 
     assert [(m.rank, m.symbol) for m in check.without_sector] == [(5, "ABDL")]
-    assert check.report().endswith(
+    assert check.text().endswith(
         "Universe members without a sector: 1\n   rank  symbol\n      5  ABDL\n"
     )
 

@@ -251,7 +251,7 @@ def candle_ranges(start: date, end: date, *, interval: str) -> list[tuple[date, 
 def fetch_candles(
     session: KiteSession, instrument_token: int, *, interval: str, start: date, end: date
 ) -> list[Candle]:
-    """Raw candles for one instrument, oldest first, exactly as Kite returned them.
+    """Kite's candles for one instrument, oldest first, exactly as Kite returned them.
 
     A date-only ``to`` covers that whole day for minute bars too: 31 July to
     1 August 2024 returned both days' 375 bars each.

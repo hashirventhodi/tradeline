@@ -14,14 +14,11 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from fractions import Fraction
 from typing import Any, cast
-from zoneinfo import ZoneInfo
 
 import psycopg
 
 from tradeline.adjust import KINDS, AdjustedBar, CorporateAction, Kind, RawBar, adjust
-
-# Exchange days are Indian calendar days.
-IST = ZoneInfo("Asia/Kolkata")
+from tradeline.dates import IST
 
 
 @dataclass(frozen=True)
@@ -336,8 +333,10 @@ def universe_membership(
 
     ``rule_version`` is a Universe Rule's parameter hash
     (``tradeline.config.UniverseRule.version``); without one, the membership
-    is the one stored under the most recently recorded rule version that has
-    any for the month. A month never computed under the version is empty.
+    is the one stored under the latest rule version recorded on or before
+    ``as_of`` (an Indian calendar day) that has any for the month, so a
+    version recorded later is not seen. A month never computed under the
+    version is empty.
 
     Point in time. The Universe for a month is computed only from end-of-day
     rows dated before its first trading day, so it is known from that day on.
@@ -354,8 +353,9 @@ def universe_membership(
             "SELECT v.version FROM universe_rule_versions v"
             " WHERE EXISTS (SELECT 1 FROM universe_membership m"
             "  WHERE m.month = %s AND m.rule_version = v.version)"
+            " AND v.recorded_at < %s"
             " ORDER BY v.recorded_at DESC, v.version LIMIT 1",
-            (month,),
+            (month, datetime.combine(as_of + timedelta(days=1), time(), IST)),
         ).fetchone()
         if latest is None:
             return []
@@ -375,10 +375,6 @@ def universe_rule_versions(conn: psycopg.Connection) -> list[UniverseRuleVersion
         " ORDER BY recorded_at, version"
     ).fetchall()
     return [UniverseRuleVersion(*row) for row in rows]
-
-
-# Minute bars are stamped in Indian time; a trading day is an Indian calendar day.
-IST = ZoneInfo("Asia/Kolkata")
 
 
 @dataclass(frozen=True)

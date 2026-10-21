@@ -1,4 +1,4 @@
-"""``ingest candles``: raw Kite candles into ``candles_daily`` or ``candles_minute``.
+"""``ingest candles``: Kite's candles into ``candles_daily`` or ``candles_minute``.
 
 One ingest run (source ``kite_candles_daily`` or ``kite_candles_minute``)
 covers every requested symbol over the range. Each symbol is looked up in the
@@ -36,13 +36,13 @@ from typing import Any
 
 import psycopg
 
-from tradeline.ingest import IngestRunCounters, record_ingest_run
+from tradeline.dates import month_of
+from tradeline.ingest import COMMAND, IngestRunCounters, record_ingest_run
 from tradeline.logging import log_context
 from tradeline.sources import kite
 
 log = logging.getLogger(__name__)
 
-COMMAND = "ingest"
 SOURCE_DAILY = "kite_candles_daily"
 SOURCE_MINUTE = "kite_candles_minute"
 EQUITY_SERIES = "EQ"
@@ -65,6 +65,15 @@ class CandleIngestResult:
     rows_written: int
     anomalies: int
     requests: int
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "symbols_loaded": self.symbols_loaded,
+            "symbols_without_token": list(self.symbols_without_token),
+            "rows_written": self.rows_written,
+            "anomalies": self.anomalies,
+            "requests": self.requests,
+        }
 
 
 @dataclass(frozen=True)
@@ -257,7 +266,7 @@ def _insert_candles(
     if not candles:
         return 0, []
     if target.partitioned_by_month:
-        months = sorted({candle.trade_date.replace(day=1) for candle in candles})
+        months = sorted({month_of(candle.trade_date) for candle in candles})
         conn.execute(
             "SELECT candles_minute_partition(month) FROM unnest(%s::date[]) AS month", (months,)
         )

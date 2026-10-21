@@ -10,14 +10,15 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 from tradeline.collect import collect_daily as collect_daily_service
 from tradeline.config import Config, default_config_path, load_config
+from tradeline.dates import IST, month_end, month_of, next_month, parse_month
 from tradeline.db import app_connection, connect
 from tradeline.environment import Environment
 from tradeline.ingest.announcements import ingest_announcements
@@ -25,7 +26,7 @@ from tradeline.ingest.candles import CurrentUniverse, ingest_candles
 from tradeline.ingest.corporate_actions import ingest_corporate_actions
 from tradeline.ingest.eod import ingest_eod
 from tradeline.ingest.news import Feed, ingest_news
-from tradeline.logging import configure_logging
+from tradeline.logging import configure_logging, log_context
 from tradeline.login import login as login_service
 from tradeline.migrations import apply_migrations
 from tradeline.reconcile import reconcile as reconcile_service
@@ -55,9 +56,6 @@ from tradeline.universe import compute_universe
 from tradeline.verify_universe import verify_universe as verify_universe_service
 
 log = logging.getLogger(__name__)
-
-# Kite's access tokens are issued and expire on the Indian calendar day.
-IST = ZoneInfo("Asia/Kolkata")
 
 
 @dataclass(frozen=True)
@@ -109,6 +107,11 @@ def ingest(ctx: Context, args: argparse.Namespace) -> int:
     if args.source == "news":
         return _ingest_news(ctx, args)
     end = args.start if args.end is None else args.end
+    with _scope(args.start, end, getattr(args, "symbols", None)):
+        return _ingest_range(ctx, args, end)
+
+
+def _ingest_range(ctx: Context, args: argparse.Namespace, end: date) -> int:
     if args.source == "eod":
         return _ingest_eod(ctx, args, end)
     if args.source == "corporate-actions":
@@ -122,16 +125,7 @@ def _ingest_eod(ctx: Context, args: argparse.Namespace, end: date) -> int:
     transport = _transport(ctx, args)
     with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
         result = ingest_eod(conn, transport, start=args.start, end=end)
-    log.info(
-        "ingest eod finished",
-        extra={
-            "days_loaded": result.days_loaded,
-            "missing_days": [day.isoformat() for day in result.missing_days],
-            "eod_rows_written": result.eod_rows_written,
-            "anomalies": result.anomalies,
-            "symbol_updates": result.symbol_updates,
-        },
-    )
+    log.info("ingest eod finished", extra=result.summary())
     return 0
 
 
@@ -144,7 +138,7 @@ def _ingest_candles(ctx: Context, args: argparse.Namespace, end: date) -> int:
     universe = None
     if args.interval == INTERVAL_MINUTE and args.symbols is None:
         # Minute history is kept for the current Universe under the configured rule.
-        month = args.universe_month or datetime.now(IST).date().replace(day=1)
+        month = args.universe_month or month_of(datetime.now(IST).date())
         universe = CurrentUniverse(month=month, rule_version=ctx.config.universe.version)
     elif args.universe_month is not None:
         raise ValueError("--universe-month applies to minute candles without --symbol")
@@ -158,17 +152,7 @@ def _ingest_candles(ctx: Context, args: argparse.Namespace, end: date) -> int:
             symbols=args.symbols,
             universe=universe,
         )
-    log.info(
-        "ingest candles finished",
-        extra={
-            "interval": args.interval,
-            "symbols_loaded": result.symbols_loaded,
-            "symbols_without_token": list(result.symbols_without_token),
-            "rows_written": result.rows_written,
-            "anomalies": result.anomalies,
-            "requests": result.requests,
-        },
-    )
+    log.info("ingest candles finished", extra={"interval": args.interval, **result.summary()})
     return 0
 
 
@@ -178,15 +162,7 @@ def _ingest_corporate_actions(ctx: Context, args: argparse.Namespace, end: date)
         result = ingest_corporate_actions(
             conn, transport, start=args.start, end=end, symbols=args.symbols
         )
-    log.info(
-        "ingest corporate-actions finished",
-        extra={
-            "rows_seen": result.rows_seen,
-            "rows_written": result.rows_written,
-            "unparsed": result.unparsed,
-            "requests": result.requests,
-        },
-    )
+    log.info("ingest corporate-actions finished", extra=result.summary())
     return 0
 
 
@@ -195,62 +171,65 @@ def _ingest_announcements(ctx: Context, args: argparse.Namespace, end: date) -> 
     transport = _transport(ctx, args, browser_tls=True)
     with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
         result = ingest_announcements(conn, transport, start=args.start, end=end)
-    log.info(
-        "ingest announcements finished",
-        extra={
-            source: {
-                "rows_seen": r.rows_seen,
-                "rows_written": r.rows_written,
-                "matched": r.matched,
-                "unmatched": r.unmatched,
-                "requests": r.requests,
-            }
-            for source, r in (("nse", result.nse), ("bse", result.bse))
-        },
-    )
+    log.info("ingest announcements finished", extra=result.summary())
     return 0
 
 
 def _ingest_news(ctx: Context, args: argparse.Namespace) -> int:
     """Every configured feed, or the ones named; exits 1 if any feed failed."""
-    configured = ctx.config.news.feeds
-    names = list(configured) if args.feeds is None else args.feeds
-    unknown = [name for name in names if name not in configured]
-    if unknown:
-        raise ValueError(f"news feeds not configured in [news.feeds]: {', '.join(unknown)}")
-    feeds = [Feed(name, configured[name]) for name in names]
+    feeds = _feeds(ctx, args.feeds)
     transport = _transport(ctx, args)
     with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
         result = ingest_news(conn, transport, feeds=feeds)
     log.log(
         logging.ERROR if result.failed_feeds else logging.INFO,
         "ingest news finished",
-        extra={
-            "rows_seen": result.rows_seen,
-            "rows_written": result.rows_written,
-            "failed_feeds": list(result.failed_feeds),
-        },
+        extra=result.summary(),
     )
     return 1 if result.failed_feeds else 0
 
 
+def _feeds(ctx: Context, names: Sequence[str] | None = None) -> list[Feed]:
+    """The configured feeds named, in that order; every configured feed by default."""
+    configured = ctx.config.news.feeds
+    names = list(configured) if names is None else names
+    unknown = [name for name in names if name not in configured]
+    if unknown:
+        raise ValueError(f"news feeds not configured in [news.feeds]: {', '.join(unknown)}")
+    return [Feed(name, configured[name]) for name in names]
+
+
 def reconcile(ctx: Context, args: argparse.Namespace) -> int:
-    """Compare candles with end-of-day rows; fail above the configured threshold.
+    """Compare candles with end-of-day rows; fail unless under the configured threshold.
 
     The summary is the last JSON line on stdout; the table goes to stderr.
     """
     end = args.start if args.end is None else args.end
-    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
-        report = reconcile_service(
-            conn, ctx.config.reconcile, start=args.start, end=end, symbols=args.symbols
+    with _scope(args.start, end, args.symbols):
+        with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+            report = reconcile_service(
+                conn, ctx.config.reconcile, start=args.start, end=end, symbols=args.symbols
+            )
+        sys.stderr.write(report.text())
+        log.log(
+            logging.INFO if report.passed else logging.ERROR,
+            "reconcile finished",
+            extra={"report": report.summary()},
         )
-    sys.stderr.write(report.table())
-    log.log(
-        logging.INFO if report.passed else logging.ERROR,
-        "reconcile finished",
-        extra={"report": report.summary()},
-    )
     return 0 if report.passed else 1
+
+
+@contextmanager
+def _scope(start: date, end: date, symbols: Sequence[str] | None = None) -> Iterator[None]:
+    """Every line the command logs inside carries its range, and its symbols when named.
+
+    An ingest run inside binds its own source and range over these.
+    """
+    fields: dict[str, object] = {"range_start": start.isoformat(), "range_end": end.isoformat()}
+    if symbols is not None:
+        fields["symbols"] = list(symbols)
+    with log_context(**fields):
+        yield
 
 
 def _transport(ctx: Context, args: argparse.Namespace, *, browser_tls: bool = False) -> Transport:
@@ -271,8 +250,7 @@ def collect_daily(ctx: Context, args: argparse.Namespace) -> int:
     the ingest run history has a row for every source.
     """
     day = datetime.now(IST).date() if args.day is None else args.day
-    configured = ctx.config.news.feeds
-    feeds = [Feed(name, url) for name, url in configured.items()]
+    feeds = _feeds(ctx)
 
     def kite() -> KiteSession:
         return KiteSession(
@@ -281,35 +259,22 @@ def collect_daily(ctx: Context, args: argparse.Namespace) -> int:
             access_token=ctx.secrets.require(KITE_ACCESS_TOKEN),
         )
 
-    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
-        result = collect_daily_service(
-            conn,
-            day=day,
-            rule=ctx.config.universe,
-            feeds=feeds,
-            transport=_transport(ctx, args),
-            browser_transport=_transport(ctx, args, browser_tls=True),
-            kite=kite,
+    with _scope(day, day):
+        with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+            result = collect_daily_service(
+                conn,
+                day=day,
+                rule=ctx.config.universe,
+                feeds=feeds,
+                transport=_transport(ctx, args),
+                browser_transport=_transport(ctx, args, browser_tls=True),
+                kite=kite,
+            )
+        log.log(
+            logging.INFO if result.succeeded else logging.ERROR,
+            "collect-daily finished",
+            extra=result.summary(),
         )
-    log.log(
-        logging.INFO if result.succeeded else logging.ERROR,
-        "collect-daily finished",
-        extra={
-            "day": day.isoformat(),
-            "collection_id": str(result.collection_id),
-            "runs": {
-                r.source: {
-                    "status": r.status,
-                    "rows_seen": r.rows_seen,
-                    "rows_written": r.rows_written,
-                    "seconds": round(r.duration.total_seconds(), 3),
-                }
-                for r in result.runs
-            },
-            "failed_sources": list(result.failed_sources),
-            "failed_feeds": list(result.failed_feeds),
-        },
-    )
     return 0 if result.succeeded else 1
 
 
@@ -318,11 +283,14 @@ def universe(ctx: Context, args: argparse.Namespace) -> int:
     end = args.month if args.to is None else args.to
     if end < args.month:
         raise ValueError(f"month {end:%Y-%m} is before {args.month:%Y-%m}")
-    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+    with (
+        _scope(args.month, month_end(end)),
+        app_connection(ctx.secrets.require(DATABASE_URL)) as conn,
+    ):
         month = args.month
         while month <= end:
             compute_universe(conn, ctx.config.universe, month=month)
-            month = (month.replace(day=28) + timedelta(days=4)).replace(day=1)
+            month = next_month(month)
     return 0
 
 
@@ -331,18 +299,7 @@ def sectors(ctx: Context, args: argparse.Namespace) -> int:
     transport = _transport(ctx, args)
     with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
         result = load_sectors(conn, transport, effective_date=datetime.now(IST).date())
-    log.info(
-        "sectors finished",
-        extra={
-            "effective_date": result.effective_date.isoformat(),
-            "rows_seen": result.rows_seen,
-            "rows_written": result.rows_written,
-            "changes": [
-                {"symbol": c.symbol, "before": c.before, "after": c.after} for c in result.changes
-            ],
-            "anomalies": result.anomalies,
-        },
-    )
+    log.info("sectors finished", extra=result.summary())
     return 0
 
 
@@ -352,20 +309,16 @@ def verify_universe(ctx: Context, args: argparse.Namespace) -> int:
     The report goes to stderr; its summary is the last JSON line on stdout.
     """
     today = datetime.now(IST).date()
-    month = today.replace(day=1) if args.month is None else args.month
+    month = month_of(today) if args.month is None else args.month
     transport = _transport(ctx, args)
-    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
-        check = verify_universe_service(
-            conn, transport, ctx.config.universe, month=month, as_of=today
-        )
-    sys.stderr.write(check.report())
-    log.info("verify-universe finished", extra={"report": check.summary()})
+    with _scope(month, month_end(month)):
+        with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+            check = verify_universe_service(
+                conn, transport, ctx.config.universe, month=month, as_of=today
+            )
+        sys.stderr.write(check.text())
+        log.info("verify-universe finished", extra={"report": check.summary()})
     return 0
-
-
-def _month(text: str) -> date:
-    """A month as YYYY-MM, as its first day."""
-    return datetime.strptime(text, "%Y-%m").date()
 
 
 Command = Callable[[Context, argparse.Namespace], int]
@@ -438,7 +391,7 @@ def build_parser() -> argparse.ArgumentParser:
     candles = sources.add_parser(
         "candles",
         parents=[fixtures, date_range],
-        help="raw Kite candles for symbols over a date range (needs `login` today)",
+        help="Kite's candles for symbols over a date range (needs `login` today)",
     )
     candles.add_argument(
         "--interval",
@@ -458,7 +411,7 @@ def build_parser() -> argparse.ArgumentParser:
     candles.add_argument(
         "--universe-month",
         metavar="YYYY-MM",
-        type=_month,
+        type=parse_month,
         help="minute candles: the Universe month whose members are loaded, under the"
         " configured rule; defaults to the current month in India",
     )
@@ -497,12 +450,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="compute and record the Universe for months from loaded end-of-day files",
     )
     universe_parser.add_argument(
-        "--month", metavar="YYYY-MM", type=_month, required=True, help="the first month"
+        "--month", metavar="YYYY-MM", type=parse_month, required=True, help="the first month"
     )
     universe_parser.add_argument(
         "--to",
         metavar="YYYY-MM",
-        type=_month,
+        type=parse_month,
         help="the last month; defaults to --month",
     )
 
@@ -520,14 +473,14 @@ def build_parser() -> argparse.ArgumentParser:
     verify_parser.add_argument(
         "--month",
         metavar="YYYY-MM",
-        type=_month,
+        type=parse_month,
         help="the Universe month to compare; defaults to the current month",
     )
 
     reconcile_parser = subparsers.add_parser(
         "reconcile",
         parents=[date_range],
-        help="compare daily candles with NSE end-of-day files; exit 1 above the threshold",
+        help="compare daily candles with NSE end-of-day files; exit 1 unless under the threshold",
     )
     reconcile_parser.add_argument(
         "--symbol",

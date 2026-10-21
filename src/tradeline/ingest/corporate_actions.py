@@ -29,13 +29,12 @@ from typing import Any
 import psycopg
 
 from tradeline.adjust import CorporateAction, interpret, looks_adjusting
-from tradeline.ingest import IngestRunCounters, record_ingest_run
+from tradeline.ingest import COMMAND, IngestRunCounters, record_ingest_run
 from tradeline.sources import nse
 from tradeline.transport import Transport
 
 log = logging.getLogger(__name__)
 
-COMMAND = "ingest"
 SOURCE = "nse_corporate_actions"
 # Unparsed subjects and anomalies are counted in full; this many of each are recorded in detail.
 MAX_RECORDED = 100
@@ -48,6 +47,15 @@ class CorporateActionIngestResult:
     unparsed: int
     anomalies: int
     requests: int
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "rows_seen": self.rows_seen,
+            "rows_written": self.rows_written,
+            "unparsed": self.unparsed,
+            "anomalies": self.anomalies,
+            "requests": self.requests,
+        }
 
 
 def ingest_corporate_actions(

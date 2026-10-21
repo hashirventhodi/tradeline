@@ -19,19 +19,29 @@ from pathlib import Path
 import psycopg
 import pytest
 
+from playback import (
+    Playback,
+    in_requested_range,
+    kite_candles,
+    no_candles,
+    recorded_range,
+    shift_close,
+    then,
+)
 from tradeline import queries
 from tradeline.db import app_connection
 from tradeline.ingest.candles import CandleIngestResult, ingest_candles
 from tradeline.ingest.eod import ingest_eod
 from tradeline.sources.kite import KiteSession
-from tradeline.transport import PlaybackTransport, Request, Response
+from tradeline.transport import PlaybackTransport, Request, Response, Transport
 
 EOD_FIXTURES = Path(__file__).parent / "fixtures" / "ingest_eod"
 FIXTURES = Path(__file__).parent / "fixtures" / "ingest_candles"
-RESEND = Path(__file__).parent / "fixtures" / "ingest_candles_resend"
 START, END = date(2024, 7, 1), date(2024, 8, 30)
 TRADING_DAYS = 43
 SYMBOLS = 4  # the EQ series symbols; BAFNAPH is BE and is loaded only when named
+INFY_TOKEN = "408065"
+RECORDED = recorded_range(START.isoformat(), END.isoformat())
 
 
 class FakeClock:
@@ -58,19 +68,7 @@ class TimedPlayback:
         return self._inner.send(request)
 
 
-class ChunkedKite:
-    """Answers any historical request with the same bars; records the requests it sees."""
-
-    def __init__(self, body: bytes) -> None:
-        self._body = body
-        self.calls: list[Request] = []
-
-    def send(self, request: Request) -> Response:
-        self.calls.append(request)
-        return Response(200, (("content-type", "application/json"),), self._body)
-
-
-def kite_session(transport: TimedPlayback, clock: FakeClock) -> KiteSession:
+def kite_session(transport: Transport, clock: FakeClock) -> KiteSession:
     return KiteSession(
         transport, api_key="key", access_token="tok", clock=clock.time, sleep=clock.sleep
     )
@@ -196,8 +194,11 @@ def test_a_be_series_symbol_is_not_loaded_by_default_but_is_when_named(
 def test_a_range_longer_than_kites_limit_is_fetched_in_chunks_of_two_thousand_days(
     database_url: str, two_runs: TwoRuns
 ) -> None:
-    """Kite answers one request with at most 2000 days; the service asks in pieces."""
-    kite = ChunkedKite(b'{"status":"success","data":{"candles":[]}}')
+    """Kite answers one request with at most 2000 days; the service asks in pieces.
+
+    Every request is answered with INFY's recorded response emptied of its bars.
+    """
+    kite = Playback(FIXTURES, ask=RECORDED, edit=kite_candles(no_candles))
     clock = FakeClock()
     session = KiteSession(
         kite, api_key="key", access_token="tok", clock=clock.time, sleep=clock.sleep
@@ -217,10 +218,14 @@ def test_a_range_longer_than_kites_limit_is_fetched_in_chunks_of_two_thousand_da
 def test_a_resent_bar_with_a_changed_close_keeps_the_stored_bar_and_records_an_anomaly(
     database_url: str, two_runs: TwoRuns
 ) -> None:
-    """The resend fixture is INFY for 1 July 2024 with the close altered by hand."""
+    """INFY's recorded bar for 1 July 2024 is played back with its close moved by a rupee."""
     day = date(2024, 7, 1)
     clock = FakeClock()
-    transport = TimedPlayback(RESEND, clock)
+    transport = Playback(
+        FIXTURES,
+        ask=RECORDED,
+        edit=kite_candles(then(in_requested_range, shift_close(INFY_TOKEN, "2024-07-01", "1"))),
+    )
     with app_connection(database_url) as conn:
         result = ingest_candles(
             conn, kite_session(transport, clock), start=day, end=day, symbols=["INFY"]

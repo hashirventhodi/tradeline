@@ -13,29 +13,39 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import psycopg
 import pytest
 
+from playback import (
+    Playback,
+    in_requested_range,
+    kite_candles,
+    no_candles,
+    recorded_range,
+    shift_close,
+    then,
+)
 from tradeline import queries
 from tradeline.config import UniverseRule
+from tradeline.dates import IST
 from tradeline.db import app_connection
 from tradeline.ingest.candles import CandleIngestResult, CurrentUniverse, ingest_candles
 from tradeline.ingest.eod import ingest_eod
 from tradeline.sources.kite import INTERVAL_MINUTE, KiteSession
-from tradeline.transport import PlaybackTransport, Request, Response
+from tradeline.transport import PlaybackTransport, Request
 from tradeline.universe import compute_universe
 
 UNIVERSE_FIXTURES = Path(__file__).parent / "fixtures" / "universe"
 FIXTURES = Path(__file__).parent / "fixtures" / "ingest_minute_candles"
-RESEND = Path(__file__).parent / "fixtures" / "ingest_minute_candles_resend"
-IST = ZoneInfo("Asia/Kolkata")
 AUGUST = date(2024, 8, 1)
 JULY_31 = date(2024, 7, 31)
 RULE = UniverseRule(top_n=2, lookback_trading_days=20, min_listing_trading_days=21)
 UNIVERSE = CurrentUniverse(month=AUGUST, rule_version=RULE.version)
 BARS_PER_DAY = 375  # 09:15 to 15:29
+INFY_TOKEN = "408065"
+# Both recorded responses cover 31 July and 1 August 2024.
+RECORDED = recorded_range("2024-07-31", "2024-08-01")
 
 
 def ist(day: date, hour: int, minute: int) -> datetime:
@@ -203,23 +213,14 @@ def test_without_a_universe_for_the_month_the_run_is_refused(database_url: str) 
         )
 
 
-class EmptyKite:
-    """Answers any historical request with no bars; records the requests it sees."""
-
-    def __init__(self) -> None:
-        self.calls: list[Request] = []
-
-    def send(self, request: Request) -> Response:
-        self.calls.append(request)
-        body = b'{"status":"success","data":{"candles":[]}}'
-        return Response(200, (("content-type", "application/json"),), body)
-
-
 def test_a_range_longer_than_kites_limit_is_fetched_in_chunks_of_sixty_days(
     database_url: str, two_runs: TwoRuns
 ) -> None:
-    """Kite refuses a minute request spanning more than 60 days (checked live)."""
-    kite = EmptyKite()
+    """Kite refuses a minute request spanning more than 60 days (checked live).
+
+    Every request is answered with INFY's recorded response emptied of its bars.
+    """
+    kite = Playback(FIXTURES, ask=RECORDED, edit=kite_candles(no_candles))
     with app_connection(database_url) as conn:
         result = ingest_candles(
             conn,
@@ -241,11 +242,18 @@ def test_a_range_longer_than_kites_limit_is_fetched_in_chunks_of_sixty_days(
 def test_a_resent_minute_bar_with_a_changed_close_keeps_the_stored_bar_and_is_an_anomaly(
     database_url: str, two_runs: TwoRuns
 ) -> None:
-    """The resend fixture is INFY's real 31 July response with the 09:15 close altered."""
+    """INFY's recorded 31 July bars are played back with the 09:15 close moved by a rupee."""
+    resend = Playback(
+        FIXTURES,
+        ask=RECORDED,
+        edit=kite_candles(
+            then(in_requested_range, shift_close(INFY_TOKEN, "2024-07-31T09:15", "1"))
+        ),
+    )
     with app_connection(database_url) as conn:
         result = ingest_candles(
             conn,
-            kite_session(PlaybackTransport(RESEND)),
+            kite_session(resend),
             start=JULY_31,
             end=JULY_31,
             interval=INTERVAL_MINUTE,

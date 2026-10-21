@@ -1,0 +1,133 @@
+"""Recorded responses played back with a deliberate change, so no fixture is edited by hand.
+
+A test that needs a response the sources never sent (a missing bar, a changed
+close, a reclassified symbol, a day narrowed out of a recorded range) plays the
+real recording back through ``Playback`` with an ``ask`` that maps its request
+onto the recorded one, an ``edit`` that changes the recorded body, or both.
+"""
+
+import json
+from collections.abc import Callable
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
+from urllib.parse import parse_qs, urlsplit
+
+from tradeline.transport import PlaybackTransport, Request, Response, UnrecordedRequest
+
+Ask = Callable[[Request], Request]
+Edit = Callable[[Request, bytes], bytes]
+Candle = list[Any]  # Kite's [timestamp, open, high, low, close, volume]
+CandleEdit = Callable[[Request, list[Candle]], list[Candle]]
+
+
+class Playback:
+    """Serves each request from the first directory that recorded it.
+
+    ``ask`` turns the request into the one that was recorded; ``edit`` is then
+    applied to the recorded body, given the request as it was sent. Every
+    request is noted in ``calls`` as it was sent.
+    """
+
+    def __init__(self, *dirs: Path, ask: Ask | None = None, edit: Edit | None = None) -> None:
+        self._playbacks = [PlaybackTransport(d) for d in dirs]
+        self._ask = ask
+        self._edit = edit
+        self.calls: list[Request] = []
+
+    def send(self, request: Request) -> Response:
+        self.calls.append(request)
+        recorded = request if self._ask is None else self._ask(request)
+        response = self._recorded(recorded)
+        if self._edit is None:
+            return response
+        return Response(response.status, response.headers, self._edit(request, response.body))
+
+    def _recorded(self, request: Request) -> Response:
+        for playback in self._playbacks:
+            try:
+                return playback.send(request)
+            except UnrecordedRequest:
+                continue
+        raise UnrecordedRequest(f"no fixture for {request.describe()} in any directory")
+
+
+def recorded_range(start: str, end: str) -> Ask:
+    """Ask Kite's historical endpoint for the recorded ``start`` to ``end`` instead."""
+
+    def ask(request: Request) -> Request:
+        parts = urlsplit(request.url)
+        recorded = parts._replace(query=f"from={start}&to={end}").geturl()
+        return Request(request.method, recorded, request.headers, request.body)
+
+    return ask
+
+
+def kite_candles(edit: CandleEdit) -> Edit:
+    """An edit of the candles in a Kite historical response."""
+
+    def edit_body(request: Request, body: bytes) -> bytes:
+        document = json.loads(body)
+        document["data"]["candles"] = edit(request, document["data"]["candles"])
+        return json.dumps(document).encode()
+
+    return edit_body
+
+
+def in_requested_range(request: Request, candles: list[Candle]) -> list[Candle]:
+    """The candles inside the range the request asked for, as Kite would have sent them."""
+    query = parse_qs(urlsplit(request.url).query)
+    start, end = query["from"][0], query["to"][0]
+    return [c for c in candles if start <= c[0][:10] <= end]
+
+
+def no_candles(request: Request, candles: list[Candle]) -> list[Candle]:
+    return []
+
+
+def lines(edit: Callable[[list[str]], list[str]]) -> Edit:
+    """An edit of a text body, line by line."""
+
+    def edit_body(request: Request, body: bytes) -> bytes:
+        return "\n".join(edit(body.decode().split("\n"))).encode()
+
+    return edit_body
+
+
+def drop_bar(token: str, stamp: str) -> CandleEdit:
+    """Instrument ``token``'s bars whose timestamp starts with ``stamp`` left out."""
+
+    def edit(request: Request, candles: list[Candle]) -> list[Candle]:
+        if f"/historical/{token}/" not in request.url:
+            return candles
+        return [c for c in candles if not c[0].startswith(stamp)]
+
+    return edit
+
+
+def shift_close(token: str, stamp: str, by: str) -> CandleEdit:
+    """Instrument ``token``'s close moved by ``by`` rupees on the bars whose timestamp
+    starts with ``stamp``, their high and low kept consistent."""
+
+    def edit(request: Request, candles: list[Candle]) -> list[Candle]:
+        if f"/historical/{token}/" not in request.url:
+            return candles
+        for candle in candles:
+            if candle[0].startswith(stamp):
+                candle[4] = float(Decimal(str(candle[4])) + Decimal(by))
+                candle[2] = max(candle[2], candle[4])
+                candle[3] = min(candle[3], candle[4])
+        return candles
+
+    return edit
+
+
+def then(*edits: CandleEdit) -> CandleEdit:
+    """The candle edits applied in turn."""
+
+    def edit(request: Request, candles: list[Candle]) -> list[Candle]:
+        for each in edits:
+            candles = each(request, candles)
+        return candles
+
+    return edit

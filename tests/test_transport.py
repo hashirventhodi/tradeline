@@ -4,6 +4,7 @@ import pytest
 
 from tradeline.environment import Environment
 from tradeline.transport import (
+    BrowserTransport,
     LiveTransport,
     LiveTransportForbidden,
     PlaybackTransport,
@@ -27,12 +28,12 @@ class CannedTransport:
         return self.response
 
 
-@pytest.mark.parametrize("browser_tls", [False, True])
-def test_live_transport_cannot_be_constructed_under_the_test_environment(
-    browser_tls: bool,
+@pytest.mark.parametrize("live", [LiveTransport, BrowserTransport])
+def test_a_live_transport_cannot_be_constructed_under_the_test_environment(
+    live: type[LiveTransport | BrowserTransport],
 ) -> None:
     with pytest.raises(LiveTransportForbidden):
-        LiveTransport(browser_tls=browser_tls)
+        live()
 
 
 def test_the_default_transport_under_test_refuses_every_call() -> None:

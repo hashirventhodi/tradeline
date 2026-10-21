@@ -15,8 +15,13 @@ summary rather than to a filing's symbol and name fields:
   Reliance Industries.
 
 A phrase that is the name of more than one symbol is ambiguous and matches
-none. Names are found left to right, the longest first at each position,
-without overlap, so a short name inside a longer matched one does not count.
+none. So is the name of an exchange ("BSE", "NSE", "MCX"): "BSE Sensex"
+names the exchange's index, not BSE Ltd. A listed company whose symbol or
+short name is an exchange's name is matched only by its full name with the
+legal suffix ("BSE Ltd", "BSE Limited"), never by the bare token.
+
+Names are found left to right, the longest first at each position, without
+overlap, so a short name inside a longer matched one does not count.
 """
 
 from __future__ import annotations
@@ -35,6 +40,8 @@ _SYMBOL_TOKEN = re.compile(r"[A-Za-z0-9&-]+")
 _POSSESSIVE = re.compile(r"['’]s\b")
 _SUFFIX = " limited"
 _MIN_NAME_LENGTH = 2
+# Exchange names, in ``name_key`` form: alone in text they name the exchange.
+_EXCHANGES = frozenset({"bse", "nse", "mcx"})
 
 
 class TextMatcher:
@@ -48,7 +55,12 @@ class TextMatcher:
         for symbol, name in listings:
             if name:
                 phrase = name_key(name).removesuffix(_SUFFIX)
-                if len(phrase) >= _MIN_NAME_LENGTH:
+                if phrase in _EXCHANGES:
+                    # name_key reads "Ltd" as "Limited" only at the end of a
+                    # name, so in running text both spellings are looked for.
+                    for suffix in (_SUFFIX, " ltd"):
+                        owners[phrase + suffix].add(symbol)
+                elif len(phrase) >= _MIN_NAME_LENGTH:
                     owners[phrase].add(symbol)
         self._names = {phrase: next(iter(s)) for phrase, s in owners.items() if len(s) == 1}
         alternatives = sorted(self._names, key=lambda p: (-len(p), p))
@@ -71,7 +83,8 @@ class TextMatcher:
         found = {
             symbol
             for token in _SYMBOL_TOKEN.findall(text)
-            if (symbol := self._symbols.match(symbol=token)) is not None
+            if name_key(token) not in _EXCHANGES
+            and (symbol := self._symbols.match(symbol=token)) is not None
         }
         if self._pattern is not None:
             # name_key drops apostrophes, which keeps "Reddy's" whole but turns a
