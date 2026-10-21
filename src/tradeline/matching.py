@@ -11,8 +11,9 @@ certain:
    Irrigation's ordinary and DVR shares are), is unmatched.
 
 Normalising a name removes only differences of spelling, never of identity:
-case, punctuation, ``&`` against ``and``, runs of spaces, and a trailing
-``Ltd`` against ``Limited`` ("INFOSYS LTD." is "Infosys Limited"). There is no
+case, punctuation (apostrophes are dropped, so "Reddy's" is "Reddys"), ``&``
+against ``and``, runs of spaces, a leading ``The``, and a trailing ``Ltd``
+against ``Limited`` ("INFOSYS LTD." is "Infosys Limited"). There is no
 fuzzy or partial matching and no model call (Phase 1 spec).
 
 The master is read once into a ``SymbolMatcher``; matching is then pure, so a
@@ -29,15 +30,17 @@ import psycopg
 
 from tradeline import queries
 
+_APOSTROPHE = re.compile(r"['’]")
 _NOT_WORD = re.compile(r"[^0-9a-z]+")
+_THE = re.compile(r"^the ")
 _LTD = re.compile(r"\bltd$")
 
 
 def name_key(name: str) -> str:
     """The form of a company name that two spellings of one name share."""
-    text = name.casefold().replace("&", " and ")
+    text = _APOSTROPHE.sub("", name.casefold()).replace("&", " and ")
     text = " ".join(_NOT_WORD.sub(" ", text).split())
-    return _LTD.sub("limited", text)
+    return _LTD.sub("limited", _THE.sub("", text))
 
 
 class SymbolMatcher:

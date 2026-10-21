@@ -8,9 +8,10 @@ summary rather than to a filing's symbol and name fields:
   any character other than a letter, a digit, ``&`` or ``-``; each token is
   resolved by ``SymbolMatcher.match(symbol=...)``;
 - a company is mentioned where its name appears as a whole phrase, compared
-  in ``matching.name_key`` form (case, punctuation, ``&`` against ``and``)
-  with the trailing ``Limited`` left off, since text says "Reliance
-  Industries", not "Reliance Industries Limited". "Reliance" alone is not
+  in ``matching.name_key`` form (case, punctuation and apostrophes, ``&``
+  against ``and``) with the trailing ``Limited`` left off, since text says
+  "Reliance Industries", not "Reliance Industries Limited". A possessive
+  ("Infosys's") is read with and without its ``'s``. "Reliance" alone is not
   Reliance Industries.
 
 A phrase that is the name of more than one symbol is ambiguous and matches
@@ -31,6 +32,7 @@ from tradeline import queries
 from tradeline.matching import SymbolMatcher, name_key
 
 _SYMBOL_TOKEN = re.compile(r"[A-Za-z0-9&-]+")
+_POSSESSIVE = re.compile(r"['’]s\b")
 _SUFFIX = " limited"
 _MIN_NAME_LENGTH = 2
 
@@ -72,5 +74,10 @@ class TextMatcher:
             if (symbol := self._symbols.match(symbol=token)) is not None
         }
         if self._pattern is not None:
-            found.update(self._names[m.group(0)] for m in self._pattern.finditer(name_key(text)))
+            # name_key drops apostrophes, which keeps "Reddy's" whole but turns a
+            # possessive "Infosys's" into "infosyss"; the text is read both ways.
+            for form in (text, _POSSESSIVE.sub("", text)):
+                found.update(
+                    self._names[m.group(0)] for m in self._pattern.finditer(name_key(form))
+                )
         return tuple(sorted(found))

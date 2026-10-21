@@ -44,6 +44,14 @@ def test_a_name_shared_by_two_symbols_is_ambiguous_and_matches_neither() -> None
     assert MATCHER.match("Twin Holdings announces a dividend") == ()
 
 
+def test_a_possessive_or_an_apostrophe_in_the_name_still_matches() -> None:
+    matcher = TextMatcher([("INFY", "Infosys Limited"), ("DRREDDY", "Dr. Reddy's Laboratories")])
+
+    assert matcher.match("Infosys's results beat estimates") == ("INFY",)
+    assert matcher.match("Infosys’ guidance") == ("INFY",)
+    assert matcher.match("DR REDDYS LABORATORIES gains") == ("DRREDDY",)
+
+
 def test_and_and_ampersand_are_one_spelling() -> None:
     assert MATCHER.match("Mahindra and Mahindra sales") == ("M&M",)
 
