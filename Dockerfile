@@ -7,6 +7,6 @@ COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 RUN uv sync --frozen --no-dev
 
-COPY tradeline.toml ./
+COPY tradeline.toml manual_links.csv ./
 
 ENTRYPOINT ["uv", "run", "--no-sync", "tradeline"]

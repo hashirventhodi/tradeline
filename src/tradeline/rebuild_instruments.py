@@ -13,6 +13,11 @@ trade-for-trade; SM and ST, SME). The block-deal window (BL), same-day
 settlement (T0), and debt and fund series are left out: they trade beside a
 Symbol's EQ rows or carry their own ISINs, and would read as ISIN changes.
 
+The manual Instrument Links are the one piece of evidence not in the
+database: the caller reads them from the checked-in file
+(``tradeline.manual_links``) and passes them in, so a malformed file refuses
+the rebuild before anything is read or replaced.
+
 Each rebuild is recorded in the run history (command ``instruments``, source
 ``instrument_links``) with its counts.
 """
@@ -21,6 +26,7 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from typing import Any
@@ -34,6 +40,7 @@ from tradeline.instruments import (
     Evidence,
     InstrumentBuild,
     Listing,
+    ManualLink,
     Span,
     build_instruments,
 )
@@ -62,9 +69,11 @@ class InstrumentRebuildResult:
         }
 
 
-def rebuild_instruments(conn: psycopg.Connection) -> InstrumentRebuildResult:
+def rebuild_instruments(
+    conn: psycopg.Connection, *, manual_links: Sequence[ManualLink] = ()
+) -> InstrumentRebuildResult:
     with record_ingest_run(conn, command=COMMAND, source=SOURCE) as run:
-        evidence = read_evidence(conn)
+        evidence = read_evidence(conn, manual_links=manual_links)
         built = build_instruments(evidence)
         _replace(conn, built)
         conn.commit()
@@ -74,6 +83,7 @@ def rebuild_instruments(conn: psycopg.Connection) -> InstrumentRebuildResult:
         run.details = {
             "spans": len(evidence.spans),
             "symbol_changes": len(evidence.symbol_changes),
+            "manual_links": len(evidence.manual_links),
             "instruments": len(built.instruments),
             "links": dict(sorted(links.items())),
             "keys_from": dict(sorted(Counter(i.key_from for i in built.instruments).items())),
@@ -92,13 +102,14 @@ def rebuild_instruments(conn: psycopg.Connection) -> InstrumentRebuildResult:
     )
 
 
-def read_evidence(conn: psycopg.Connection) -> Evidence:
-    """Everything the builder reads, from the stored sources."""
+def read_evidence(conn: psycopg.Connection, *, manual_links: Sequence[ManualLink] = ()) -> Evidence:
+    """Everything the builder reads: the stored sources, and the manual links given."""
     return Evidence(
         spans=_spans(conn),
         symbol_changes=queries.symbol_changes(conn),
         corporate_actions=_adjusting_actions(conn),
         listings=_listings(conn),
+        manual_links=tuple(manual_links),
     )
 
 
