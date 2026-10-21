@@ -20,7 +20,7 @@ import io
 import logging
 import time
 import zipfile
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -120,7 +120,7 @@ def _needs_session(url: str) -> bool:
 
 
 @dataclass(frozen=True)
-class EodRow:
+class EndOfDayRow:
     trade_date: date
     symbol: str
     series: str
@@ -146,7 +146,7 @@ def bhavcopy_url(day: date) -> str:
     )
 
 
-def fetch_bhavcopy(session: NseSession, day: date) -> list[EodRow] | None:
+def fetch_bhavcopy(session: NseSession, day: date) -> list[EndOfDayRow] | None:
     """The day's rows, or None when NSE has no file for that day (a holiday, or a gap)."""
     url = bhavcopy_url(day)
     response = session.get(url)
@@ -157,7 +157,7 @@ def fetch_bhavcopy(session: NseSession, day: date) -> list[EodRow] | None:
     return parse_bhavcopy(response.body, day)
 
 
-def parse_bhavcopy(body: bytes, day: date) -> list[EodRow]:
+def parse_bhavcopy(body: bytes, day: date) -> list[EndOfDayRow]:
     text = _unzip_single(body)
     reader = csv.DictReader(io.StringIO(text))
     header = [name.strip() for name in reader.fieldnames or ()]
@@ -173,8 +173,8 @@ def parse_bhavcopy(body: bytes, day: date) -> list[EodRow]:
     return rows
 
 
-def _udiff_row(record: dict[str, str]) -> EodRow:
-    return EodRow(
+def _udiff_row(record: dict[str, str]) -> EndOfDayRow:
+    return EndOfDayRow(
         trade_date=date.fromisoformat(record["TradDt"]),
         symbol=record["TckrSymb"].strip(),
         series=record["SctySrs"].strip(),
@@ -191,12 +191,12 @@ def _udiff_row(record: dict[str, str]) -> EodRow:
     )
 
 
-def _legacy_row(record: dict[str, str]) -> EodRow:
-    return EodRow(
+def _legacy_row(record: dict[str, str]) -> EndOfDayRow:
+    return EndOfDayRow(
         trade_date=_nse_date(record["TIMESTAMP"]),
         symbol=record["SYMBOL"].strip(),
         series=record["SERIES"].strip(),
-        isin=_text(record["ISIN"]),
+        isin=_text(record.get("ISIN")),  # absent before mid-2011
         open=_decimal(record["OPEN"]),
         high=_decimal(record["HIGH"]),
         low=_decimal(record["LOW"]),
@@ -281,16 +281,3 @@ def _decimal(value: str | None) -> Decimal | None:
 def _int(value: str | None) -> int:
     value = (value or "").strip()
     return int(Decimal(value)) if value else 0
-
-
-def weekdays(start: date, end: date) -> Iterator[date]:
-    """Monday to Friday from ``start`` to ``end`` inclusive: the days NSE may have a file.
-
-    Exchange holidays are not known here, so a holiday shows up as a day with
-    no file. Weekend special sessions (rare) are not visited.
-    """
-    day = start
-    while day <= end:
-        if day.weekday() < 5:
-            yield day
-        day = day.fromordinal(day.toordinal() + 1)

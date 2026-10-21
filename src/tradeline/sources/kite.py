@@ -31,9 +31,7 @@ class KiteError(RuntimeError):
 @dataclass(frozen=True)
 class KiteInstrument:
     instrument_token: int
-    exchange_token: int
     trading_symbol: str
-    name: str
 
 
 def trading_symbol(symbol: str, series: str) -> str:
@@ -53,9 +51,7 @@ def parse_instruments(body: bytes) -> list[KiteInstrument]:
     return [
         KiteInstrument(
             instrument_token=int(record["instrument_token"]),
-            exchange_token=int(record["exchange_token"]),
             trading_symbol=record["tradingsymbol"].strip(),
-            name=record["name"].strip(),
         )
         for record in reader
         if record["segment"] == "NSE" and record["instrument_type"] == "EQ"
