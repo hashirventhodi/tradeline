@@ -28,7 +28,18 @@ class Config:
     class Logging:
         level: str = "INFO"
 
+    @dataclass(frozen=True)
+    class Reconcile:
+        # A candle's close differs from the end-of-day close when it is further
+        # from it, once Kite's own adjustment factor is taken out, than this
+        # fraction of the price plus half of Kite's 5 paisa tick.
+        close_tolerance: float = 0.001
+        # ``reconcile`` fails when missing, extra, and mismatched rows together
+        # exceed this percentage of the rows compared (Phase 1: under 0.1).
+        max_discrepancy_pct: float = 0.1
+
     logging: Logging = field(default_factory=Logging)
+    reconcile: Reconcile = field(default_factory=Reconcile)
 
 
 def default_config_path() -> Path:

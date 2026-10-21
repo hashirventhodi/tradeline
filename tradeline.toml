@@ -3,3 +3,10 @@
 
 [logging]
 level = "INFO"
+
+[reconcile]
+# A close mismatch: further than this fraction of the price (plus half a
+# 5 paisa tick) from the end-of-day close, after Kite's own adjustment.
+close_tolerance = 0.001
+# The command fails above this percentage of discrepant rows.
+max_discrepancy_pct = 0.1
