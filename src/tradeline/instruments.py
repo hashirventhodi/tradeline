@@ -53,8 +53,8 @@ by side, whether the absorbed company's ISIN ends (MINDTREE into LTI) or the
 surviving company carries on (HDFC into HDFCBANK).
 
 A new Symbol that takes up an ISIN an earlier Symbol ended under, with no
-NSE record or manual link for the pair, is not joined either: it is a **link candidate**, for the
-Operator to cite in a manual link or leave split (ADR 0016).
+NSE record or manual link for the pair, is not joined either: it is a **Link
+Candidate**, for the Operator to cite in a manual link or leave split (ADR 0016).
 
 An Instrument's key is ``SYMBOL@YYYY-MM-DD``: its first Symbol and the earliest
 NSE listing date of any of its (Symbol, ISIN) pairs, or its first Raw Series
@@ -196,7 +196,7 @@ class LinkCandidate:
 class InstrumentBuild:
     instruments: tuple[Instrument, ...]
     anomalies: tuple[Anomaly, ...]
-    candidates: tuple[LinkCandidate, ...]
+    link_candidates: tuple[LinkCandidate, ...]
 
 
 def build_instruments(evidence: Evidence) -> InstrumentBuild:
@@ -208,11 +208,11 @@ def build_instruments(evidence: Evidence) -> InstrumentBuild:
     recorded = {(r.old_symbol, r.new_symbol) for r in evidence.symbol_changes} | {
         (m.old_symbol, m.new_symbol) for m in evidence.manual_links
     }
-    candidates = _candidates(stretches, groups, recorded)
+    candidates = _link_candidates(stretches, groups, recorded)
     return InstrumentBuild(
         instruments=tuple(sorted(instruments, key=lambda i: i.key)),
         anomalies=tuple(sorted(anomalies, key=lambda a: (a.on, a.symbol, a.kind, a.detail))),
-        candidates=tuple(
+        link_candidates=tuple(
             sorted(candidates, key=lambda c: (c.new_first, c.new_symbol, c.old_symbol, c.isin))
         ),
     )
@@ -499,10 +499,10 @@ def _conflict(link: Link, earlier: Span, later: Span) -> Anomaly:
     )
 
 
-# --- Candidates -------------------------------------------------------------
+# --- Link Candidates --------------------------------------------------------
 
 
-def _candidates(
+def _link_candidates(
     stretches: list[_Stretch], groups: list[_Group], recorded: set[tuple[str, str]]
 ) -> list[LinkCandidate]:
     """Each Symbol's stretch that takes up an ISIN an earlier Symbol's ended under, unjoined.

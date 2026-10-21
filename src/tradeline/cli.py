@@ -362,7 +362,7 @@ def rebuild_instruments(ctx: Context, args: argparse.Namespace) -> int:
 
 
 def instruments(ctx: Context, args: argparse.Namespace) -> int:
-    """The anomalies, ended Instruments, link candidates, and stale Universe months; read only.
+    """The anomalies, ended Instruments, Link Candidates, and stale Universe months; read only.
 
     The report goes to stderr; its summary is the last JSON line on stdout.
     """
@@ -554,7 +554,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers.add_parser(
         "instruments",
-        help="review the last rebuild: anomalies, ended Instruments, link candidates, and"
+        help="review the last rebuild: anomalies, ended Instruments, Link Candidates, and"
         " stale Universe months; writes nothing",
     )
     verify_parser = subparsers.add_parser(

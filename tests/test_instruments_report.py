@@ -4,7 +4,7 @@ The fixture database is built from recordings with two deliberate changes to
 NSE's symbol-change list, played back through ``playback.lines``:
 
 - the ZOMATO to ETERNAL record is left out, so ETERNAL, under ZOMATO's ISIN
-  from 9 April 2025, is a link candidate and ZOMATO's Instrument ends on the 8th;
+  from 9 April 2025, is a Link Candidate and ZOMATO's Instrument ends on the 8th;
 - INTERISE's record (old and new Symbol the same) is rewritten as INFY to TCS
   effective 1 August 2024, a record the builder must refuse: both trade
   throughout July and August 2024.
@@ -97,7 +97,7 @@ def test_the_report_lists_the_refused_link_the_ended_instruments_and_the_candida
         ("TCS@2004-08-25", date(2024, 8, 30), "TCS"),
         ("ZOMATO@2025-04-07", date(2025, 4, 8), "ZOMATO"),
     ]
-    (candidate,) = report.candidates
+    (candidate,) = report.link_candidates
     assert (
         candidate.old_symbol,
         candidate.new_symbol,
@@ -118,7 +118,7 @@ def test_the_rebuild_recorded_its_counts_in_the_run_details(conn: psycopg.Connec
         "links": {},
         "keys_from": {"first_row": 1, "listing_date": 6},
         "anomalies": {"conflicting_link": 1},
-        "candidates": 1,
+        "link_candidates": 1,
         "stale_months": 0,
     }
 
@@ -143,7 +143,7 @@ def test_the_instruments_command_prints_the_report_and_writes_nothing(
         "anomalies": {"conflicting_link": 1},
         "ended": 6,
         "without_candles": {},
-        "candidates": 1,
+        "link_candidates": 1,
         "stale_months": {},
     }
     assert "refused NSE symbol change INFY to TCS effective 2024-08-01" in err

@@ -737,7 +737,7 @@ def instrument_anomalies(conn: psycopg.Connection) -> list[Anomaly]:
 
 
 def link_candidates(conn: psycopg.Connection) -> list[LinkCandidate]:
-    """The last rebuild's link candidates, oldest new Symbol first."""
+    """The last rebuild's Link Candidates, oldest new Symbol first."""
     rows = conn.execute(
         "SELECT old_symbol, new_symbol, isin, old_last, new_first FROM instrument_link_candidates"
         " ORDER BY new_first, new_symbol, old_symbol, isin"

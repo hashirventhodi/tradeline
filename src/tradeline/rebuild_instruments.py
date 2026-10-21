@@ -35,7 +35,7 @@ ordinary rename makes no earlier month stale.
 
 Each rebuild is recorded in the run history (command ``instruments``, source
 ``instrument_links``) with its counts: Instruments, links by source,
-anomalies by kind, link candidates, and the Universe months it found stale.
+anomalies by kind, Link Candidates, and the Universe months it found stale.
 """
 
 from __future__ import annotations
@@ -76,7 +76,7 @@ class InstrumentRebuildResult:
     instruments: int
     links: int
     anomalies: int
-    candidates: int
+    link_candidates: int
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -84,7 +84,7 @@ class InstrumentRebuildResult:
             "instruments": self.instruments,
             "links": self.links,
             "anomalies": self.anomalies,
-            "candidates": self.candidates,
+            "link_candidates": self.link_candidates,
         }
 
 
@@ -108,7 +108,7 @@ def rebuild_instruments(
             "links": dict(sorted(links.items())),
             "keys_from": dict(sorted(Counter(i.key_from for i in built.instruments).items())),
             "anomalies": dict(sorted(Counter(a.kind for a in built.anomalies).items())),
-            "candidates": len(built.candidates),
+            "link_candidates": len(built.link_candidates),
             "stale_months": stale,
         }
         for anomaly in built.anomalies:
@@ -121,7 +121,7 @@ def rebuild_instruments(
         instruments=len(built.instruments),
         links=sum(links.values()),
         anomalies=len(built.anomalies),
-        candidates=len(built.candidates),
+        link_candidates=len(built.link_candidates),
     )
 
 
@@ -305,7 +305,7 @@ def _replace(conn: psycopg.Connection, built: InstrumentBuild) -> None:
             [a.detail for a in anomalies],
         ),
     )
-    candidates = built.candidates
+    candidates = built.link_candidates
     conn.execute(
         "INSERT INTO instrument_link_candidates"
         " (old_symbol, new_symbol, isin, old_last, new_first)"

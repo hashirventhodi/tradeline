@@ -12,7 +12,7 @@ writes nothing, so it can be run at any time:
 - the Universe's ever-members without Kite candles, by reason: series moved,
   merged, delisted, ended with no reason stated, or still trading (Kite lists
   no token for them), never "missing data";
-- the link candidates: a new Symbol under an ISIN an earlier Symbol had, with
+- the Link Candidates: a new Symbol under an ISIN an earlier Symbol had, with
   no record joining them, for the Operator to cite in a manual link or leave;
 - the stale Universe months, by rule version: months stored under a rule that
   ranks Instruments whose window a later rebuild regrouped. Their membership
@@ -39,7 +39,7 @@ class InstrumentsReport:
     ended: tuple[queries.EndedInstrument, ...]
     # By reason, then key.
     without_candles: tuple[queries.EndReason, ...]
-    candidates: tuple[LinkCandidate, ...]
+    link_candidates: tuple[LinkCandidate, ...]
     stale: tuple[queries.StaleUniverseMonth, ...]
 
     def text(self) -> str:
@@ -62,12 +62,12 @@ class InstrumentsReport:
                 "  " + _joined(m.instrument, m.series, m.last_day, m.last_symbol, m.detail)
                 for m in members
             )
-        lines += ["", f"Link candidates: {len(self.candidates)}"]
-        if self.candidates:
+        lines += ["", f"Link Candidates: {len(self.link_candidates)}"]
+        if self.link_candidates:
             lines.append("  old to new  ISIN  old's last day  new's first day")
             lines.extend(
                 f"  {c.old_symbol} to {c.new_symbol}  {c.isin}  {c.old_last}  {c.new_first}"
-                for c in self.candidates
+                for c in self.link_candidates
             )
         lines += ["", f"Stale Universe months: {len(self.stale)}"]
         for version, months in self._stale_by_version().items():
@@ -84,7 +84,7 @@ class InstrumentsReport:
                 reason: len(members)
                 for reason, members in self._without_candles_by_reason().items()
             },
-            "candidates": len(self.candidates),
+            "link_candidates": len(self.link_candidates),
             "stale_months": {
                 version: [f"{m:%Y-%m}" for m in months]
                 for version, months in self._stale_by_version().items()
@@ -110,7 +110,7 @@ def instruments_report(conn: psycopg.Connection) -> InstrumentsReport:
         anomalies=tuple(queries.instrument_anomalies(conn)),
         ended=tuple(queries.ended_instruments(conn)),
         without_candles=tuple(queries.members_without_candles(conn)),
-        candidates=tuple(queries.link_candidates(conn)),
+        link_candidates=tuple(queries.link_candidates(conn)),
         stale=tuple(queries.stale_universe_months(conn)),
     )
 

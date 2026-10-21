@@ -454,7 +454,7 @@ def test_a_new_symbol_under_an_existing_isin_with_no_record_is_a_link_candidate(
         ["LTI", "LTIM"],
         ["LTM"],
     ]
-    (candidate,) = built.candidates
+    (candidate,) = built.link_candidates
     assert (
         candidate.old_symbol,
         candidate.new_symbol,
