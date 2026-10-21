@@ -575,7 +575,7 @@ def test_ingest_delistings_logs_its_run(
 
     assert all(line["command"] == "ingest" for line in ingested)
     assert ingested[-1]["msg"] == "ingest delistings finished"
-    assert (ingested[-1]["rows_seen"], ingested[-1]["rows_written"]) == (4, 4)
+    assert (ingested[-1]["rows_seen"], ingested[-1]["rows_written"]) == (5, 5)
 
 
 def test_rebuild_instruments_with_a_manual_link_lacking_a_citation_fails_naming_the_row(
