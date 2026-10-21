@@ -1,8 +1,12 @@
 .env
 .env.*
+!.env.example
 *.pem
 __pycache__/
 .venv/
 node_modules/
 dist/
 *.log
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/

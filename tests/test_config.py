@@ -1,0 +1,58 @@
+from pathlib import Path
+
+import pytest
+
+from tradeline.config import Config, ConfigError, load_config
+
+
+def test_loads_settings_from_the_toml_file(tmp_path: Path) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text('[logging]\nlevel = "DEBUG"\n')
+
+    config = load_config(path)
+
+    assert config == Config(logging=Config.Logging(level="DEBUG"))
+
+
+def test_missing_sections_take_their_defaults(tmp_path: Path) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text("")
+
+    config = load_config(path)
+
+    assert config.logging.level == "INFO"
+
+
+def test_unknown_keys_are_refused_by_name(tmp_path: Path) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text("[logging]\nlevel = 'INFO'\ncolour = true\n")
+
+    with pytest.raises(ConfigError, match="logging.colour"):
+        load_config(path)
+
+
+def test_unknown_sections_are_refused_by_name(tmp_path: Path) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text("[universe]\ntop = 200\n")
+
+    with pytest.raises(ConfigError, match="universe"):
+        load_config(path)
+
+
+def test_a_wrong_type_is_refused_by_name(tmp_path: Path) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text("[logging]\nlevel = 3\n")
+
+    with pytest.raises(ConfigError, match="logging.level"):
+        load_config(path)
+
+
+def test_a_missing_file_is_a_clear_error(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="nowhere.toml"):
+        load_config(tmp_path / "nowhere.toml")
+
+
+def test_the_committed_config_file_loads() -> None:
+    config = load_config(Path(__file__).resolve().parents[1] / "tradeline.toml")
+
+    assert config.logging.level == "INFO"

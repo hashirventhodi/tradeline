@@ -1,0 +1,5 @@
+# Non-secret settings. Secrets live in .env (development) or the process
+# environment / SSM (production); see .env.example.
+
+[logging]
+level = "INFO"

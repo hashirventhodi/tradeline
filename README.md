@@ -2,7 +2,20 @@
 
 A long-only swing trading platform for NSE cash equities. A deterministic, versioned quant strategy proposes trades; an AI layer may only veto or shrink them; a code-only risk engine has the final word; and live execution stays off until measurable gates pass.
 
-**Status: planning complete, no code yet.** This repository currently holds the design: vocabulary, decisions, architecture, phases with acceptance criteria, risk controls, and the research that shaped them.
+**Status: Phase 1 in progress.** The design is complete (vocabulary, decisions, architecture, phases with acceptance criteria, risk controls, research) and the walking skeleton is in place: package, migrations, transport, secrets, logging, test harness. Nothing trades.
+
+## Getting started
+
+Needs [uv](https://docs.astral.sh/uv/) and Docker.
+
+```sh
+cp .env.example .env            # fill in the Kite values; DATABASE_URL already points at Compose
+make db                         # docker compose up -d --wait postgres (host port 55432)
+make migrate                    # uv run tradeline migrate
+make check                      # ruff, mypy, pytest against a throwaway database
+```
+
+Settings that are not secret live in `tradeline.toml`. Secrets come from `.env` in development and the process environment in production; see `src/tradeline/secrets.py`. Tests run under `TRADELINE_ENV=test`, where the live transport refuses to be constructed and `pytest-socket` blocks every non-loopback socket; external responses come from fixtures recorded with `RecordingTransport` and served by `PlaybackTransport` (`src/tradeline/transport.py`).
 
 ## Read this first
 

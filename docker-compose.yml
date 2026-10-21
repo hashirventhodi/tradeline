@@ -1,0 +1,34 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: tradeline
+      POSTGRES_PASSWORD: tradeline
+      POSTGRES_DB: tradeline
+    ports:
+      # 55432 on the host so a locally installed Postgres on 5432 is left alone.
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tradeline -d tradeline"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # The app container runs the commands. It is behind a profile so that a plain
+  # `docker compose up` starts only Postgres: `docker compose run --rm app migrate`.
+  app:
+    profiles: ["app"]
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://tradeline:tradeline@postgres:5432/tradeline
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
