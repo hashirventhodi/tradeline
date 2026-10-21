@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:17-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_USER: tradeline
       POSTGRES_PASSWORD: tradeline
@@ -9,7 +9,9 @@ services:
       # 55432 on the host so a locally installed Postgres on 5432 is left alone.
       - "127.0.0.1:55432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # Postgres 18+ images keep data under /var/lib/postgresql/<major>/, so the
+      # mount is the parent directory (makes a future pg_upgrade --link possible).
+      - pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U tradeline -d tradeline"]
       interval: 2s
