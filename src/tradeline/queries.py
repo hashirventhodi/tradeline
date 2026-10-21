@@ -577,6 +577,63 @@ def instrument_history(conn: psycopg.Connection, key: str) -> InstrumentHistory:
 
 
 @dataclass(frozen=True)
+class CandleDisagreement:
+    """Two stored copies of one Instrument-day under different Kite names that differ."""
+
+    trade_date: date
+    series: str
+    kept: DailyCandle  # under Kite's more recent name, the one read
+    other: DailyCandle
+
+
+@dataclass(frozen=True)
+class InstrumentDailyCandles:
+    candles: list[DailyCandle]
+    disagreements: list[CandleDisagreement]
+
+
+def instrument_daily_candles(
+    conn: psycopg.Connection,
+    key: str,
+    *,
+    start: date,
+    end: date,
+    series: str | None = None,
+) -> InstrumentDailyCandles:
+    """Kite's daily candles for the Instrument ``key``, one per day and series, oldest first.
+
+    Kite files an Instrument's history under its name of the day it is
+    fetched, so one Instrument-day can be stored under an old name and a new
+    one. The copy under Kite's more recent name is read, each stored as Kite
+    returned it (``daily_candles``), and any other copy whose values differ
+    from it is reported. A Symbol in no Instrument (none rebuilt yet) is read
+    as its own key.
+    """
+    rows = conn.execute(
+        "SELECT trade_date, symbol, series, open, high, low, close, volume"
+        " FROM candles_daily_instruments"
+        " WHERE instrument = %s AND trade_date BETWEEN %s AND %s"
+        " AND (%s::text IS NULL OR series = %s)"
+        " ORDER BY trade_date, series, named_until DESC NULLS LAST, symbol",
+        (key, start, end, series, series),
+    ).fetchall()
+    candles: list[DailyCandle] = []
+    disagreements: list[CandleDisagreement] = []
+    for row in rows:
+        candle = DailyCandle(*row)
+        kept = candles[-1] if candles else None
+        if kept is None or (kept.trade_date, kept.series) != (candle.trade_date, candle.series):
+            candles.append(candle)
+        elif _bar_values(candle) != _bar_values(kept):
+            disagreements.append(CandleDisagreement(candle.trade_date, candle.series, kept, candle))
+    return InstrumentDailyCandles(candles, disagreements)
+
+
+def _bar_values(candle: DailyCandle) -> tuple[Decimal, Decimal, Decimal, Decimal, int]:
+    return candle.open, candle.high, candle.low, candle.close, candle.volume
+
+
+@dataclass(frozen=True)
 class Sector:
     symbol: str
     sector: str
