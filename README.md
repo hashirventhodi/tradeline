@@ -17,6 +17,7 @@ uv run tradeline login                                          # daily: prints 
 uv run tradeline ingest candles --interval day --symbol INFY --from 2024-07-01 --to 2024-07-31
 uv run tradeline ingest corporate-actions --from 2024-07-01 --to 2024-12-31   # NSE's list, with our factors
 uv run tradeline universe --month 2024-08                       # needs 126 trading days of end-of-day files before the month
+uv run tradeline ingest candles --interval minute --from 2024-07-01 --to 2024-07-31   # the current month's Universe; --universe-month YYYY-MM for another
 uv run tradeline ingest news   # every feed in [news.feeds]; --feed NAME for one
 uv run tradeline ingest announcements --from 2024-07-23   # NSE and BSE filings, matched to symbols
 make check                      # ruff, mypy, pytest against a throwaway database

@@ -268,17 +268,73 @@ def test_ingest_candles_without_an_access_token_fails_by_name(
     assert "KITE_ACCESS_TOKEN" in str(failure["msg"])
 
 
-def test_ingest_candles_accepts_only_the_day_interval_for_now(
+def test_ingest_candles_accepts_only_kites_day_and_minute_intervals(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     with pytest.raises(SystemExit) as exit_info:
-        main(["ingest", "candles", "--interval", "minute", "--from", "2024-07-01"])
+        main(["ingest", "candles", "--interval", "5minute", "--from", "2024-07-01"])
 
     assert exit_info.value.code == 2
     assert "invalid choice" in capsys.readouterr().err
 
 
 UNIVERSE_FIXTURES = REPO_ROOT / "tests" / "fixtures" / "universe"
+MINUTE_FIXTURES = REPO_ROOT / "tests" / "fixtures" / "ingest_minute_candles"
+
+
+def test_ingest_minute_candles_loads_the_configured_rules_universe_for_the_month(
+    database_url: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = tmp_path / "tradeline.toml"
+    config.write_text(
+        "[universe]\ntop_n = 2\nlookback_trading_days = 20\nmin_listing_trading_days = 21\n"
+    )
+    monkeypatch.setenv("TRADELINE_CONFIG", str(config))
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setenv("KITE_API_KEY", "test_api_key")
+    monkeypatch.setenv("KITE_ACCESS_TOKEN", "test_access_token")
+    eod = ["--from", "2024-07-01", "--to", "2024-07-31", "--play-fixtures", str(UNIVERSE_FIXTURES)]
+    assert main(["ingest", "eod", *eod]) == 0
+    assert main(["universe", "--month", "2024-08"]) == 0
+    capsys.readouterr()
+
+    minute = ["--interval", "minute", "--from", "2024-07-31", "--to", "2024-08-01"]
+    code = main(
+        ["ingest", "candles", *minute, "--universe-month", "2024-08"]
+        + ["--play-fixtures", str(MINUTE_FIXTURES)]
+    )
+
+    assert code == 0
+    lines = json_lines(capsys.readouterr().out)
+    (finished,) = [line for line in lines if line["msg"] == "ingest run finished"]
+    assert finished["source"] == "kite_candles_minute"
+    assert finished["rows_written"] == 4 * 375
+    assert finished["universe"]["month"] == "2024-08-01"  # type: ignore[index]
+    assert lines[-1]["msg"] == "ingest candles finished"
+    assert lines[-1]["symbols_loaded"] == 2
+
+
+def test_ingest_minute_candles_for_a_month_without_a_universe_fails_with_the_fix(
+    database_url: str,
+    repo_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setenv("KITE_API_KEY", "test_api_key")
+    monkeypatch.setenv("KITE_ACCESS_TOKEN", "test_access_token")
+
+    code = main(
+        ["ingest", "candles", "--interval", "minute", "--from", "2010-01-04"]
+        + ["--universe-month", "2010-01"]
+    )
+
+    assert code == 1
+    failure = json_lines(capsys.readouterr().out)[-1]
+    assert "tradeline universe --month 2010-01" in str(failure["msg"])
 
 
 def test_universe_computes_each_month_under_the_configured_rule_and_logs_it(
