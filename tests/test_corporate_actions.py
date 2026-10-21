@@ -236,7 +236,7 @@ def test_a_dividend_is_flagged_on_the_bars_before_its_ex_date_once_it_is_known(
         conn, "RELIANCE", start=date(2024, 8, 16), end=DIVIDEND_EX_DATE, as_of=DIVIDEND_EX_DATE
     )
     not_yet = queries.adjusted_daily_candles(
-        conn, "RELIANCE", start=date(2024, 8, 16), end=DIVIDEND_EX_DATE, as_of=date(2024, 8, 18)
+        conn, "RELIANCE", start=date(2024, 8, 16), end=date(2024, 8, 16), as_of=date(2024, 8, 18)
     )
     friday, monday = known
 
@@ -448,3 +448,64 @@ def test_a_response_that_is_not_a_list_fails_the_run_and_is_recorded(
 def test_a_range_that_ends_before_it_starts_is_refused(database_url: str) -> None:
     with app_connection(database_url) as conn, pytest.raises(ValueError, match="before start"):
         ingest_corporate_actions(conn, StubNse(b"[]"), start=END, end=START)
+
+
+def test_bars_after_the_as_of_date_are_refused(conn: psycopg.Connection) -> None:
+    with pytest.raises(ValueError, match="after the as-of date"):
+        queries.adjusted_daily_candles(
+            conn, "RELIANCE", start=START, end=END, as_of=date(2024, 8, 29)
+        )
+
+
+def test_replaying_each_day_as_its_own_as_of_date_shows_only_what_the_market_had_priced(
+    database_url: str, two_runs: TwoRuns
+) -> None:
+    """A decision made on each day of a three-day history with a bonus on the third.
+
+    On the two days before the ex-date the bonus must not touch the series,
+    however certain its announcement; on the ex-date the earlier bars are
+    adjusted so the series is continuous with the price the market now quotes.
+    """
+    days = [date(2024, 9, 2), date(2024, 9, 3), date(2024, 9, 4)]
+    with app_connection(database_url) as conn:
+        conn.execute(
+            "INSERT INTO eod_bhavcopy (trade_date, symbol, series, open, high, low, close,"
+            " traded_qty, traded_value, trades) VALUES"
+            " (%s, 'PIT', 'EQ', 100, 100, 100, 100.00, 10, 1000, 1),"
+            " (%s, 'PIT', 'EQ', 100, 100, 100, 100.00, 10, 1000, 1),"
+            " (%s, 'PIT', 'EQ', 50, 50, 50, 50.00, 20, 1000, 1)",
+            tuple(days),
+        )
+        conn.execute(
+            "INSERT INTO corporate_actions (symbol, series, ex_date, subject, kind,"
+            " factor_numerator, factor_denominator)"
+            " VALUES ('PIT', 'EQ', %s, 'Bonus 1:1', 'bonus', 1, 2)",
+            (days[2],),
+        )
+        conn.commit()
+        replay = {
+            day: queries.adjusted_daily_candles(conn, "PIT", start=days[0], end=day, as_of=day)
+            for day in days
+        }
+
+    assert [(b.close, b.factor) for b in replay[days[0]]] == [(D("100.00"), Fraction(1))]
+    assert [(b.close, b.factor) for b in replay[days[1]]] == [(D("100.00"), Fraction(1))] * 2
+    assert [(b.close, b.volume, b.factor) for b in replay[days[2]]] == [
+        (D("50.00"), 20, Fraction(1, 2)),
+        (D("50.00"), 20, Fraction(1, 2)),
+        (D("50.00"), 20, Fraction(1)),
+    ]
+
+
+def test_the_dividend_flag_appears_on_the_as_of_date_it_became_effective_and_never_earlier(
+    conn: psycopg.Connection,
+) -> None:
+    """Every trading day of the fixture window replayed as its own As-Of Date."""
+    raw = queries.end_of_day(conn, "RELIANCE", start=START, end=END)
+    for day in [r.trade_date for r in raw]:
+        series = queries.adjusted_daily_candles(conn, "RELIANCE", start=START, end=day, as_of=day)
+        expected_flagged = [r.trade_date for r in raw if r.trade_date < DIVIDEND_EX_DATE <= day]
+
+        assert [b.trade_date for b in series] == [r.trade_date for r in raw if r.trade_date <= day]
+        assert all(b.factor == 1 for b in series)
+        assert [b.trade_date for b in series if b.unadjusted] == expected_flagged

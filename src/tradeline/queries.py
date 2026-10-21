@@ -196,16 +196,29 @@ def adjusted_daily_candles(
     as_of: date,
     series: str | None = None,
 ) -> list[AdjustedBar]:
-    """The daily bars of ``symbol`` from ``start`` to ``end``, adjusted as known on ``as_of``.
+    """The Adjusted Series of ``symbol`` from ``start`` to ``end`` as it stood on ``as_of``.
 
-    The raw series is NSE's end-of-day rows, the official unadjusted prices
+    The Raw Series is NSE's end-of-day rows, the official unadjusted prices
     (``end_of_day``); Kite's candles are already adjusted by Kite's rules and
     are not the input here. The adjustment is computed on every read from the
     raw rows and the stored factors (``tradeline.adjust``) and is never written
-    back. Actions are the symbol's under every series, applied once each. An
-    action with an ex-date after ``as_of`` is neither applied nor flagged, so
-    a backtest sees the series as it stood on its own date.
+    back. Actions are the symbol's under every series, applied once each.
+
+    Point in time. ``as_of`` is the adjustment reference date: an action is
+    applied, or flagged, only if its ex-date is on or before ``as_of``, the
+    ex-date being the day the market price itself changed. An action announced
+    before ``as_of`` but ex-dated after it is correctly not applied, because
+    the prices before its ex-date are still the ones the market quoted. Bars
+    after ``as_of`` are refused rather than returned, so a decision replayed
+    on ``as_of`` cannot see a later bar. What this does not model: NSE's list
+    is read as it stands at ingestion, so an action NSE later revised or
+    withdrew is known here in its final form on every ``as_of``.
     """
+    if end > as_of:
+        raise ValueError(
+            f"range end {end} is after the as-of date {as_of}: bars after the as-of date"
+            " are not known on it"
+        )
     rows = end_of_day(conn, symbol, start=start, end=end, series=series)
     bars = [
         RawBar(r.symbol, r.series, r.trade_date, r.open, r.high, r.low, r.close, r.traded_qty)

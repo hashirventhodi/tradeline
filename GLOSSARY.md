@@ -118,6 +118,32 @@ The validation protocol in which parameters are chosen on a rolling window and e
 **Expectancy**:
 Average profit per trade after all costs, in rupees or as a fraction of equity.
 
+### Price data
+
+**Raw Series**:
+A symbol's daily prices and volumes exactly as NSE's official end-of-day files state them, never adjusted and never modified.
+_Avoid_: Unadjusted prices, raw candles (the broker's candles are the broker's own adjusted view)
+
+**Corporate Action**:
+An event NSE lists for a symbol that takes effect on an Ex-Date: a split, bonus, rights issue, dividend, demerger, or meeting. Splits and bonuses change the Adjusted Series; rights issues and dividends are flagged on it; the rest are recorded only.
+_Avoid_: CA, event, announcement (an announcement is a filing, which may or may not describe a Corporate Action)
+
+**Ex-Date**:
+The first trading day on which a symbol trades without the entitlement of a Corporate Action, so the day the market price reflects it.
+_Avoid_: Effective date, action date, record date (the record date is the later date on which holders are fixed)
+
+**Adjustment Factor**:
+The exact ratio by which the prices of every bar before an Ex-Date are multiplied, and its volume divided, so that the series is continuous across a split or bonus.
+_Avoid_: Multiplier, ratio, adjustment
+
+**Adjusted Series**:
+The Raw Series with every Corporate Action known on an As-Of Date applied, computed whenever it is read and never stored. The only price series the engine, the backtester, and the tests read.
+_Avoid_: Adjusted candles, continuous prices, clean prices
+
+**As-Of Date**:
+The date on which an Adjusted Series is asked for. Only Corporate Actions with an Ex-Date on or before it are applied, and no bar after it is returned, so a Run on that date sees only what the market had already priced.
+_Avoid_: Reference date, valuation date, cutoff
+
 ### Operations
 
 **Operator**:

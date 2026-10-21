@@ -304,3 +304,25 @@ def test_nse_subjects_are_read_into_a_kind_and_a_factor(
     subject: str, kind: str, factor: Fraction | None
 ) -> None:
     assert interpret(subject) == (kind, factor)
+
+
+def test_the_ex_date_is_the_boundary_for_the_bar_and_for_the_as_of_date_alike() -> None:
+    """The bar before the ex-date is adjusted, the ex-date bar is not; and the action is
+    unknown on the day before its ex-date, known on the ex-date itself."""
+    bars = [
+        bar(JUL_2, "100.00", "100.00", "100.00", "100.00", 10),
+        bar(JUL_3, "50.00", "50.00", "50.00", "50.00", 20),
+    ]
+    bonus = action(JUL_3, "bonus", Fraction(1, 2), "Bonus 1:1")
+
+    day_before, ex_day = adjust(bars, [bonus], as_of=JUL_3)
+    unknown_before, unknown_ex = adjust(bars, [bonus], as_of=JUL_2)
+
+    assert (day_before.close, day_before.volume, day_before.factor) == (
+        D("50.00"),
+        20,
+        Fraction(1, 2),
+    )
+    assert (ex_day.close, ex_day.volume, ex_day.factor) == (D("50.00"), 20, Fraction(1))
+    assert (unknown_before.close, unknown_before.factor) == (D("100.00"), Fraction(1))
+    assert (unknown_ex.close, unknown_ex.factor) == (D("50.00"), Fraction(1))
