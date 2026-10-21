@@ -5,7 +5,9 @@
 -- last run owns every day after it too. So a day inside a run is that run's
 -- Instrument's, and a day before any run is the next run's: Kite files an
 -- Instrument's history from before a rename under its new name, which NSE never
--- used on those days. ``named_until`` is the run's last end-of-day row, so the
+-- used on those days. (``queries._OWNED`` gives a day between runs to the
+-- earlier Instrument instead: NSE's rows carry the name used that day.)
+-- ``named_until`` is the run's last end-of-day row, so the
 -- Symbol an Instrument was named last is the one with the latest.
 --
 -- ``after`` is exclusive and ``through`` inclusive; NULL is unbounded. A view

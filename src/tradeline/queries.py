@@ -310,7 +310,10 @@ class _Owned:
 # Instrument the Symbol named (``since`` is NULL), because NSE files an
 # Instrument's past Corporate Actions under its Symbol of today (Gujarat Gas's
 # 2019 split is listed under GUJENERGY, the name it took in 2026). A Symbol no
-# Instrument has had is read alone, every day.
+# Instrument has had is read alone, every day. Unlike the ``symbol_instruments``
+# view (migration 0015, for Kite), a day between two runs of a Symbol is the
+# earlier Instrument's: NSE dates a row by the name it used that day, Kite by its
+# name when fetched.
 _OWNED = (
     "starts AS ("
     "  SELECT DISTINCT symbol, first_day, instrument_key FROM instrument_intervals"
