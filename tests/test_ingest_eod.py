@@ -6,8 +6,6 @@ legacy-to-UDiFF file format change on 2024-07-08, two exchange holidays, and
 the weekends in between (all 404s from NSE).
 """
 
-import io
-import zipfile
 from collections.abc import Iterator
 from datetime import date
 from decimal import Decimal
@@ -19,13 +17,15 @@ import pytest
 from tradeline import queries
 from tradeline.db import app_connection
 from tradeline.ingest.eod import EodIngestResult, ingest_eod
-from tradeline.sources.nse import parse_bhavcopy
+from tradeline.sources.nse import NseSession, fetch_bhavcopy
 from tradeline.transport import PlaybackTransport
 
 FIXTURES = Path(__file__).parent / "fixtures" / "ingest_eod"
 START, END = date(2024, 7, 1), date(2024, 8, 30)
 TRADING_DAYS = 43  # 45 weekdays less Muharram (17 Jul) and Independence Day (15 Aug)
 RESEND = Path(__file__).parent / "fixtures" / "ingest_eod_resend"
+# NSE's legacy file for 2020-07-13, trimmed to three symbols.
+TWO_DIGIT_YEAR = Path(__file__).parent / "fixtures" / "ingest_eod_two_digit_year"
 SYMBOLS = 5
 
 
@@ -232,21 +232,13 @@ def test_an_interrupted_run_is_recorded_as_an_error_not_a_success(
 
 def test_a_legacy_file_dated_with_a_two_digit_year_reads_the_same_way() -> None:
     """NSE's legacy file for 13 July 2020 writes its TIMESTAMP as ``13-Jul-20``."""
-    text = (
-        "SYMBOL,SERIES,OPEN,HIGH,LOW,CLOSE,LAST,PREVCLOSE,TOTTRDQTY,TOTTRDVAL,TIMESTAMP,"
-        "TOTALTRADES,ISIN\n"
-        "20MICRONS,EQ,32.85,33.85,31.85,33.45,33.85,32.3,187303,6187285.7,13-Jul-20,1382,"
-        "INE144J01027\n"
-    )
-    archive = io.BytesIO()
-    with zipfile.ZipFile(archive, "w") as z:
-        z.writestr("cm13JUL2020bhav.csv", text)
+    session = NseSession(PlaybackTransport(TWO_DIGIT_YEAR))
 
-    (row,) = parse_bhavcopy(archive.getvalue(), date(2020, 7, 13))
+    rows = fetch_bhavcopy(session, date(2020, 7, 13))
 
-    assert (row.trade_date, row.symbol, row.close, row.traded_qty) == (
-        date(2020, 7, 13),
-        "20MICRONS",
-        Decimal("33.45"),
-        187_303,
-    )
+    assert rows is not None
+    assert [(r.trade_date, r.symbol, r.close, r.traded_qty) for r in rows] == [
+        (date(2020, 7, 13), "20MICRONS", Decimal("33.45"), 187_303),
+        (date(2020, 7, 13), "INFY", Decimal("797.05"), 10_804_911),
+        (date(2020, 7, 13), "RELIANCE", Decimal("1935"), 32_124_397),
+    ]

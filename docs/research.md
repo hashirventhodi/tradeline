@@ -108,9 +108,9 @@ end-of-day files were loaded from 2015-01-01 so that the first month has its
 | `ingest eod --from 2015-01-01 --to 2026-10-20` | 2,923 trading days, 6,483,258 rows, 7,653 symbols, 0 anomalies. 167 weekdays without a file (exchange holidays, about 14 a year), 11 weekend sessions. | 23 min (two runs; see below) |
 | `ingest corporate-actions --from 2015-01-01 --to 2026-10-21` | 26,264 actions in 12 requests: 412 splits, 443 bonuses, 291 rights, 15,611 dividends, 9,507 other. | 20 s |
 | `universe --month 2016-11 --to 2026-10`, twice | 120 months of 200 members; 544 distinct symbols. The second run recomputed every month and found 0 differences. | 174 s, 167 s |
-| `ingest candles --interval day --from 2016-10-21 --to 2026-10-20` for the 454 ever-members with a Kite token | 978,885 bars, 908 requests, 0 anomalies. | 5 min |
+| `ingest candles --interval day --from 2016-10-21 --to 2026-10-20` for the 454 ever-members with a Kite token | 978,885 bars, 908 requests, 0 anomalies. **Partial**: 454 of 544 ever-members; the other 90 have no Kite token (below). | 5 min |
 | `reconcile --from 2016-10-21 --to 2026-10-20` | 985,902 rows, 87,502 discrepancies (8.88 percent): **fail** against 0.1 percent. Causes below. | 7 s |
-| `compare-adjusted` for 20 symbols with splits or bonuses | 26,310 of 48,699 bars equal to the paisa; IRCTC alone matches on every bar. Every mismatch is explained below. | 30 s |
+| `compare-adjusted` for 20 symbols with splits or bonuses | 26,310 of 48,699 bars equal to the paisa; IRCTC alone matches on every bar: **fail**. Every mismatch is explained below. | 3 s |
 | `verify-universe` (October 2026) | 154 of 200 NIFTY 200 constituents (77 percent): **fail** against 85 percent. 0 members without a sector. | 2 s |
 
 ### What the run found
@@ -143,20 +143,24 @@ end-of-day files were loaded from 2015-01-01 so that the first month has its
 | **Muhurat sessions before 2019.** Kite has no bars for the Diwali sessions of 2016-10-30, 2017-10-19, and 2018-11-07. | 935 missing |
 | **BAFNAPH.** A BE symbol with July and August 2024 candles from earlier work; reconcile compares every day NSE lists it. | 998 missing |
 
-With renames, series changes, the muhurat days, and the additive adjustment
-accounted for, about 3,900 discrepancies remain (0.40 percent), almost all of
-them the coarse rounding. None suggests an error in NSE's rows.
+With renames, series changes, the muhurat days, BAFNAPH, and the additive
+adjustment accounted for, about 3,900 discrepancies remain (0.40 percent),
+almost all of them the coarse rounding. None suggests an error in NSE's rows.
 
 ### How the adjusted series compares with Kite's chart
 
-The 20 symbols, with splits and bonuses across the decade: RELIANCE, INFY,
+Kite's stored daily candles stand in for the broker's displayed chart, as in
+#5's RELIANCE comparison; the chart itself was not read. The 20 symbols, with
+splits and bonuses across the decade: RELIANCE, INFY,
 TCS, WIPRO, HDFCBANK, BAJFINANCE, BAJAJFINSV, BEL, EICHERMOT, TATASTEEL,
 KOTAKBANK, DRREDDY, BRITANNIA, ICICIBANK, NTPC, GAIL, CONCOR, MCX, BSE, IRCTC.
 
-- **At all 35 split and bonus Ex-Dates in them, our factor equals Kite's**: the
-  ratio of Kite's close to ours is the same on the five days either side of
-  every one (the apparent jumps at WIPRO 2019, TATASTEEL 2022 and GAIL 2017 to
-  2019 sit in stretches where Kite's adjustment includes the constant above).
+- **At 30 of the 35 split and bonus Ex-Dates in them, the ratio of Kite's close
+  to ours is the same on the five days either side**, so our factor equals
+  Kite's. The other five (WIPRO 2019, TATASTEEL 2022, GAIL 2017, 2018 and 2019)
+  sit in stretches where the ratio moves with the price, which the
+  scale-and-offset fit above describes; that is a fit to the data, not a rule
+  Kite has stated.
 - 26,310 bars are equal to the paisa.
 - 5,636 differ only in rounding, by at most 10 paisa: Kite rounds its older
   adjusted prices to the paisa (TCS before its 2018 bonus: 1199.125 to

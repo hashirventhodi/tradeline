@@ -8,7 +8,7 @@ against the stored candle, on open, high, low, and close to the paisa.
 Volume is not compared: a match is about price.
 
 A bar on one side only is listed by day. The symbol's corporate actions with
-an ex-date in the range or after it, up to ``as_of``, are listed with the
+an Ex-Date in the range or after it, up to ``as_of``, are listed with the
 result, since those are what either side adjusted for.
 
 Mismatches are grouped into stretches: runs of mismatched bars with no
@@ -40,11 +40,18 @@ FACTOR_PLACES = Decimal("0.0001")
 
 
 @dataclass(frozen=True)
+class Prices:
+    open: Decimal | None
+    high: Decimal | None
+    low: Decimal | None
+    close: Decimal | None
+
+
+@dataclass(frozen=True)
 class BarMismatch:
     trade_date: date
-    # (open, high, low, close)
-    kite: tuple[Decimal, Decimal, Decimal, Decimal]
-    ours: tuple[Decimal | None, Decimal | None, Decimal | None, Decimal | None]
+    kite: Prices
+    ours: Prices
 
 
 @dataclass(frozen=True)
@@ -54,8 +61,8 @@ class Stretch:
     first: date
     last: date
     bars: int
-    # The median of Kite's close over ours, to four places.
-    factor: Decimal
+    # The median of Kite's close over ours, to four places; None if no bar has both closes.
+    factor: Decimal | None
 
 
 @dataclass(frozen=True)
@@ -86,6 +93,11 @@ class SymbolComparison:
         return tuple(_stretch(run) for run in runs)
 
     @property
+    def listed_actions(self) -> tuple[CorporateAction, ...]:
+        """``actions`` without meetings, buybacks, and the rest NSE lists that adjust nothing."""
+        return tuple(a for a in self.actions if a.kind != "other")
+
+    @property
     def adjusting_actions(self) -> tuple[CorporateAction, ...]:
         """The splits and bonuses among ``actions``: what our series adjusts for."""
         return tuple(a for a in self.actions if a.kind in ADJUSTED_KINDS)
@@ -114,7 +126,7 @@ class SymbolComparison:
                     "first": s.first.isoformat(),
                     "last": s.last.isoformat(),
                     "bars": s.bars,
-                    "factor": str(s.factor),
+                    "factor": None if s.factor is None else str(s.factor),
                 }
                 for s in self.stretches
             ],
@@ -122,8 +134,7 @@ class SymbolComparison:
             "only_ours": [d.isoformat() for d in self.only_ours],
             "actions": [
                 {"ex_date": a.ex_date.isoformat(), "kind": a.kind, "subject": a.subject}
-                for a in self.actions
-                if a.kind != "other"
+                for a in self.listed_actions
             ],
         }
 
@@ -162,9 +173,8 @@ class AdjustedComparison:
                 )
             if s.only_kite or s.only_ours:
                 lines.append(f"    Kite only: {len(s.only_kite)}  ours only: {len(s.only_ours)}")
-            for a in s.actions:
-                if a.kind != "other":
-                    lines.append(f"    ex {a.ex_date} {a.kind}: {a.subject}")
+            for a in s.listed_actions:
+                lines.append(f"    ex {a.ex_date} {a.kind}: {a.subject}")
         return "\n".join(lines) + "\n"
 
 
@@ -201,8 +211,8 @@ def _compare(
     both = sorted(kite.keys() & ours.keys())
     for day in both:
         k, o = kite[day], ours[day]
-        kite_prices = (k.open, k.high, k.low, k.close)
-        our_prices = (o.open, o.high, o.low, o.close)
+        kite_prices = Prices(k.open, k.high, k.low, k.close)
+        our_prices = Prices(o.open, o.high, o.low, o.close)
         if kite_prices != our_prices:
             mismatches.append(BarMismatch(day, kite_prices, our_prices))
     actions = queries.corporate_actions(conn, symbol, start=start, end=as_of)
@@ -217,6 +227,6 @@ def _compare(
 
 
 def _stretch(run: list[BarMismatch]) -> Stretch:
-    ratios = [m.kite[3] / m.ours[3] for m in run if m.ours[3]]
-    factor = statistics.median(ratios).quantize(FACTOR_PLACES) if ratios else Decimal(0)
+    ratios = [m.kite.close / m.ours.close for m in run if m.kite.close and m.ours.close]
+    factor = statistics.median(ratios).quantize(FACTOR_PLACES) if ratios else None
     return Stretch(run[0].trade_date, run[-1].trade_date, len(run), factor)
