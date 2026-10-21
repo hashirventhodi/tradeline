@@ -47,13 +47,11 @@ from collections import Counter, defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
-from fractions import Fraction
 from typing import Any
 
 import psycopg
 
 from tradeline import queries
-from tradeline.adjust import CorporateAction
 from tradeline.ingest import record_ingest_run
 from tradeline.instruments import (
     Evidence,
@@ -133,7 +131,7 @@ def read_evidence(conn: psycopg.Connection, *, manual_links: Sequence[ManualLink
     return Evidence(
         spans=_spans(conn),
         symbol_changes=queries.symbol_changes(conn),
-        corporate_actions=_adjusting_actions(conn),
+        corporate_actions=queries.adjusting_corporate_actions(conn),
         listings=_listings(conn),
         manual_links=tuple(manual_links),
     )
@@ -156,26 +154,6 @@ def _spans(conn: psycopg.Connection) -> list[Span]:
         (list(SERIES),),
     ).fetchall()
     return [Span(*row) for row in rows]
-
-
-def _adjusting_actions(conn: psycopg.Connection) -> list[CorporateAction]:
-    rows = conn.execute(
-        "SELECT symbol, series, ex_date, subject, kind, factor_numerator, factor_denominator,"
-        " isin FROM corporate_actions WHERE kind IN ('split', 'bonus')"
-        " ORDER BY symbol, ex_date, series, subject"
-    ).fetchall()
-    return [
-        CorporateAction(
-            symbol=symbol,
-            series=series,
-            ex_date=ex_date,
-            subject=subject,
-            kind=kind,
-            factor=Fraction(int(numerator), int(denominator)),
-            isin=isin,
-        )
-        for symbol, series, ex_date, subject, kind, numerator, denominator, isin in rows
-    ]
 
 
 def _listings(conn: psycopg.Connection) -> list[Listing]:

@@ -230,6 +230,17 @@ def _corporate_actions(
     return [_corporate_action(row) for row in rows]
 
 
+def adjusting_corporate_actions(conn: psycopg.Connection) -> list[CorporateAction]:
+    """Every stored split and bonus (a consolidation is a split), under whatever Symbol NSE
+    filed it, by Symbol, then Ex-Date: the actions that can explain an ISIN change."""
+    rows = conn.execute(
+        "SELECT symbol, series, ex_date, subject, kind, factor_numerator, factor_denominator,"
+        " isin, record_date, face_value FROM corporate_actions WHERE kind IN ('split', 'bonus')"
+        " ORDER BY symbol, ex_date, series, subject"
+    ).fetchall()
+    return [_corporate_action(row) for row in rows]
+
+
 def _corporate_action(row: tuple[Any, ...]) -> CorporateAction:
     symbol, series, ex_date, subject, kind, numerator, denominator, isin, record_date, fv = row
     if kind not in KINDS:
@@ -688,11 +699,6 @@ def instrument_history(conn: psycopg.Connection, key: str) -> InstrumentHistory:
     ).fetchone()
     if found is None:
         raise NoInstrument(_unknown_key(key))
-    intervals = conn.execute(
-        "SELECT symbol, series, isin, first_day, last_day FROM instrument_intervals"
-        " WHERE instrument_key = %s ORDER BY first_day, last_day, symbol, series",
-        (key,),
-    ).fetchall()
     links = conn.execute(
         "SELECT kind, on_date, from_symbol, from_isin, to_symbol, to_isin, source"
         " FROM instrument_links WHERE instrument_key = %s"
@@ -705,9 +711,19 @@ def instrument_history(conn: psycopg.Connection, key: str) -> InstrumentHistory:
         first_symbol=first_symbol,
         listed_on=listed_on,
         key_from=key_from,
-        intervals=tuple(Interval(*row) for row in intervals),
+        intervals=_intervals(conn, key),
         links=tuple(Link(*row) for row in links),
     )
+
+
+def _intervals(conn: psycopg.Connection, key: str) -> tuple[Interval, ...]:
+    """An Instrument's intervals, oldest first; none for an unknown key."""
+    rows = conn.execute(
+        "SELECT symbol, series, isin, first_day, last_day FROM instrument_intervals"
+        " WHERE instrument_key = %s ORDER BY first_day, last_day, symbol, series",
+        (key,),
+    ).fetchall()
+    return tuple(Interval(*row) for row in rows)
 
 
 def instrument_anomalies(conn: psycopg.Connection) -> list[Anomaly]:
@@ -765,10 +781,6 @@ class EndReason:
     detail: str
 
 
-_INTERVALS_OF = (
-    "SELECT symbol, series, isin, first_day, last_day FROM instrument_intervals"
-    " WHERE instrument_key = %s ORDER BY last_day DESC, series, symbol"
-)
 # The earliest official record of an ended Instrument's end, under its last
 # Symbol, after its last row and before any later Instrument took the Symbol.
 _NOT_REUSED = (
@@ -795,14 +807,21 @@ def end_reasons(conn: psycopg.Connection, wanted: Iterable[tuple[str, str]]) -> 
 
     An unknown key is refused with ``NoInstrument``.
     """
-    raw_last = instruments_last_day(conn)
+    return _end_reasons(conn, wanted, instruments_last_day(conn))
+
+
+def _end_reasons(
+    conn: psycopg.Connection, wanted: Iterable[tuple[str, str]], raw_last: date | None
+) -> list[EndReason]:
     return [_end_reason(conn, key, series, raw_last) for key, series in wanted]
 
 
 def _end_reason(
     conn: psycopg.Connection, key: str, series: str, raw_last: date | None
 ) -> EndReason:
-    intervals = [Interval(*row) for row in conn.execute(_INTERVALS_OF, (key,)).fetchall()]
+    # Latest first, then by series and Symbol (a stable sort keeps the second order).
+    by_name = sorted(_intervals(conn, key), key=lambda i: (i.series, i.symbol))
+    intervals = sorted(by_name, key=lambda i: i.last, reverse=True)
     if not intervals:
         raise NoInstrument(_unknown_key(key))
     last = intervals[0]
@@ -864,16 +883,18 @@ def ended_instruments(conn: psycopg.Connection) -> list[EndedInstrument]:
     ended, as far as the stored rows show: delisted, suspended, absorbed, or
     renamed with no link to its new Symbol. Only NSE's records say which.
     """
+    raw_last = instruments_last_day(conn)
     rows = conn.execute(
         "SELECT DISTINCT ON (instrument_key) instrument_key, series"
         " FROM instrument_intervals"
         " WHERE instrument_key NOT IN (SELECT instrument_key FROM instrument_intervals"
-        "  WHERE last_day = (SELECT max(last_day) FROM instrument_intervals))"
-        " ORDER BY instrument_key, last_day DESC, series"
+        "  WHERE last_day = %s)"
+        " ORDER BY instrument_key, last_day DESC, series",
+        (raw_last,),
     ).fetchall()
     return [
         EndedInstrument(r.instrument, r.last_day, r.last_symbol, r.reason, r.detail)
-        for r in end_reasons(conn, [(key, series) for key, series in rows])
+        for r in _end_reasons(conn, [(key, series) for key, series in rows], raw_last)
     ]
 
 

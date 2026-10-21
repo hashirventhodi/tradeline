@@ -268,8 +268,7 @@ def _propose(
     """Every link the rules propose, in a fixed order."""
     proposals = [
         *_isin_changes(stretches, evidence.corporate_actions, anomalies),
-        *_symbol_changes(stretches, evidence.symbol_changes),
-        *_manual_links(stretches, evidence.manual_links),
+        *_renames(stretches, evidence.symbol_changes, evidence.manual_links),
     ]
     return sorted(proposals, key=lambda p: (p.link.on, p.link.kind, p.joins[0].id, p.joins[1].id))
 
@@ -339,47 +338,38 @@ def _at_change(ex_date: date, old_last: date, new_first: date) -> bool:
     return all(abs(ex_date - day) <= EX_DATE_SLACK for day in (old_last, new_first))
 
 
-def _symbol_changes(stretches: list[_Stretch], records: Sequence[SymbolChange]) -> list[_Proposal]:
+def _renames(
+    stretches: list[_Stretch], records: Sequence[SymbolChange], rows: Sequence[ManualLink]
+) -> list[_Proposal]:
+    """Each NSE record and manual link, joined by the same rule (``_rename``); a manual
+    link's source is its citation."""
     by_symbol = _by_symbol(stretches)
-    proposals: list[_Proposal] = []
-    for record in sorted(set(records), key=_record_order):
-        effective = record.effective_date
-        proposal = _rename(
-            by_symbol,
-            record.old_symbol,
-            record.new_symbol,
-            effective,
-            kind="symbol_change",
-            source=(
-                f"NSE symbol change {record.old_symbol} to {record.new_symbol}"
-                f" effective {effective.isoformat()}"
-            ),
+    renames: list[tuple[str, str, date, LinkKind, str]] = [
+        (
+            r.old_symbol,
+            r.new_symbol,
+            r.effective_date,
+            "symbol_change",
+            f"NSE symbol change {r.old_symbol} to {r.new_symbol}"
+            f" effective {r.effective_date.isoformat()}",
         )
-        if proposal is not None:
-            proposals.append(proposal)
-    return proposals
-
-
-def _manual_links(stretches: list[_Stretch], rows: Sequence[ManualLink]) -> list[_Proposal]:
-    """A manual link joins as an NSE record does; its source is its citation."""
-    by_symbol = _by_symbol(stretches)
-    proposals: list[_Proposal] = []
-    for row in sorted(set(rows), key=_manual_order):
-        effective = row.effective_date
-        proposal = _rename(
-            by_symbol,
-            row.old_symbol,
-            row.new_symbol,
-            effective,
-            kind="manual",
-            source=(
-                f"manual link {row.old_symbol} to {row.new_symbol}"
-                f" effective {effective.isoformat()}: {row.citation}"
-            ),
+        for r in sorted(set(records), key=_record_order)
+    ] + [
+        (
+            m.old_symbol,
+            m.new_symbol,
+            m.effective_date,
+            "manual",
+            f"manual link {m.old_symbol} to {m.new_symbol}"
+            f" effective {m.effective_date.isoformat()}: {m.citation}",
         )
-        if proposal is not None:
-            proposals.append(proposal)
-    return proposals
+        for m in sorted(set(rows), key=_manual_order)
+    ]
+    proposals = (
+        _rename(by_symbol, old, new, effective, kind=kind, source=source)
+        for old, new, effective, kind, source in renames
+    )
+    return [p for p in proposals if p is not None]
 
 
 def _rename(
