@@ -79,15 +79,14 @@ class CandleIngestResult:
     rows_written: int
     anomalies: int
     requests: int
-    # Each reason's members without a token: the Kite name looked up, the one requested,
-    # the Instrument, and the reason's detail (``queries.EndReason``).
-    without_token_by_reason: dict[str, list[dict[str, str | None]]]
+    # Each reason's members without a token, in the order fetched.
+    without_token_by_reason: dict[queries.WithoutCandlesReason, tuple[WithoutToken, ...]]
 
     def summary(self) -> dict[str, Any]:
         return {
             "symbols_loaded": self.symbols_loaded,
             "symbols_without_token": list(self.symbols_without_token),
-            "without_token_by_reason": self.without_token_by_reason,
+            "without_token_by_reason": _by_reason_summary(self.without_token_by_reason),
             "rows_written": self.rows_written,
             "anomalies": self.anomalies,
             "requests": self.requests,
@@ -95,7 +94,34 @@ class CandleIngestResult:
 
 
 @dataclass(frozen=True)
-class _Instrument:
+class WithoutToken:
+    """A requested (Symbol, series) with no Kite token, under its reason's detail."""
+
+    # The Kite name looked up, and the one requested.
+    symbol: str
+    requested: str
+    # The Instrument's key; None for a Symbol in no Instrument.
+    instrument: str | None
+    # The reason's detail (``queries.EndReason``); empty where there is none.
+    detail: str
+
+    def summary(self) -> dict[str, str | None]:
+        return {
+            "symbol": self.symbol,
+            "requested": self.requested,
+            "instrument": self.instrument,
+            "detail": self.detail,
+        }
+
+
+def _by_reason_summary(
+    by_reason: dict[queries.WithoutCandlesReason, tuple[WithoutToken, ...]],
+) -> dict[str, list[dict[str, str | None]]]:
+    return {reason: [m.summary() for m in members] for reason, members in by_reason.items()}
+
+
+@dataclass(frozen=True)
+class _FetchTarget:
     """What is fetched for a requested (symbol, series): the token of the Instrument's
     current Symbol, the name its bars are stored under."""
 
@@ -173,7 +199,9 @@ def ingest_candles(
             if universe is None
             else {"month": universe.month.isoformat(), "rule_version": universe.rule_version},
         }
-        loaded = _load_symbols(conn, session, run, interval, target, instruments, start, end)
+        loaded, without_token_by_reason = _load_symbols(
+            conn, session, run, interval, target, instruments, start, end
+        )
 
     return CandleIngestResult(
         symbols_loaded=loaded,
@@ -181,7 +209,7 @@ def ingest_candles(
         rows_written=run.rows_written,
         anomalies=run.details["anomalies"],
         requests=run.details["requests"],
-        without_token_by_reason=run.details["without_token_by_reason"],
+        without_token_by_reason=without_token_by_reason,
     )
 
 
@@ -224,7 +252,7 @@ def _universe_members(conn: psycopg.Connection, universe: CurrentUniverse) -> li
 
 def _through_current_symbols(
     conn: psycopg.Connection, requested: list[tuple[str, str]], as_of: date
-) -> list[_Instrument]:
+) -> list[_FetchTarget]:
     """Each requested (symbol, series) as the Instrument the symbol names on ``as_of``,
     fetched under the Symbol that Instrument was named last, with that Symbol's token,
     once each.
@@ -248,10 +276,10 @@ def _through_current_symbols(
         " ORDER BY r.n",
         ([symbol for symbol, _ in requested], [series for _, series in requested], as_of),
     ).fetchall()
-    instruments: dict[tuple[str, str], _Instrument] = {}
+    instruments: dict[tuple[str, str], _FetchTarget] = {}
     for requested_symbol, symbol, series, token, key in rows:
         instruments.setdefault(
-            (symbol, series), _Instrument(requested_symbol, symbol, series, token, key)
+            (symbol, series), _FetchTarget(requested_symbol, symbol, series, token, key)
         )
     return list(instruments.values())
 
@@ -262,10 +290,10 @@ def _load_symbols(
     run: IngestRunCounters,
     interval: str,
     target: _Target,
-    instruments: list[_Instrument],
+    instruments: list[_FetchTarget],
     start: date,
     end: date,
-) -> int:
+) -> tuple[int, dict[queries.WithoutCandlesReason, tuple[WithoutToken, ...]]]:
     loaded = 0
     anomalies = 0
     anomaly_bars: list[dict[str, Any]] = []
@@ -287,7 +315,7 @@ def _load_symbols(
             "requests": 0,
         }
     )
-    tokenless: list[_Instrument] = []
+    tokenless: list[_FetchTarget] = []
     for instrument in instruments:
         with log_context(symbol=instrument.symbol, series=instrument.series):
             if instrument.token is None:
@@ -320,40 +348,42 @@ def _load_symbols(
                 },
             )
     run.details["anomalies"] = anomalies
-    without_token_by_reason.update(_by_reason(conn, tokenless))
+    by_reason = _by_reason(conn, tokenless)
+    without_token_by_reason.update(_by_reason_summary(by_reason))
     if without_token:
         log.warning(
             "symbols without a kite instrument token",
             extra={"symbols": without_token, "by_reason": without_token_by_reason},
         )
-    return loaded
+    return loaded, by_reason
 
 
 def _by_reason(
-    conn: psycopg.Connection, tokenless: list[_Instrument]
-) -> dict[str, list[dict[str, str | None]]]:
+    conn: psycopg.Connection, tokenless: list[_FetchTarget]
+) -> dict[queries.WithoutCandlesReason, tuple[WithoutToken, ...]]:
     """Each Instrument without a token under the reason it has none, in the order fetched."""
     keyed = [(i.instrument, i.series) for i in tokenless if i.instrument is not None]
     found = dict(zip(keyed, queries.end_reasons(conn, keyed), strict=True))
-    by_reason: dict[str, list[dict[str, str | None]]] = {}
+    by_reason: dict[queries.WithoutCandlesReason, list[WithoutToken]] = {}
     for i in tokenless:
         reason = found.get((i.instrument, i.series)) if i.instrument is not None else None
-        by_reason.setdefault(queries.NO_INSTRUMENT if reason is None else reason.reason, []).append(
-            {
-                "symbol": kite.trading_symbol(i.symbol, i.series),
-                "requested": kite.trading_symbol(i.requested, i.series),
-                "instrument": i.instrument,
-                "detail": "" if reason is None else reason.detail,
-            }
+        member = WithoutToken(
+            symbol=kite.trading_symbol(i.symbol, i.series),
+            requested=kite.trading_symbol(i.requested, i.series),
+            instrument=i.instrument,
+            detail="" if reason is None else reason.detail,
         )
-    return by_reason
+        by_reason.setdefault(queries.NO_INSTRUMENT if reason is None else reason.reason, []).append(
+            member
+        )
+    return {reason: tuple(members) for reason, members in by_reason.items()}
 
 
 _CANDLE_VALUES = ("open", "high", "low", "close", "volume")  # everything but the key
 
 
 def _insert_candles(
-    conn: psycopg.Connection, target: _Target, instrument: _Instrument, candles: list[kite.Candle]
+    conn: psycopg.Connection, target: _Target, instrument: _FetchTarget, candles: list[kite.Candle]
 ) -> tuple[int, list[dict[str, Any]]]:
     """Insert what is new; return the count and an anomaly record per present bar that differs."""
     if not candles:
@@ -402,7 +432,7 @@ def _insert_candles(
     return int(written), [_anomaly(target, instrument, values) for values in changed]
 
 
-def _anomaly(target: _Target, instrument: _Instrument, values: list[str]) -> dict[str, Any]:
+def _anomaly(target: _Target, instrument: _FetchTarget, values: list[str]) -> dict[str, Any]:
     key, received, stored = values[0], values[1:6], values[6:11]
     return {
         "symbol": instrument.symbol,

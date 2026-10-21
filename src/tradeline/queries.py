@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from fractions import Fraction
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import psycopg
 
@@ -729,13 +729,17 @@ def link_candidates(conn: psycopg.Connection) -> list[LinkCandidate]:
     return [LinkCandidate(*row) for row in rows]
 
 
-SERIES_MOVED = "series moved"
-MERGED = "merged"
-DELISTED = "delisted"
-ENDED = "ended, reason not stated"
-STILL_TRADING = "still trading"
+EndReasonKind = Literal[
+    "series moved", "merged", "delisted", "ended, reason not stated", "still trading"
+]
+SERIES_MOVED: EndReasonKind = "series moved"
+MERGED: EndReasonKind = "merged"
+DELISTED: EndReasonKind = "delisted"
+ENDED: EndReasonKind = "ended, reason not stated"
+STILL_TRADING: EndReasonKind = "still trading"
 # A Symbol in no Instrument: none rebuilt yet, so no reason can be read.
-NO_INSTRUMENT = "no Instrument"
+WithoutCandlesReason = EndReasonKind | Literal["no Instrument"]
+NO_INSTRUMENT: WithoutCandlesReason = "no Instrument"
 
 
 @dataclass(frozen=True)
@@ -752,7 +756,7 @@ class EndReason:
 
     instrument: str
     series: str
-    reason: str
+    reason: EndReasonKind
     # The last row in the series (series moved, still trading), or the Instrument's last row.
     last_day: date
     # The Symbol of that last row.
@@ -842,7 +846,7 @@ class EndedInstrument:
     last_day: date
     last_symbol: str
     # ``merged``, ``delisted``, or ``ended, reason not stated`` (``EndReason``), and its record.
-    reason: str
+    reason: EndReasonKind
     detail: str
 
 

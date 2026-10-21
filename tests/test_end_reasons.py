@@ -236,7 +236,7 @@ def test_ingest_candles_gives_named_symbols_without_a_token_their_reasons(
     )
 
     assert {
-        reason: [(m["symbol"], m["instrument"]) for m in members]
+        reason: [(m.symbol, m.instrument) for m in members]
         for reason, members in result.without_token_by_reason.items()
     } == {
         "delisted": [("ANGIND-BZ", ANGIND)],

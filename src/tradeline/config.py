@@ -14,7 +14,7 @@ import os
 import tomllib
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, get_args, get_origin, get_type_hints
+from typing import Any, Literal, get_args, get_origin, get_type_hints
 
 CONFIG_PATH_VAR = "TRADELINE_CONFIG"
 DEFAULT_CONFIG_PATH = Path("tradeline.toml")
@@ -24,7 +24,8 @@ class ConfigError(ValueError):
     pass
 
 
-RANK_BY = ("symbol", "instrument")
+RankBy = Literal["symbol", "instrument"]
+RANK_BY: tuple[RankBy, ...] = get_args(RankBy)
 
 
 @dataclass(frozen=True)
@@ -51,7 +52,7 @@ class UniverseRule:
     excluded_isin_prefix: str = "INF"
     # What is ranked: each Symbol on its own, or each Instrument across its
     # Symbols (ADR 0016), so a rename inside the window is not a new listing.
-    rank_by: str = "symbol"
+    rank_by: RankBy = "symbol"
 
     def __post_init__(self) -> None:
         if self.rank_by not in RANK_BY:
@@ -141,6 +142,13 @@ def _build[T](cls: type[T], raw: dict[str, Any], *, prefix: str) -> T:
             values[name] = _build(expected, value, prefix=f"{prefix}{name}.")
         elif get_origin(expected) is dict:
             values[name] = _string_table(value, prefix=f"{prefix}{name}", types=get_args(expected))
+        elif get_origin(expected) is Literal:
+            # A choice: the section refuses a value outside it by name (``__post_init__``).
+            if not isinstance(value, str):
+                raise ConfigError(
+                    f"config key {prefix}{name} must be str, got {type(value).__name__}"
+                )
+            values[name] = value
         elif not isinstance(value, expected):
             raise ConfigError(
                 f"config key {prefix}{name} must be {expected.__name__}, got {type(value).__name__}"
