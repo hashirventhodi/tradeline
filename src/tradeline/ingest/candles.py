@@ -18,6 +18,14 @@ master row without a token is skipped and reported by its Kite trading symbol
 (``BAFNAPH-BE``), the name Kite's instrument dump would have had to list; a
 symbol not in the master is refused up front (``ingest eod`` loads the master).
 
+Which token. Kite's dump lists an instrument under its current name only, so
+a symbol is fetched as the Instrument it names (on the range's end, or in the
+Universe month) through the token of that Instrument's current Symbol, the
+one it was named last, and its bars are stored under that Symbol: ZOMATO is
+fetched as ETERNAL, and ``fetched_through`` in the run's details records it.
+An Instrument asked for under two of its Symbols is fetched once. A symbol in
+no Instrument (none rebuilt yet) is fetched under itself.
+
 Bars are stored exactly as Kite returned them. A bar already stored is left
 as it is: Kite can resend a bar, and a resend whose values differ is an
 anomaly, logged and recorded in the run's details with both versions, never
@@ -78,6 +86,10 @@ class CandleIngestResult:
 
 @dataclass(frozen=True)
 class _Instrument:
+    """What is fetched for a requested (symbol, series): the token of the Instrument's
+    current Symbol, the name its bars are stored under."""
+
+    requested: str
     symbol: str
     series: str
     token: int | None
@@ -135,9 +147,10 @@ def ingest_candles(
     if target is None:
         raise ValueError(f"unknown candle interval {interval!r}")
     if universe is not None:
-        instruments = _universe_instruments(conn, universe)
+        requested, as_of = _universe_members(conn, universe), universe.month
     else:
-        instruments = _instruments(conn, symbols)
+        requested, as_of = _requested(conn, symbols), end
+    instruments = _through_current_symbols(conn, requested, as_of)
 
     with record_ingest_run(
         conn, command=COMMAND, source=target.source, range_start=start, range_end=end
@@ -159,33 +172,32 @@ def ingest_candles(
     )
 
 
-def _instruments(conn: psycopg.Connection, symbols: Sequence[str] | None) -> list[_Instrument]:
+def _requested(conn: psycopg.Connection, symbols: Sequence[str] | None) -> list[tuple[str, str]]:
     wanted = None if symbols is None else list(symbols)
     rows = conn.execute(
-        "SELECT symbol, series, kite_instrument_token FROM symbols"
+        "SELECT symbol, series FROM symbols"
         " WHERE CASE WHEN %s::text[] IS NULL THEN series = %s ELSE symbol = ANY(%s::text[]) END"
         " ORDER BY symbol, series",
         (wanted, EQUITY_SERIES, wanted),
     ).fetchall()
-    instruments = [_Instrument(symbol, series, token) for symbol, series, token in rows]
+    requested = [(symbol, series) for symbol, series in rows]
     if wanted is not None:
-        unknown = sorted(set(wanted) - {i.symbol for i in instruments})
+        unknown = sorted(set(wanted) - {symbol for symbol, _ in requested})
         if unknown:
             raise ValueError(
                 f"symbols not in the instrument master: {', '.join(unknown)};"
                 " run `ingest eod` first"
             )
-    return instruments
+    return requested
 
 
-def _universe_instruments(conn: psycopg.Connection, universe: CurrentUniverse) -> list[_Instrument]:
+def _universe_members(conn: psycopg.Connection, universe: CurrentUniverse) -> list[tuple[str, str]]:
     if universe.month.day != 1:
         raise ValueError(f"a Universe month is given by its first day, not {universe.month}")
     rows = conn.execute(
-        "SELECT m.symbol, m.series, s.kite_instrument_token"
-        " FROM universe_membership m LEFT JOIN symbols s USING (symbol, series)"
-        " WHERE m.month = %s AND m.rule_version = %s"
-        " ORDER BY m.symbol, m.series",
+        "SELECT symbol, series FROM universe_membership"
+        " WHERE month = %s AND rule_version = %s"
+        " ORDER BY symbol, series",
         (universe.month, universe.rule_version),
     ).fetchall()
     if not rows:
@@ -194,7 +206,41 @@ def _universe_instruments(conn: psycopg.Connection, universe: CurrentUniverse) -
             f" {universe.rule_version[:12]}; run `tradeline universe --month"
             f" {universe.month:%Y-%m}` first"
         )
-    return [_Instrument(symbol, series, token) for symbol, series, token in rows]
+    return [(symbol, series) for symbol, series in rows]
+
+
+def _through_current_symbols(
+    conn: psycopg.Connection, requested: list[tuple[str, str]], as_of: date
+) -> list[_Instrument]:
+    """Each requested (symbol, series) as the Instrument the symbol names on ``as_of``,
+    fetched under the Symbol that Instrument was named last, with that Symbol's token,
+    once each.
+
+    Kite's dump lists an instrument under its current name only, so an old
+    Symbol has no token of its own. A symbol in no Instrument (none rebuilt
+    yet, or a series the Instruments leave out) is fetched under itself.
+    """
+    rows = conn.execute(
+        "SELECT r.symbol, coalesce(cur.symbol, r.symbol), r.series, s.kite_instrument_token"
+        " FROM unnest(%s::text[], %s::text[]) WITH ORDINALITY AS r(symbol, series, n)"
+        " LEFT JOIN symbol_instruments m ON m.symbol = r.symbol"
+        "  AND (m.after IS NULL OR %s::date > m.after)"
+        "  AND (m.through IS NULL OR %s::date <= m.through)"
+        " LEFT JOIN LATERAL ("
+        "  SELECT c.symbol FROM symbol_instruments c WHERE c.instrument_key = m.instrument_key"
+        "  ORDER BY c.named_until DESC, c.symbol LIMIT 1"
+        " ) cur ON true"
+        " LEFT JOIN symbols s"
+        "  ON (s.symbol, s.series) = (coalesce(cur.symbol, r.symbol), r.series)"
+        " ORDER BY r.n",
+        ([symbol for symbol, _ in requested], [series for _, series in requested], as_of, as_of),
+    ).fetchall()
+    instruments: dict[tuple[str, str], _Instrument] = {}
+    for requested_symbol, symbol, series, token in rows:
+        instruments.setdefault(
+            (symbol, series), _Instrument(requested_symbol, symbol, series, token)
+        )
+    return list(instruments.values())
 
 
 def _load_symbols(
@@ -215,6 +261,12 @@ def _load_symbols(
         {
             "symbols_requested": len(instruments),
             "symbols_without_token": without_token,
+            # An old Symbol fetched through its Instrument's current one, by Kite trading symbol.
+            "fetched_through": {
+                kite.trading_symbol(i.requested, i.series): kite.trading_symbol(i.symbol, i.series)
+                for i in instruments
+                if i.requested != i.symbol
+            },
             "anomalies": 0,
             "anomaly_bars": anomaly_bars,
             "requests": 0,
