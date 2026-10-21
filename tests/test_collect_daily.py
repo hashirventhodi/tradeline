@@ -15,6 +15,11 @@ own real recorded responses back:
   warm-up is the one recorded in ``fixtures/ingest_announcements/``.
 - ``fixtures/ingest_news/``: two Economic Times RSS feeds, five items each,
   three of them in both.
+- ``fixtures/ingest_corporate_actions/``: NSE's corporate actions with
+  Ex-Dates from 1 July to 31 December 2024. The collection asks for a week
+  either side of the day; ``sources()`` serves that request from the recorded
+  half-year, keeping only the actions in the asked range (``playback``): one,
+  NORBTEAEXP's AGM on 2 August.
 - ``fixtures/instruments/``: NSE's symbol-change list, trimmed to eleven
   records. None of them names a symbol loaded here, so the rebuild links
   nothing, but its counts show it ran on the list and the manual links file.
@@ -38,7 +43,14 @@ import httpx
 import psycopg
 import pytest
 
-from playback import Playback, in_requested_range, kite_candles, recorded_range
+from playback import (
+    Playback,
+    corporate_actions_in_requested_range,
+    in_requested_range,
+    kite_candles,
+    nse_corporate_actions_from,
+    recorded_range,
+)
 from tradeline import queries
 from tradeline.cli import main
 from tradeline.collect import CollectResult, collect_daily
@@ -66,6 +78,7 @@ SOURCES = {
     "nse_equity_master",
     "nse_eod",
     "kite_instruments",
+    "nse_corporate_actions",
     "nse_symbol_changes",
     "instrument_links",
     "kite_candles_daily",
@@ -111,6 +124,9 @@ def sources() -> Playback:
         FIXTURES / "ingest_announcements",
         FIXTURES / "ingest_news",
         FIXTURES / "instruments",
+        FIXTURES / "ingest_corporate_actions",
+        ask=nse_corporate_actions_from("01-07-2024", "31-12-2024"),
+        edit=corporate_actions_in_requested_range,
     )
 
 
@@ -178,15 +194,16 @@ def test_a_collection_loads_every_source_for_the_day_and_records_one_run_each(
     assert queries.end_of_day(conn, "INFY", start=DAY, end=DAY, series="EQ")
 
 
-def test_the_instruments_are_rebuilt_after_end_of_day_and_before_candles_and_the_universe(
+def test_the_instruments_are_rebuilt_after_end_of_day_and_corporate_actions_and_before_candles(
     conn: psycopg.Connection,
 ) -> None:
     result = collect(conn, sources())
 
-    assert [r.source for r in result.runs][:6] == [
+    assert [r.source for r in result.runs][:7] == [
         "nse_equity_master",
         "nse_eod",
         "kite_instruments",
+        "nse_corporate_actions",
         "nse_symbol_changes",
         "instrument_links",
         "kite_candles_daily",
@@ -199,6 +216,27 @@ def test_the_instruments_are_rebuilt_after_end_of_day_and_before_candles_and_the
     assert rebuild.details["symbol_changes"] == 11
     assert rebuild.details["manual_links"] == 1  # the configured file is read on every rebuild
     assert rebuild.details["instruments"] == 8  # the eight symbols of July and August
+    # A week either side of the day: an ISIN change explained by an action within
+    # EX_DATE_SLACK of it finds the action stored, even one going ex days later.
+    actions = runs["nse_corporate_actions"]
+    assert (actions.range_start, actions.range_end) == (date(2024, 7, 25), date(2024, 8, 8))
+    assert actions.rows_seen == 1  # NORBTEAEXP's AGM on 2 August
+
+
+def test_a_failed_corporate_action_fetch_is_recorded_and_the_steps_after_it_still_run(
+    conn: psycopg.Connection,
+) -> None:
+    result = collect(conn, FailingPath(sources(), "/api/corporates-corporateActions"))
+
+    assert result.failed_sources == ("nse_corporate_actions",)
+    runs = {r.source: r for r in result.runs}
+    assert sorted(runs) == sorted(SOURCES)
+    assert runs["nse_corporate_actions"].error == (
+        "ConnectError: cannot fetch /api/corporates-corporateActions"
+    )
+    assert runs["nse_symbol_changes"].rows_seen == 11
+    assert runs["instrument_links"].details["instruments"] == 8
+    assert runs["kite_candles_daily"].rows_seen == 4
 
 
 def test_a_failed_symbol_change_fetch_is_recorded_and_the_instruments_are_still_rebuilt(
@@ -225,7 +263,8 @@ def test_a_failing_source_is_recorded_as_failed_and_the_sources_after_it_still_r
     result = collect(conn, FailingHost(sources(), "www.nseindia.com"))
 
     assert not result.succeeded
-    assert result.failed_sources == ("nse_announcements",)
+    # NSE's corporate actions and announcements share the host.
+    assert result.failed_sources == ("nse_corporate_actions", "nse_announcements")
     runs = {r.source: r for r in queries.ingest_runs(conn, collection_id=result.collection_id)}
     assert sorted(runs) == sorted(SOURCES)
     failed = runs["nse_announcements"]
@@ -328,6 +367,7 @@ def test_the_command_records_every_source_it_could_not_reach_and_exits_non_zero(
         "nse_equity_master",
         "nse_eod",
         "kite_instruments",
+        "nse_corporate_actions",
         "nse_symbol_changes",
         "kite_candles_daily",
         "nse_announcements",

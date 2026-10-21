@@ -1,22 +1,27 @@
 """``collect-daily``: one trading day's collection, safe to run from cron after the close.
 
-Six steps, in order, each one the existing service for the day:
+Seven steps, in order, each one the existing service for the day:
 
 1. ``eod``: NSE's end-of-day file and the instrument master (``ingest_eod``).
-2. ``symbol_changes``: NSE's symbol-change list (``ingest_symbol_changes``),
+2. ``corporate_actions``: NSE's Corporate Actions with an Ex-Date within
+   ``EX_DATE_SLACK`` either side of the day (``ingest_corporate_actions``).
+   NSE switches a split's ISIN up to a day before its Ex-Date and a few
+   trading days after, so the rebuild needs actions going ex in the coming
+   week as well as the past one; the overlap between days also makes up
+   for a day whose fetch failed. Stored actions are never written twice.
+3. ``symbol_changes``: NSE's symbol-change list (``ingest_symbol_changes``),
    so a rename is picked up on its effective date.
-3. ``instruments``: the Instruments rebuilt from the stored evidence and the
+4. ``instruments``: the Instruments rebuilt from the stored evidence and the
    manual links file (``load_manual_links``, ``rebuild_instruments``). It
-   runs after the end-of-day rows it links, and before the Universe, which
-   ranks Instruments. It runs even when the symbol-change fetch failed, on
-   the records already stored. The collection has no Corporate Actions step;
-   the rebuild reads the Corporate Actions already stored.
-4. ``candles``: Kite's daily candle for every member of the current Universe,
+   runs after the end-of-day rows and Corporate Actions it links by, and
+   before the Universe, which ranks Instruments. It runs even when a fetch
+   before it failed, on the evidence already stored.
+5. ``candles``: Kite's daily candle for every member of the current Universe,
    the day's month under the configured rule (``ingest_candles``). The
    month's membership is computed first if it has not been (``compute_universe``),
    so the first collection of a month needs no separate ``universe`` run.
-5. ``announcements``: NSE's and BSE's filings of the day (``ingest_announcements``).
-6. ``news``: what the configured RSS feeds carry now (``ingest_news``).
+6. ``announcements``: NSE's and BSE's filings of the day (``ingest_announcements``).
+7. ``news``: what the configured RSS feeds carry now (``ingest_news``).
 
 Every ingest run made inside a collection carries the collection's id, so
 ``queries.ingest_runs(collection_id=...)`` shows the day source by source. A
@@ -46,6 +51,8 @@ from tradeline.dates import month_of
 from tradeline.ingest import in_collection, record_ingest_run
 from tradeline.ingest.announcements import SOURCE_BSE, SOURCE_NSE, ingest_announcements
 from tradeline.ingest.candles import SOURCE_DAILY, CurrentUniverse, ingest_candles
+from tradeline.ingest.corporate_actions import SOURCE as SOURCE_CORPORATE_ACTIONS
+from tradeline.ingest.corporate_actions import ingest_corporate_actions
 from tradeline.ingest.eod import (
     SOURCE_EOD,
     SOURCE_EQUITY_MASTER,
@@ -56,6 +63,7 @@ from tradeline.ingest.news import SOURCE as SOURCE_RSS
 from tradeline.ingest.news import Feed, ingest_news
 from tradeline.ingest.symbol_changes import SOURCE as SOURCE_SYMBOL_CHANGES
 from tradeline.ingest.symbol_changes import ingest_symbol_changes
+from tradeline.instruments import EX_DATE_SLACK
 from tradeline.manual_links import load_manual_links
 from tradeline.rebuild_instruments import SOURCE as SOURCE_INSTRUMENT_LINKS
 from tradeline.rebuild_instruments import rebuild_instruments
@@ -147,6 +155,13 @@ def collect_daily(
             "eod",
             (SOURCE_EQUITY_MASTER, SOURCE_EOD, SOURCE_KITE_INSTRUMENTS),
             lambda: ingest_eod(conn, transport, start=day, end=day),
+        ),
+        (
+            "corporate_actions",
+            (SOURCE_CORPORATE_ACTIONS,),
+            lambda: ingest_corporate_actions(
+                conn, transport, start=day - EX_DATE_SLACK, end=day + EX_DATE_SLACK
+            ),
         ),
         (
             "symbol_changes",

@@ -8,6 +8,7 @@ onto the recorded one, an ``edit`` that changes the recorded body, or both.
 
 import json
 from collections.abc import Callable
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -131,3 +132,35 @@ def then(*edits: CandleEdit) -> CandleEdit:
         return candles
 
     return edit
+
+
+def nse_corporate_actions_from(from_date: str, to_date: str) -> Ask:
+    """Ask NSE's corporate-action list for the recorded ``from_date`` to ``to_date``
+    (``DD-MM-YYYY``) instead; every other request is asked as sent."""
+
+    def ask(request: Request) -> Request:
+        parts = urlsplit(request.url)
+        if parts.path != "/api/corporates-corporateActions":
+            return request
+        query = f"index=equities&from_date={from_date}&to_date={to_date}"
+        return Request(request.method, parts._replace(query=query).geturl(), request.headers, None)
+
+    return ask
+
+
+def corporate_actions_in_requested_range(request: Request, body: bytes) -> bytes:
+    """NSE's corporate actions with an Ex-Date in the range the request asked for, as NSE
+    would have sent them; every other body as recorded."""
+    parts = urlsplit(request.url)
+    if parts.path != "/api/corporates-corporateActions":
+        return body
+    query = parse_qs(parts.query)
+    start, end = (
+        datetime.strptime(query[name][0], "%d-%m-%Y").date() for name in ("from_date", "to_date")
+    )
+    records = [
+        r
+        for r in json.loads(body)
+        if start <= datetime.strptime(r["exDate"], "%d-%b-%Y").date() <= end
+    ]
+    return json.dumps(records).encode()
