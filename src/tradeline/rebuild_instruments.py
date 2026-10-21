@@ -19,17 +19,31 @@ database: the caller reads them from the checked-in file
 (``tradeline.manual_links``) and passes them in, so a malformed file refuses
 the rebuild before anything is read or replaced.
 
+A rebuild never changes the stored Universe. Before replacing the
+Instruments it compares them with the new build over the window of every
+month stored under a rule that ranks Instruments: where any (Symbol, day) in
+the window falls in a different Instrument, which is to say the window's rows
+are grouped differently (a new key for the same grouping is not a change),
+the month is recorded as stale (``universe_stale_months``) and its membership
+kept. Recomputing it is the Operator's deliberate act. A rule that ranks
+Symbols never reads the Instruments, so its months are never stale. A link
+dated after a window leaves the rows in it grouped as they were, so an
+ordinary rename makes no earlier month stale.
+
 Each rebuild is recorded in the run history (command ``instruments``, source
 ``instrument_links``) with its counts: Instruments, links by source,
-anomalies by kind, and link candidates.
+anomalies by kind, link candidates, and the Universe months it found stale.
 """
 
 from __future__ import annotations
 
 import logging
-from collections import Counter
+import uuid
+from bisect import bisect_left
+from collections import Counter, defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import date
 from fractions import Fraction
 from typing import Any
 
@@ -41,6 +55,7 @@ from tradeline.ingest import record_ingest_run
 from tradeline.instruments import (
     Evidence,
     InstrumentBuild,
+    Interval,
     Listing,
     ManualLink,
     Span,
@@ -79,6 +94,7 @@ def rebuild_instruments(
     with record_ingest_run(conn, command=COMMAND, source=SOURCE) as run:
         evidence = read_evidence(conn, manual_links=manual_links)
         built = build_instruments(evidence)
+        stale = _record_stale_months(conn, built, found_by=run.id)
         _replace(conn, built)
         conn.commit()
         links = Counter(link.kind for i in built.instruments for link in i.links)
@@ -93,6 +109,7 @@ def rebuild_instruments(
             "keys_from": dict(sorted(Counter(i.key_from for i in built.instruments).items())),
             "anomalies": dict(sorted(Counter(a.kind for a in built.anomalies).items())),
             "candidates": len(built.candidates),
+            "stale_months": stale,
         }
         for anomaly in built.anomalies:
             log.warning(
@@ -163,6 +180,78 @@ def _listings(conn: psycopg.Connection) -> list[Listing]:
         " WHERE listing_date IS NOT NULL ORDER BY symbol, isin, listing_date"
     ).fetchall()
     return [Listing(*row) for row in rows]
+
+
+def _record_stale_months(
+    conn: psycopg.Connection, built: InstrumentBuild, *, found_by: uuid.UUID
+) -> int:
+    """Record each stored Universe month the build regroups; returns how many were new.
+
+    Only months under a rule that ranks Instruments and not already stale are
+    compared. Each is compared over its window as the rule defines it: the
+    ``lookback_trading_days`` days with end-of-day rows before the month.
+    """
+    months = conn.execute(
+        "SELECT DISTINCT m.month, m.rule_version, (v.parameters->>'lookback_trading_days')::int"
+        " FROM universe_membership m JOIN universe_rule_versions v ON v.version = m.rule_version"
+        " WHERE v.parameters->>'rank_by' = 'instrument' AND NOT EXISTS ("
+        "  SELECT 1 FROM universe_stale_months s"
+        "  WHERE s.month = m.month AND s.rule_version = m.rule_version)"
+        " ORDER BY m.month, m.rule_version"
+    ).fetchall()
+    if not months:
+        return 0
+    calendar = [
+        day
+        for (day,) in conn.execute(
+            "SELECT DISTINCT trade_date FROM eod_bhavcopy ORDER BY trade_date"
+        ).fetchall()
+    ]
+    old = [
+        (key, Interval(symbol, series, isin, first, last))
+        for key, symbol, series, isin, first, last in conn.execute(
+            "SELECT instrument_key, symbol, series, isin, first_day, last_day"
+            " FROM instrument_intervals"
+        ).fetchall()
+    ]
+    new = [(i.key, interval) for i in built.instruments for interval in i.intervals]
+    stale = []
+    for month, version, lookback in months:
+        end = bisect_left(calendar, month)
+        if end == 0:
+            continue
+        first, last = calendar[max(0, end - lookback)], calendar[end - 1]
+        if _grouping(old, first, last) != _grouping(new, first, last):
+            stale.append((month, version))
+    for month, version in stale:
+        log.warning(
+            "universe month stale: the rebuild regroups its window; stored membership kept",
+            extra={"month": month.isoformat(), "rule_version": version},
+        )
+    conn.execute(
+        "INSERT INTO universe_stale_months (month, rule_version, found_by)"
+        " SELECT m, v, %s FROM unnest(%s::date[], %s::text[]) AS t (m, v)",
+        (found_by, [m for m, _ in stale], [v for _, v in stale]),
+    )
+    return len(stale)
+
+
+def _grouping(
+    intervals: Sequence[tuple[str, Interval]], first: date, last: date
+) -> frozenset[frozenset[tuple[str, str, date, date]]]:
+    """How the rows from ``first`` to ``last`` are grouped into Instruments, keys aside."""
+    groups: defaultdict[str, set[tuple[str, str, date, date]]] = defaultdict(set)
+    for key, interval in intervals:
+        if interval.first <= last and interval.last >= first:
+            groups[key].add(
+                (
+                    interval.symbol,
+                    interval.series,
+                    max(interval.first, first),
+                    min(interval.last, last),
+                )
+            )
+    return frozenset(frozenset(group) for group in groups.values())
 
 
 def _replace(conn: psycopg.Connection, built: InstrumentBuild) -> None:

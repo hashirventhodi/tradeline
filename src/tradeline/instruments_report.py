@@ -9,7 +9,10 @@ writes nothing, so it can be run at any time:
 - the Instruments that ended: those with no row on the last day of the Raw
   Series, each with its last day and last Symbol;
 - the link candidates: a new Symbol under an ISIN an earlier Symbol had, with
-  no record joining them, for the Operator to cite in a manual link or leave.
+  no record joining them, for the Operator to cite in a manual link or leave;
+- the stale Universe months, by rule version: months stored under a rule that
+  ranks Instruments whose window a later rebuild regrouped. Their membership
+  is kept as stored; recomputing one is the Operator's deliberate act.
 """
 
 from __future__ import annotations
@@ -31,6 +34,7 @@ class InstrumentsReport:
     anomalies: tuple[Anomaly, ...]
     ended: tuple[queries.EndedInstrument, ...]
     candidates: tuple[LinkCandidate, ...]
+    stale: tuple[queries.StaleUniverseMonth, ...]
 
     def text(self) -> str:
         """The human-readable report."""
@@ -48,6 +52,9 @@ class InstrumentsReport:
                 f"  {c.old_symbol} to {c.new_symbol}  {c.isin}  {c.old_last}  {c.new_first}"
                 for c in self.candidates
             )
+        lines += ["", f"Stale Universe months: {len(self.stale)}"]
+        for version, months in self._stale_by_version().items():
+            lines.append(f"  rule {version}: {', '.join(f'{m:%Y-%m}' for m in months)}")
         return "\n".join(lines) + "\n"
 
     def summary(self) -> dict[str, object]:
@@ -57,7 +64,17 @@ class InstrumentsReport:
             "anomalies": dict(sorted(Counter(a.kind for a in self.anomalies).items())),
             "ended": len(self.ended),
             "candidates": len(self.candidates),
+            "stale_months": {
+                version: [f"{m:%Y-%m}" for m in months]
+                for version, months in self._stale_by_version().items()
+            },
         }
+
+    def _stale_by_version(self) -> dict[str, list[date]]:
+        by_version: dict[str, list[date]] = {}
+        for stale in self.stale:
+            by_version.setdefault(stale.rule_version, []).append(stale.month)
+        return by_version
 
 
 def instruments_report(conn: psycopg.Connection) -> InstrumentsReport:
@@ -66,4 +83,5 @@ def instruments_report(conn: psycopg.Connection) -> InstrumentsReport:
         anomalies=tuple(queries.instrument_anomalies(conn)),
         ended=tuple(queries.ended_instruments(conn)),
         candidates=tuple(queries.link_candidates(conn)),
+        stale=tuple(queries.stale_universe_months(conn)),
     )

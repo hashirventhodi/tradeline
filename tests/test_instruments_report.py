@@ -119,6 +119,7 @@ def test_the_rebuild_recorded_its_counts_in_the_run_details(conn: psycopg.Connec
         "keys_from": {"first_row": 1, "listing_date": 6},
         "anomalies": {"conflicting_link": 1},
         "candidates": 1,
+        "stale_months": 0,
     }
 
 
@@ -142,6 +143,7 @@ def test_the_instruments_command_prints_the_report_and_writes_nothing(
         "anomalies": {"conflicting_link": 1},
         "ended": 6,
         "candidates": 1,
+        "stale_months": {},
     }
     assert "refused NSE symbol change INFY to TCS effective 2024-08-01" in err
     assert "ZOMATO@2025-04-07  2025-04-08  ZOMATO" in err

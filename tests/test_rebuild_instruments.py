@@ -120,6 +120,7 @@ def test_a_rebuild_records_its_counts_in_the_run_history(
         "keys_from": {"listing_date": 1},
         "anomalies": {},
         "candidates": 0,
+        "stale_months": 0,
     }
 
 

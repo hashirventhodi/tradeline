@@ -630,6 +630,22 @@ def ended_instruments(conn: psycopg.Connection) -> list[EndedInstrument]:
 
 
 @dataclass(frozen=True)
+class StaleUniverseMonth:
+    """A stored Universe month a later rebuild of the Instruments regrouped; kept as stored."""
+
+    rule_version: str
+    month: date
+
+
+def stale_universe_months(conn: psycopg.Connection) -> list[StaleUniverseMonth]:
+    """Every stale Universe month, by rule version, then month."""
+    rows = conn.execute(
+        "SELECT rule_version, month FROM universe_stale_months ORDER BY rule_version, month"
+    ).fetchall()
+    return [StaleUniverseMonth(*row) for row in rows]
+
+
+@dataclass(frozen=True)
 class Sector:
     symbol: str
     sector: str
