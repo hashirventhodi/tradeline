@@ -16,7 +16,6 @@ The attachment lives under one of two folders, chosen by ``PDFFLAG``.
 from __future__ import annotations
 
 import json
-import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -25,9 +24,8 @@ from typing import Any
 from urllib.parse import urlencode
 
 from tradeline.dates import IST
+from tradeline.sources.browser import USER_AGENT, send_with_backoff
 from tradeline.transport import Request, Response, Transport
-
-log = logging.getLogger(__name__)
 
 SITE_HOST = "https://www.bseindia.com"
 API_HOST = "https://api.bseindia.com"
@@ -39,18 +37,13 @@ ATTACHMENT_FOLDERS = {
 }
 
 BROWSER_HEADERS: dict[str, str] = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-        " (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": USER_AGENT,
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": f"{SITE_HOST}/",
     "Origin": SITE_HOST,
 }
 
-RETRY_DELAYS_SECONDS: tuple[float, ...] = (1.0, 3.0, 9.0)
-_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 # A page beyond this means the day's count is not being reached; stop rather than loop.
 MAX_PAGES = 200
 
@@ -69,17 +62,7 @@ class BseSession:
     def get(self, url: str) -> Response:
         """GET ``url`` as the BSE site would. Non-2xx responses are returned, not raised."""
         request = Request("GET", url, headers=BROWSER_HEADERS)
-        response = self._transport.send(request)
-        for attempt, delay in enumerate(RETRY_DELAYS_SECONDS, start=1):
-            if response.status not in _RETRY_STATUSES:
-                break
-            log.warning(
-                "bse throttled or failing; backing off",
-                extra={"url": url, "status": response.status, "attempt": attempt, "delay": delay},
-            )
-            self._sleep(delay)
-            response = self._transport.send(request)
-        return response
+        return send_with_backoff(self._transport, request, sleep=self._sleep, site="bse")
 
 
 @dataclass(frozen=True)

@@ -20,16 +20,14 @@ from email.utils import parsedate_to_datetime
 
 import httpx
 
+from tradeline.sources.browser import USER_AGENT
 from tradeline.transport import Request, Transport
 
 log = logging.getLogger(__name__)
 
 # Some publishers refuse requests without a browser-like agent.
 HEADERS: dict[str, str] = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-        " (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": USER_AGENT,
     "Accept": "application/rss+xml, application/xml;q=0.9, */*;q=0.8",
 }
 

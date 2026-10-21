@@ -41,6 +41,7 @@ from typing import Any
 from urllib.parse import urlencode, urlsplit
 
 from tradeline.dates import IST
+from tradeline.sources.browser import USER_AGENT, send_with_backoff
 from tradeline.transport import Request, Response, Transport
 
 log = logging.getLogger(__name__)
@@ -55,18 +56,12 @@ ANNOUNCEMENTS_URL = f"{SITE_HOST}/api/corporate-announcements"
 UDIFF_FROM = date(2024, 7, 8)
 
 BROWSER_HEADERS: dict[str, str] = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-        " (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": USER_AGENT,
     "Accept": "*/*",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": f"{SITE_HOST}/",
 }
 
-# Backoff on throttling (429) and server errors: the delay before each retry.
-RETRY_DELAYS_SECONDS: tuple[float, ...] = (1.0, 3.0, 9.0)
-_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 _SESSION_EXPIRED_STATUSES = frozenset({401, 403})
 
 
@@ -101,16 +96,9 @@ class NseSession:
         headers = dict(BROWSER_HEADERS)
         if self._cookies and _is_nse(url):
             headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in self._cookies.items())
-        response = self._transport.send(Request("GET", url, headers=headers))
-        for attempt, delay in enumerate(RETRY_DELAYS_SECONDS, start=1):
-            if response.status not in _RETRY_STATUSES:
-                break
-            log.warning(
-                "nse throttled or failing; backing off",
-                extra={"url": url, "status": response.status, "attempt": attempt, "delay": delay},
-            )
-            self._sleep(delay)
-            response = self._transport.send(Request("GET", url, headers=headers))
+        response = send_with_backoff(
+            self._transport, Request("GET", url, headers=headers), sleep=self._sleep, site="nse"
+        )
         if _is_nse(url):
             self._remember_cookies(response)
         return response
