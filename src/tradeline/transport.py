@@ -3,6 +3,8 @@
 Every source adapter makes HTTP calls through a ``Transport``. There are four:
 
 - ``LiveTransport``: real HTTP. Refuses to be constructed under the test environment.
+  With ``browser_tls`` it presents a browser's TLS handshake, which BSE's API
+  requires: it refuses httpx and curl outright, whatever their headers.
 - ``PlaybackTransport``: serves recorded fixtures; an unrecorded request raises.
 - ``RecordingTransport``: wraps another transport and writes what it sees as fixtures.
 - ``RefusingTransport``: raises on any call; the default under test.
@@ -25,6 +27,7 @@ from typing import Protocol
 from urllib.parse import urlsplit
 
 import httpx
+from curl_cffi import requests as curl_requests
 
 from tradeline.environment import Environment
 
@@ -76,15 +79,39 @@ class UnrecordedRequest(LookupError):
 
 
 class LiveTransport:
-    def __init__(self, *, timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS) -> None:
+    def __init__(
+        self, *, timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS, browser_tls: bool = False
+    ) -> None:
         if Environment.current() is Environment.TEST:
             raise LiveTransportForbidden(
                 "the live transport cannot be used under TRADELINE_ENV=test; "
                 "use PlaybackTransport with recorded fixtures"
             )
-        self._client = httpx.Client(timeout=timeout_seconds, follow_redirects=False)
+        self._timeout = timeout_seconds
+        self._browser: curl_requests.Session[curl_requests.Response] | None = None
+        self._client: httpx.Client | None = None
+        if browser_tls:
+            # Cookies are the sources' business (see NseSession), so this session keeps none.
+            self._browser = curl_requests.Session(impersonate="chrome", allow_redirects=False)
+        else:
+            self._client = httpx.Client(timeout=timeout_seconds, follow_redirects=False)
 
     def send(self, request: Request) -> Response:
+        if self._browser is not None:
+            self._browser.cookies.clear()
+            answer = self._browser.request(
+                request.method,  # type: ignore[arg-type]
+                request.url,
+                headers=dict(request.headers),
+                data=request.body,
+                timeout=self._timeout,
+            )
+            return Response(
+                status=answer.status_code,
+                headers=tuple((k, v or "") for k, v in answer.headers.multi_items()),
+                body=answer.content,
+            )
+        assert self._client is not None
         raw = self._client.request(
             request.method, request.url, headers=dict(request.headers), content=request.body
         )
@@ -128,11 +155,11 @@ class RecordingTransport:
         return response
 
 
-def transport_for(environment: Environment) -> Transport:
+def transport_for(environment: Environment, *, browser_tls: bool = False) -> Transport:
     """The default transport when none is injected: live, except under test."""
     if environment is Environment.TEST:
         return RefusingTransport()
-    return LiveTransport()
+    return LiveTransport(browser_tls=browser_tls)
 
 
 _UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")

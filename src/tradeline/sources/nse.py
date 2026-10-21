@@ -1,4 +1,4 @@
-"""NSE: end-of-day files, the equity master, and corporate actions.
+"""NSE: end-of-day files, the equity master, corporate actions, and announcements.
 
 NSE's site refuses requests that do not look like a browser and rate-limits
 aggressively. ``NseSession`` owns that: it sends browser headers on every
@@ -9,6 +9,10 @@ Adapters call ``session.get`` and never touch headers themselves.
 Corporate actions come from the site's JSON API, filtered by ex-date range and
 optionally by symbol. Each record is a free-text ``subject`` ("Bonus 1:1",
 "Dividend - Rs 10 Per Share"); reading it is ``tradeline.adjust``'s job.
+
+Announcements come from the same API, one calendar day per request. NSE
+states two times for each: when the exchange received the filing (``an_dt``)
+and when it disseminated it to the public (``exchdisstime``), both in IST.
 
 End-of-day files come in two layouts. Up to 2024-07-05 NSE published the
 legacy ``cmDDMMMYYYYbhav.csv.zip``; from 2024-07-08 only the UDiFF
@@ -31,6 +35,7 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from urllib.parse import urlencode, urlsplit
+from zoneinfo import ZoneInfo
 
 from tradeline.transport import Request, Response, Transport
 
@@ -40,6 +45,8 @@ ARCHIVES_HOST = "https://nsearchives.nseindia.com"
 SITE_HOST = "https://www.nseindia.com"
 EQUITY_MASTER_URL = f"{ARCHIVES_HOST}/content/equities/EQUITY_L.csv"
 CORPORATE_ACTIONS_URL = f"{SITE_HOST}/api/corporates-corporateActions"
+ANNOUNCEMENTS_URL = f"{SITE_HOST}/api/corporate-announcements"
+IST = ZoneInfo("Asia/Kolkata")
 
 # The first trading day with no legacy file; UDiFF is used from here on.
 UDIFF_FROM = date(2024, 7, 8)
@@ -317,8 +324,83 @@ def _required(record: dict[str, Any], key: str) -> str:
     value = record.get(key)
     text = _text(None if value is None else str(value))
     if text is None:
-        raise NseError(f"corporate-action record has no {key}: {str(record)[:120]}")
+        raise NseError(f"NSE record has no {key}: {str(record)[:120]}")
     return text
+
+
+# --- Announcements ----------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class NseAnnouncement:
+    """One corporate announcement as NSE lists it."""
+
+    seq_id: str
+    symbol: str
+    company_name: str | None
+    isin: str | None
+    received_at: datetime
+    # The official timestamp: when NSE made the filing public. NSE's received
+    # time stands in where it gives no dissemination time.
+    disseminated_at: datetime
+    subject: str
+    body: str | None
+    attachment_url: str | None
+
+
+def announcements_url(day: date) -> str:
+    params = {"index": "equities", "from_date": f"{day:%d-%m-%Y}", "to_date": f"{day:%d-%m-%Y}"}
+    return f"{ANNOUNCEMENTS_URL}?{urlencode(params)}"
+
+
+def fetch_announcements(session: NseSession, day: date) -> list[NseAnnouncement]:
+    """Every announcement NSE received on ``day`` (IST)."""
+    url = announcements_url(day)
+    response = session.get(url)
+    if response.status != 200:
+        raise NseError(f"HTTP {response.status} fetching {url}")
+    return parse_announcements(response.body)
+
+
+def parse_announcements(body: bytes) -> list[NseAnnouncement]:
+    try:
+        records = json.loads(body)
+    except ValueError as error:
+        raise NseError("announcements response is not JSON") from error
+    if not isinstance(records, list):
+        raise NseError(f"announcements response is not a list: {str(records)[:80]}")
+    return [_announcement(record) for record in records]
+
+
+def _announcement(record: dict[str, Any]) -> NseAnnouncement:
+    received_at = _nse_time(_required(record, "an_dt"))
+    disseminated = _text(_string(record.get("exchdisstime")))
+    return NseAnnouncement(
+        seq_id=_required(record, "seq_id"),
+        symbol=_required(record, "symbol"),
+        company_name=_text(_string(record.get("sm_name"))),
+        isin=_text(_string(record.get("sm_isin"))),
+        received_at=received_at,
+        disseminated_at=received_at if disseminated is None else _nse_time(disseminated),
+        subject=" ".join(_required(record, "desc").split()),
+        body=_text(_string(record.get("attchmntText"))),
+        attachment_url=_optional_text(record.get("attchmntFile")),
+    )
+
+
+def _optional_text(value: Any) -> str | None:
+    """NSE's text, or None where it writes ``-`` (or nothing)."""
+    text = _text(_string(value))
+    return None if text == "-" else text
+
+
+def _nse_time(text: str) -> datetime:
+    """NSE's ``18-Jul-2024 23:48:42``, in IST."""
+    return datetime.strptime(text.strip(), "%d-%b-%Y %H:%M:%S").replace(tzinfo=IST)
+
+
+def _string(value: Any) -> str | None:
+    return None if value is None else str(value)
 
 
 # --- Helpers ----------------------------------------------------------------

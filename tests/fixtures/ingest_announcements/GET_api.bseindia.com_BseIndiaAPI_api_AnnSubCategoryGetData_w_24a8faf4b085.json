@@ -1,0 +1,79 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w?pageno=1&strCat=-1&strPrevDate=20240723&strScrip=&strSearch=P&strToDate=20240723&strType=C&subcategory=-1",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "content-type",
+        "application/json; charset=utf-8"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "x-xss-protection",
+        "1; mode=block"
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000; includeSubDomains; preload"
+      ],
+      [
+        "referrer-policy",
+        "no-referrer | same-origin | origin | strict-origin | no-origin-when-downgrading"
+      ],
+      [
+        "expect-ct",
+        "max-age=604800"
+      ],
+      [
+        "feature-policy",
+        "vibrate 'Self'; usermedia *; sync-xhr 'self'"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "access-control-allow-methods",
+        "GET,POST"
+      ],
+      [
+        "content-encoding",
+        "gzip"
+      ],
+      [
+        "cache-control",
+        "private, max-age=60"
+      ],
+      [
+        "expires",
+        "Wed, 21 Oct 2026 08:57:43 GMT"
+      ],
+      [
+        "date",
+        "Wed, 21 Oct 2026 08:56:43 GMT"
+      ],
+      [
+        "vary",
+        "Accept-Encoding"
+      ],
+      [
+        "access-control-allow-origin",
+        "https://www.bseindia.com"
+      ],
+      [
+        "akamai-grn",
+        "0.728cd017.1792573002.11f11dde"
+      ]
+    ],
+    "body": "{\"Table\": [{\"NEWSID\": \"5b7a4f57-f5d1-4483-bff8-604b045ddcef\", \"SCRIP_CD\": 132541, \"XML_NAME\": \"ANN_132541_5B7A4F57-F5D1-4483-BFF8-604B045DDCEF\", \"NEWSSUB\": \"  - 132541 - Announcement under Regulation 30 (LODR)-Earnings Call Transcript\", \"DT_TM\": \"2024-07-23T21:50:17.633\", \"NEWS_DT\": \"2024-07-23T21:50:17.633\", \"CRITICALNEWS\": \"0\", \"ANNOUNCEMENT_TYPE\": \"A\", \"QUARTER_ID\": null, \"FILESTATUS\": \"N    \", \"ATTACHMENTNAME\": \"b5161669-4f70-4ba5-a3d3-ddcb7aa23f1b.pdf\", \"MORE\": \"\", \"HEADLINE\": \"Intimation for Audio Transcript of Earnings Conference Call\", \"CATEGORYNAME\": \"Company Update\", \"OLD\": 1, \"RN\": 1, \"PDFFLAG\": 1, \"NSURL\": \"https://www.bseindia.com/stock-share-price/-/coforge/132541/\", \"SLONGNAME\": \" \", \"AGENDA_ID\": 157, \"News_submission_dt\": \"2024-07-23T21:50:17\", \"DissemDT\": \"2024-07-23T21:50:17.633\", \"TimeDiff\": \"00:00:00\", \"Fld_Attachsize\": 249064, \"SUBCATNAME\": \"Earnings Call Transcript\", \"BSENewsid\": null, \"Investor_Presentation\": null, \"AUDIO_VIDEO_FILE\": null}, {\"NEWSID\": \"f4592263-e94b-46da-b8cc-e6baa850df46\", \"SCRIP_CD\": 540405, \"XML_NAME\": \"ANN_540405_F4592263-E94B-46DA-B8CC-E6BAA850DF46\", \"NEWSSUB\": \"Oceanic Foods Ltd - 540405 - Clarification sought from Oceanic Foods Ltd\", \"DT_TM\": \"2024-07-23T19:09:01.197\", \"NEWS_DT\": \"2024-07-23T19:09:01.197\", \"CRITICALNEWS\": \"1\", \"ANNOUNCEMENT_TYPE\": \"A\", \"QUARTER_ID\": null, \"FILESTATUS\": \"N    \", \"ATTACHMENTNAME\": \"\", \"MORE\": \"The Exchange has sought clarification from Oceanic Foods Ltd on July 23, 2024 with reference to significant movement in price, in order to ensure that investors have latest relevant information about the company and to inform the market so that the interest of the investors is safeguarded.<BR><BR>The reply is awaited.\", \"HEADLINE\": \"The Exchange has sought clarification from Oceanic Foods Ltd on July 23, 2024 with reference to significant movement in price, in order to ensure that investors have latest relevant information ....\", \"CATEGORYNAME\": \"Company Update\", \"OLD\": 1, \"RN\": 1, \"PDFFLAG\": 1, \"NSURL\": \"https://www.bseindia.com/stock-share-price/oceanic-foods-ltd/oceanic/540405/\", \"SLONGNAME\": \"Oceanic Foods Ltd\", \"AGENDA_ID\": 17, \"News_submission_dt\": null, \"DissemDT\": \"2024-07-23T19:09:01.197\", \"TimeDiff\": null, \"Fld_Attachsize\": null, \"SUBCATNAME\": \"Clarification\", \"BSENewsid\": null, \"Investor_Presentation\": null, \"AUDIO_VIDEO_FILE\": null}, {\"NEWSID\": \"f249774b-f912-47d8-ad1a-ef01b865d590\", \"SCRIP_CD\": 500209, \"XML_NAME\": \"ANN_500209_F249774B-F912-47D8-AD1A-EF01B865D590\", \"NEWSSUB\": \"Infosys Ltd - 500209 - Announcement under Regulation 30 (LODR)-Acquisition\", \"DT_TM\": \"2024-07-23T18:40:07.86\", \"NEWS_DT\": \"2024-07-23T18:40:07.86\", \"CRITICALNEWS\": \"1\", \"ANNOUNCEMENT_TYPE\": \"A\", \"QUARTER_ID\": null, \"FILESTATUS\": \"N    \", \"ATTACHMENTNAME\": \"ea219bb0-e2ee-4ed9-ab6d-6ab7a26b6c9e.pdf\", \"MORE\": \"\", \"HEADLINE\": \"Enclosed\", \"CATEGORYNAME\": \"Company Update\", \"OLD\": 1, \"RN\": 1, \"PDFFLAG\": 1, \"NSURL\": \"https://www.bseindia.com/stock-share-price/infosys-ltd/infy/500209/\", \"SLONGNAME\": \"Infosys Ltd\", \"AGENDA_ID\": 2, \"News_submission_dt\": \"2024-07-23T18:40:07\", \"DissemDT\": \"2024-07-23T18:40:07.86\", \"TimeDiff\": \"00:00:00\", \"Fld_Attachsize\": 165506, \"SUBCATNAME\": \"Acquisition\", \"BSENewsid\": null, \"Investor_Presentation\": null, \"AUDIO_VIDEO_FILE\": null}, {\"NEWSID\": \"c56a2c89-7ae9-43b8-98ee-770fa5ecebd4\", \"SCRIP_CD\": 500209, \"XML_NAME\": \"ANN_500209_C56A2C89-7AE9-43B8-98EE-770FA5ECEBD4\", \"NEWSSUB\": \"Infosys Ltd - 500209 - Announcement under Regulation 30 (LODR)-Earnings Call Transcript\", \"DT_TM\": \"2024-07-23T18:23:35.58\", \"NEWS_DT\": \"2024-07-23T18:23:35.58\", \"CRITICALNEWS\": \"0\", \"ANNOUNCEMENT_TYPE\": \"A\", \"QUARTER_ID\": null, \"FILESTATUS\": \"N    \", \"ATTACHMENTNAME\": \"25353afa-0919-47a5-bd94-d149fef7d700.pdf\", \"MORE\": \"\", \"HEADLINE\": \"Enclosed\", \"CATEGORYNAME\": \"Company Update\", \"OLD\": 1, \"RN\": 1, \"PDFFLAG\": 1, \"NSURL\": \"https://www.bseindia.com/stock-share-price/infosys-ltd/infy/500209/\", \"SLONGNAME\": \"Infosys Ltd\", \"AGENDA_ID\": 157, \"News_submission_dt\": \"2024-07-23T18:23:35\", \"DissemDT\": \"2024-07-23T18:23:35.58\", \"TimeDiff\": \"00:00:00\", \"Fld_Attachsize\": 598855, \"SUBCATNAME\": \"Earnings Call Transcript\", \"BSENewsid\": null, \"Investor_Presentation\": null, \"AUDIO_VIDEO_FILE\": null}, {\"NEWSID\": \"6d6643b8-611b-4896-9124-61856147ee00\", \"SCRIP_CD\": 500325, \"XML_NAME\": \"ANN_500325_6D6643B8-611B-4896-9124-61856147EE00\", \"NEWSSUB\": \"Reliance Industries Ltd - 500325 - Compliances-Reg. 39 (3) - Details of Loss of Certificate / Duplicate Certificate\", \"DT_TM\": \"2024-07-23T17:06:52.74\", \"NEWS_DT\": \"2024-07-23T17:06:52.74\", \"CRITICALNEWS\": \"0\", \"ANNOUNCEMENT_TYPE\": \"A\", \"QUARTER_ID\": null, \"FILESTATUS\": \"N    \", \"ATTACHMENTNAME\": \"f9a31b83-7b56-4537-b6c3-4ddaaa41e0fe.pdf\", \"MORE\": \"\", \"HEADLINE\": \"We enclose the information regarding loss of share certificate(s) for 10,593 shares received from the shareholder(s) of the Company on July 22, 2024.\", \"CATEGORYNAME\": \"Others\", \"OLD\": 1, \"RN\": 1, \"PDFFLAG\": 1, \"NSURL\": \"https://www.bseindia.com/stock-share-price/reliance-industries-ltd/reliance/500325/\", \"SLONGNAME\": \"Reliance Industries Ltd\", \"AGENDA_ID\": 177, \"News_submission_dt\": \"2024-07-23T17:06:52\", \"DissemDT\": \"2024-07-23T17:06:52.74\", \"TimeDiff\": \"00:00:00\", \"Fld_Attachsize\": 227238, \"SUBCATNAME\": \"Reg. 39 (3) - Details of Loss of Certificate / Duplicate Certificate\", \"BSENewsid\": null, \"Investor_Presentation\": null, \"AUDIO_VIDEO_FILE\": null}], \"Table1\": [{\"ROWCNT\": 9}]}",
+    "body_encoding": "utf-8"
+  }
+}

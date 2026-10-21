@@ -10,14 +10,18 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from fractions import Fraction
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 import psycopg
 
 from tradeline.adjust import KINDS, AdjustedBar, CorporateAction, Kind, RawBar, adjust
+
+# Exchange days are Indian calendar days.
+IST = ZoneInfo("Asia/Kolkata")
 
 
 @dataclass(frozen=True)
@@ -225,6 +229,58 @@ def adjusted_daily_candles(
         for r in rows
     ]
     return adjust(bars, corporate_actions(conn, symbol), as_of=as_of)
+
+
+@dataclass(frozen=True)
+class Announcement:
+    source: str  # 'nse' or 'bse'
+    source_id: str
+    # The official timestamp: when the exchange made the filing public.
+    disseminated_at: datetime
+    received_at: datetime | None
+    exchange_code: str  # NSE symbol or BSE scrip code, as the exchange gives it
+    company_name: str | None
+    symbol: str | None  # the matched NSE symbol; None when the match was not certain
+    subject: str
+    body: str | None
+    attachment_url: str | None
+
+
+_ANNOUNCEMENT_COLUMNS = (
+    "source, source_id, disseminated_at, received_at, exchange_code, company_name, symbol,"
+    " subject, body, attachment_url"
+)
+
+
+def announcements(
+    conn: psycopg.Connection,
+    symbol: str | None,
+    *,
+    start: date,
+    end: date,
+    as_of: datetime,
+) -> list[Announcement]:
+    """NSE and BSE announcements for ``symbol`` from ``start`` to ``end``, as known at ``as_of``.
+
+    ``symbol=None`` returns the filings matched to no symbol. Days are Indian
+    calendar days of the official timestamp, the moment the exchange
+    disseminated the filing; an announcement disseminated after ``as_of`` is
+    left out, so a decision replayed at ``as_of`` sees only what was public
+    then. Oldest first.
+    """
+    if as_of.tzinfo is None:
+        raise ValueError("as_of must be timezone-aware: announcements are timestamped in IST")
+    after = datetime.combine(start, time(), IST)
+    before = datetime.combine(end + timedelta(days=1), time(), IST)
+    rows = conn.execute(
+        f"SELECT {_ANNOUNCEMENT_COLUMNS} FROM announcements"
+        f" WHERE {'symbol IS NULL' if symbol is None else 'symbol = %(symbol)s'}"
+        " AND disseminated_at >= %(after)s AND disseminated_at < %(before)s"
+        " AND disseminated_at <= %(as_of)s"
+        " ORDER BY disseminated_at, source, source_id",
+        {"symbol": symbol, "after": after, "before": before, "as_of": as_of},
+    ).fetchall()
+    return [Announcement(*row) for row in rows]
 
 
 @dataclass(frozen=True)

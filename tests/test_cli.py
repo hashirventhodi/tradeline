@@ -379,3 +379,39 @@ def test_ingest_news_refuses_a_feed_that_is_not_configured(
     failure = json_lines(capsys.readouterr().out)[-1]
     assert failure["level"] == "ERROR"
     assert "nowhere" in str(failure["msg"])
+
+
+ANNOUNCEMENT_FIXTURES = REPO_ROOT / "tests" / "fixtures" / "ingest_announcements"
+
+
+def test_ingest_announcements_plays_fixtures_end_to_end_and_logs_both_runs(
+    database_url: str,
+    repo_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", database_url)
+
+    code = main(
+        [
+            "ingest",
+            "announcements",
+            "--from",
+            "2024-07-23",
+            "--play-fixtures",
+            str(ANNOUNCEMENT_FIXTURES),
+        ]
+    )
+
+    assert code == 0
+    lines = json_lines(capsys.readouterr().out)
+    assert all(line["command"] == "ingest" for line in lines)
+    finished = {line["source"]: line for line in lines if line["msg"] == "ingest run finished"}
+    assert set(finished) == {"nse_announcements", "bse_announcements"}
+    assert finished["nse_announcements"]["range_start"] == "2024-07-23"
+    assert finished["nse_announcements"]["rows_seen"] == 8
+    bse_run = finished["bse_announcements"]
+    assert (bse_run["rows_seen"], bse_run["requests"]) == (9, 2)
+    summary = lines[-1]
+    assert summary["msg"] == "ingest announcements finished"
+    assert (summary["nse"]["rows_written"], summary["bse"]["rows_written"]) == (8, 9)
