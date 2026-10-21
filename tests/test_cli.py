@@ -57,3 +57,65 @@ def test_an_unknown_command_is_refused(capsys: pytest.CaptureFixture[str]) -> No
 
     assert exit_info.value.code == 2
     assert "invalid choice" in capsys.readouterr().err
+
+
+FIXTURES = REPO_ROOT / "tests" / "fixtures" / "ingest_eod"
+
+
+def test_ingest_eod_plays_fixtures_end_to_end_and_logs_every_run(
+    database_url: str,
+    repo_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", database_url)
+
+    code = main(
+        [
+            "ingest",
+            "eod",
+            "--from",
+            "2024-07-01",
+            "--to",
+            "2024-07-05",
+            "--play-fixtures",
+            str(FIXTURES),
+        ]
+    )
+
+    assert code == 0
+    lines = json_lines(capsys.readouterr().out)
+    assert all(line["command"] == "ingest" for line in lines)
+    finished = [line for line in lines if line["msg"] == "run finished"]
+    assert [line["source"] for line in finished] == [
+        "nse_equity_master",
+        "nse_eod",
+        "kite_instruments",
+    ]
+    assert all(line["run_id"] for line in finished)
+    assert finished[1]["rows_written"] == 25  # five days, five symbols
+    assert lines[-1]["msg"] == "ingest eod finished"
+    assert lines[-1]["days_loaded"] == 5
+
+
+def test_ingest_eod_without_fixtures_under_test_refuses_the_network(
+    database_url: str,
+    repo_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", database_url)
+
+    assert main(["ingest", "eod", "--from", "2024-07-01"]) == 1
+
+    failure = json_lines(capsys.readouterr().out)[-1]
+    assert failure["level"] == "ERROR"
+    assert "refusing network call" in str(failure["exc_info"])
+
+
+def test_ingest_eod_rejects_a_date_that_is_not_iso(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(["ingest", "eod", "--from", "01-07-2024"])
+
+    assert exit_info.value.code == 2
+    assert "invalid" in capsys.readouterr().err

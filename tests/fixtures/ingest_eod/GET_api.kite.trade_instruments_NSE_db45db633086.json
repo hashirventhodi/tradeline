@@ -1,0 +1,99 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://api.kite.trade/instruments/NSE",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "date",
+        "Wed, 21 Oct 2026 07:15:58 GMT"
+      ],
+      [
+        "content-type",
+        "text/csv"
+      ],
+      [
+        "content-length",
+        "555"
+      ],
+      [
+        "connection",
+        "keep-alive"
+      ],
+      [
+        "x-amz-request-id",
+        "XN9BJ5GHGK8V2X2Q"
+      ],
+      [
+        "x-amz-id-2",
+        "tNlUVNXefoe7Ic0WrSf3rPVQf8Eq1z7b9lRdU1RpUflWNrC7kf13o0oHYPaveIGjXEMwttm2iiU="
+      ],
+      [
+        "accept-ranges",
+        "bytes"
+      ],
+      [
+        "server",
+        "cloudflare"
+      ],
+      [
+        "last-modified",
+        "Wed, 21 Oct 2026 06:21:32 GMT"
+      ],
+      [
+        "etag",
+        "\"af71e4247bf8d2ddf6986cb2b3a88a75\""
+      ],
+      [
+        "x-amz-version-id",
+        "null"
+      ],
+      [
+        "content-encoding",
+        "gzip"
+      ],
+      [
+        "x-amz-server-side-encryption",
+        "AES256"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-frame-options",
+        "DENY"
+      ],
+      [
+        "cf-cache-status",
+        "DYNAMIC"
+      ],
+      [
+        "set-cookie",
+        "_cfuvid=6ZYI4C9KfW1e7IpHVqTrHvKa5dlSy.jGg8r89tQgu3c-1792566958.336158-1.0.1.1-jiJgXbCcXvrCJjDnBrH0FSkOsl0h2OhJ4rfD0HbGJuw; HttpOnly; SameSite=None; Secure; Path=/; Domain=kite.trade"
+      ],
+      [
+        "vary",
+        "accept-encoding"
+      ],
+      [
+        "strict-transport-security",
+        "max-age=15552000; includeSubDomains"
+      ],
+      [
+        "cf-ray",
+        "a4de79619b588ae4-MAA"
+      ],
+      [
+        "alt-svc",
+        "h3=\":443\"; ma=86400"
+      ]
+    ],
+    "body": "instrument_token,exchange_token,tradingsymbol,name,last_price,expiry,strike,tick_size,lot_size,instrument_type,segment,exchange\n256265,1001,NIFTY 50,\"NIFTY 50\",0,,0,0,0,EQ,INDICES,NSE\n110849,433,KHADIM-BE,\"KHADIM INDIA\",0,,0,0.01,1,EQ,NSE,NSE\n408065,1594,INFY,\"INFOSYS\",0,,0,0.05,1,EQ,NSE,NSE\n738561,2885,RELIANCE,\"RELIANCE INDUSTRIES\",0,,0,0.1,1,EQ,NSE,NSE\n2953217,11536,TCS,\"TATA CONSULTANCY SERV LT\",0,,0,0.1,1,EQ,NSE,NSE\n4267265,16669,BAJAJ-AUTO,\"BAJAJ AUTO\",0,,0,1,1,EQ,NSE,NSE\n4540161,17735,BAFNAPH-BE,\"BAFNA PHARMACEUTICALS\",0,,0,0.05,1,EQ,NSE,NSE\n",
+    "body_encoding": "utf-8"
+  }
+}

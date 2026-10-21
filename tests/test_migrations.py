@@ -61,3 +61,13 @@ def test_the_application_role_cannot_update_or_delete_ingest_runs(database_url: 
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             conn.execute("DELETE FROM ingest_runs")
         conn.rollback()
+
+
+def test_the_application_role_cannot_update_or_delete_end_of_day_rows(database_url: str) -> None:
+    with app_connection(database_url) as conn:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("UPDATE eod_bhavcopy SET close = 0")
+        conn.rollback()
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("DELETE FROM eod_bhavcopy")
+        conn.rollback()
