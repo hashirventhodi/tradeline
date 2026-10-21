@@ -786,9 +786,13 @@ def _bar_values(candle: DailyCandle) -> tuple[Decimal, Decimal, Decimal, Decimal
 
 @dataclass(frozen=True)
 class Sector:
+    # The Symbol asked about.
     symbol: str
     sector: str
     effective_from: date
+    # The Symbol NSE published the sector under: an earlier Symbol of the same
+    # Instrument when the load was taken before a rename.
+    recorded_under: str
 
 
 def sector(conn: psycopg.Connection, symbol: str, *, as_of: date) -> Sector | None:
@@ -798,6 +802,15 @@ def sector(conn: psycopg.Connection, symbol: str, *, as_of: date) -> Sector | No
     load is in force from the day it was taken (``tradeline.sectors``): a
     date before the first load has no sector, and a date between two loads
     that disagree reads the earlier one.
+
+    Through the Instrument: ``symbol`` resolves to the Instrument it named on
+    ``as_of`` (as ``resolve_symbol``), and a sector recorded under any of that
+    Instrument's Symbols counts, so a renamed stock keeps the sector NSE gave
+    its earlier Symbol. A recorded row belongs to the Instrument its Symbol
+    named on the day the row came into force, so a Symbol later reused by
+    another company does not lend it the first company's sector. A Symbol
+    that names no Instrument on ``as_of`` (none built yet, or a Symbol not yet
+    traded) reads the rows recorded under itself alone.
     """
     found = sectors(conn, as_of=as_of, symbols=[symbol])
     return found[0] if found else None
@@ -806,11 +819,29 @@ def sector(conn: psycopg.Connection, symbol: str, *, as_of: date) -> Sector | No
 def sectors(
     conn: psycopg.Connection, *, as_of: date, symbols: list[str] | None = None
 ) -> list[Sector]:
-    """The sector in force on ``as_of`` for every symbol that has one (or for those named)."""
+    """The sector in force on ``as_of`` for each Symbol named that has one, found through its
+    Instrument as for ``sector``; with none named, for every Symbol a sector is recorded under."""
     rows = conn.execute(
-        "SELECT DISTINCT ON (symbol) symbol, sector, effective_from FROM sectors"
-        " WHERE effective_from <= %s AND (%s::text[] IS NULL OR symbol = ANY(%s))"
-        " ORDER BY symbol, effective_from DESC",
-        (as_of, symbols, symbols),
+        "WITH asked AS ("
+        "  SELECT DISTINCT unnest(coalesce(%(symbols)s::text[], ARRAY("
+        "    SELECT symbol FROM sectors WHERE effective_from <= %(as_of)s))) AS symbol"
+        "), target AS ("
+        "  SELECT a.symbol, ("
+        "    SELECT v.instrument_key FROM instrument_intervals v"
+        "    WHERE v.symbol = a.symbol AND v.first_day <= %(as_of)s"
+        "    ORDER BY v.first_day DESC, v.series LIMIT 1"
+        "  ) AS instrument_key FROM asked a"
+        "), recorded AS ("
+        "  SELECT s.symbol, s.sector, s.effective_from, ("
+        "    SELECT v.instrument_key FROM instrument_intervals v"
+        "    WHERE v.symbol = s.symbol AND v.first_day <= s.effective_from"
+        "    ORDER BY v.first_day DESC, v.series LIMIT 1"
+        "  ) AS instrument_key FROM sectors s WHERE s.effective_from <= %(as_of)s"
+        ")"
+        " SELECT DISTINCT ON (t.symbol) t.symbol, r.sector, r.effective_from, r.symbol"
+        " FROM target t JOIN recorded r ON r.instrument_key = t.instrument_key"
+        "  OR (r.symbol = t.symbol AND (t.instrument_key IS NULL OR r.instrument_key IS NULL))"
+        " ORDER BY t.symbol, r.effective_from DESC, r.symbol <> t.symbol, r.symbol",
+        {"as_of": as_of, "symbols": symbols},
     ).fetchall()
     return [Sector(*row) for row in rows]

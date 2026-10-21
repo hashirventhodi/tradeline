@@ -8,6 +8,11 @@ RELIANCE, and TCS. HDFCBANK has no rows in the end-of-day fixtures, so it is
 the constituent the rule cannot rank. A symbol without a sector is made by
 playing the real recorded sector list back through ``omit``, which drops one
 symbol's line on its way to the service.
+
+A renamed member is ZOMATO, the April 2025 Universe's only member under a rule
+of one, ranked from March 2025's end-of-day files (``fixtures/instrument_sectors/``)
+and linked to ETERNAL by the rename of 9 April (``fixtures/instruments/``).
+NSE's current sector list, recorded and trimmed to ETERNAL, gives its sector.
 """
 
 from collections.abc import Iterator
@@ -23,6 +28,8 @@ from playback import Playback, lines
 from tradeline.config import UniverseRule
 from tradeline.db import app_connection
 from tradeline.ingest.eod import ingest_eod
+from tradeline.ingest.symbol_changes import ingest_symbol_changes
+from tradeline.rebuild_instruments import rebuild_instruments
 from tradeline.sectors import load_sectors
 from tradeline.transport import PlaybackTransport
 from tradeline.universe import compute_universe
@@ -103,6 +110,8 @@ def test_the_report_prints_overlap_and_both_difference_lists_in_a_stable_format(
         "      -  HDFCBANK                        -  no EQ rows in the window\n"
         "\n"
         "Universe members without a sector: 0\n"
+        "\n"
+        "Universe members with a sector recorded under another Symbol: 0\n"
     )
     # The same data reports the same bytes.
     again = verify_universe(
@@ -139,6 +148,8 @@ def test_universe_members_without_a_sector_are_listed(other: psycopg.Connection)
     assert [(m.rank, m.symbol) for m in check.without_sector] == [(5, "ABDL")]
     assert check.text().endswith(
         "Universe members without a sector: 1\n   rank  symbol\n      5  ABDL\n"
+        "\n"
+        "Universe members with a sector recorded under another Symbol: 0\n"
     )
 
 
@@ -167,3 +178,52 @@ def test_a_month_the_rule_has_not_computed_is_refused(conn: psycopg.Connection) 
             month=date(2024, 9, 1),
             as_of=date(2024, 9, 2),
         )
+
+
+RENAMED_FIXTURES = FIXTURES / "instrument_sectors"
+INSTRUMENT_FIXTURES = FIXTURES / "instruments"
+APRIL_2025 = date(2025, 4, 1)
+RENAME_RULE = UniverseRule(
+    top_n=1,
+    lookback_trading_days=15,
+    min_listing_trading_days=15,
+    min_presence_percent=90,
+)
+
+
+@pytest.fixture
+def renamed(fresh_database_url: str) -> Iterator[psycopg.Connection]:
+    """ZOMATO's April 2025 Universe, with sectors from NSE's current list, which has ETERNAL."""
+    with app_connection(fresh_database_url) as conn:
+        evidence = Playback(RENAMED_FIXTURES, INSTRUMENT_FIXTURES, FIXTURES / "ingest_eod")
+        ingest_eod(conn, evidence, start=date(2025, 3, 1), end=date(2025, 3, 31))
+        ingest_eod(conn, evidence, start=date(2025, 4, 7), end=date(2025, 4, 11))
+        ingest_symbol_changes(conn, PlaybackTransport(INSTRUMENT_FIXTURES))
+        rebuild_instruments(conn)
+        compute_universe(conn, RENAME_RULE, month=APRIL_2025)
+        load_sectors(conn, PlaybackTransport(RENAMED_FIXTURES), effective_date=date(2025, 4, 11))
+        yield conn
+
+
+def test_a_member_renamed_since_shows_the_sector_recorded_under_its_new_symbol(
+    renamed: psycopg.Connection,
+) -> None:
+    check = verify_universe(
+        renamed,
+        Playback(RENAMED_FIXTURES, SECTOR_FIXTURES),
+        RENAME_RULE,
+        month=APRIL_2025,
+        as_of=date(2025, 4, 11),
+    )
+
+    assert check.without_sector == ()
+    assert [(s.symbol, s.sector, s.recorded_under) for s in check.sectors_under_other_symbols] == [
+        ("ZOMATO", "Consumer Services", "ETERNAL")
+    ]
+    assert check.text().endswith(
+        "Universe members without a sector: 0\n"
+        "\n"
+        "Universe members with a sector recorded under another Symbol: 1\n"
+        "   rank  symbol       recorded under  sector\n"
+        "      1  ZOMATO       ETERNAL         Consumer Services\n"
+    )
