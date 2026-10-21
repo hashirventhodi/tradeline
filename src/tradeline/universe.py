@@ -45,7 +45,8 @@ that rule's version is unchanged.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -74,6 +75,43 @@ class UniverseResult:
     # True when the month was already stored under this rule version with
     # different members; the stored rows are kept.
     anomaly: bool
+    # Stored members whose Instrument key a later rebuild retired; not a difference
+    # when the key now current is the recomputed member's.
+    obsolete: tuple[queries.ObsoleteUniverseKey, ...] = ()
+
+
+@dataclass(frozen=True)
+class MembershipCheck:
+    """A recomputed month against the stored one, compared by Instrument identity."""
+
+    differs: bool
+    # The stored members whose key is obsolete, with the key now current.
+    obsolete: tuple[queries.ObsoleteUniverseKey, ...]
+
+
+def check_membership(
+    stored: Sequence[queries.UniverseMember],
+    recomputed: Sequence[queries.UniverseMember],
+    *,
+    obsolete: Sequence[queries.ObsoleteUniverseKey],
+) -> MembershipCheck:
+    """Whether the recomputed members differ from the stored ones in rank, Symbol, series,
+    traded value, or Instrument, reading each obsolete stored key as the key now current.
+
+    A key a later rebuild renamed without regrouping the window (#35) is no
+    difference, only reported. An obsolete key no Instrument answers for is
+    one, as is any other change.
+    """
+    current: dict[tuple[str, str | None], str | None] = {
+        (o.symbol, o.stored_key): o.current_key for o in obsolete
+    }
+    canonical = [
+        replace(m, instrument=current[(m.symbol, m.instrument)])
+        if (m.symbol, m.instrument) in current
+        else m
+        for m in stored
+    ]
+    return MembershipCheck(differs=canonical != list(recomputed), obsolete=tuple(obsolete))
 
 
 @dataclass(frozen=True)
@@ -112,14 +150,31 @@ def compute_universe(
     _record_rule_version(conn, rule)
     stored = queries.universe_membership(conn, month, rule_version=rule.version, as_of=month)
     rows_written, anomaly = 0, False
+    obsolete: tuple[queries.ObsoleteUniverseKey, ...] = ()
     if not stored:
         rows_written = _insert_members(conn, members)
-    elif list(members) != stored:
-        anomaly = True
-        log.warning(
-            "universe recomputed differently from the stored membership; stored rows kept",
-            extra={"month": month.isoformat(), "rule_version": rule.version},
+    else:
+        check = check_membership(
+            stored,
+            members,
+            obsolete=queries.obsolete_universe_keys(conn, month=month, rule_version=rule.version),
         )
+        anomaly, obsolete = check.differs, check.obsolete
+        if anomaly:
+            log.warning(
+                "universe recomputed differently from the stored membership; stored rows kept",
+                extra={"month": month.isoformat(), "rule_version": rule.version},
+            )
+        elif obsolete:
+            log.warning(
+                "stored universe members name Instrument keys a later rebuild retired;"
+                " the members are unchanged and the stored rows kept",
+                extra={
+                    "month": month.isoformat(),
+                    "rule_version": rule.version,
+                    "obsolete_keys": {o.stored_key: o.current_key for o in obsolete},
+                },
+            )
     conn.commit()
     log.info(
         "universe computed",
@@ -141,6 +196,7 @@ def compute_universe(
         members=members,
         rows_written=rows_written,
         anomaly=anomaly,
+        obsolete=obsolete,
     )
 
 

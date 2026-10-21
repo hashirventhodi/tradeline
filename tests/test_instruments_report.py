@@ -120,6 +120,7 @@ def test_the_rebuild_recorded_its_counts_in_the_run_details(conn: psycopg.Connec
         "anomalies": {"conflicting_link": 1},
         "link_candidates": 1,
         "stale_months": 0,
+        "obsolete_universe_keys": 0,
     }
 
 
@@ -144,6 +145,7 @@ def test_the_instruments_command_prints_the_report_and_writes_nothing(
         "ended": 6,
         "without_candles": {},
         "link_candidates": 1,
+        "obsolete_universe_keys": 0,
         "stale_months": {},
     }
     assert "refused NSE symbol change INFY to TCS effective 2024-08-01" in err

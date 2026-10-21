@@ -121,6 +121,7 @@ def test_a_rebuild_records_its_counts_in_the_run_history(
         "anomalies": {},
         "link_candidates": 0,
         "stale_months": 0,
+        "obsolete_universe_keys": 0,
     }
 
 

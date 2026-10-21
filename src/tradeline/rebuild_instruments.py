@@ -110,6 +110,7 @@ def rebuild_instruments(
             "anomalies": dict(sorted(Counter(a.kind for a in built.anomalies).items())),
             "link_candidates": len(built.link_candidates),
             "stale_months": stale,
+            "obsolete_universe_keys": len(queries.obsolete_universe_keys(conn)),
         }
         for anomaly in built.anomalies:
             log.warning(

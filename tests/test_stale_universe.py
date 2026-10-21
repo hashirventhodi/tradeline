@@ -167,3 +167,34 @@ def test_a_corrected_listing_date_that_changes_a_members_listing_age_makes_its_m
     # The window's rows are grouped as before; only RELIANCE's listing age changed.
     assert [(s.rule_version, s.month) for s in report.stale] == [(listing.version, APRIL)]
     assert kept == stored
+
+
+def test_a_late_link_that_only_renames_a_stored_members_instrument_is_reported_not_stale(
+    split: psycopg.Connection,
+) -> None:
+    # Over 10 days May's window runs from 16 to 30 April, all after the rename:
+    # ETERNAL's rows stay grouped as they were, under ZOMATO's key once joined.
+    stored = store(split, [(SHORT, MAY)])
+    (eternal,) = [m for m in stored if m.symbol == "ETERNAL"]
+
+    rebuild_instruments(split, manual_links=[RENAME])
+    rebuild = queries.ingest_runs(split, source="instrument_links")[0]
+    recomputed = compute_universe(split, SHORT, month=MAY)
+
+    renamed = queries.ObsoleteUniverseKey(
+        MAY, SHORT.version, "ETERNAL", eternal.instrument, "ZOMATO@2021-07-23"
+    )
+    assert eternal.instrument != "ZOMATO@2021-07-23"
+    assert instruments_report(split).stale == ()
+    assert queries.obsolete_universe_keys(split) == [renamed]
+    assert rebuild.details["obsolete_universe_keys"] == 1
+    assert (recomputed.anomaly, recomputed.rows_written, recomputed.obsolete) == (
+        False,
+        0,
+        (renamed,),
+    )
+    assert membership(split, [(SHORT, MAY)]) == stored
+    assert (
+        "\nObsolete Universe keys: 1\n"
+        f"  rule {SHORT.version}  2025-05  ETERNAL  {eternal.instrument} now ZOMATO@2021-07-23\n"
+    ) in instruments_report(split).text()

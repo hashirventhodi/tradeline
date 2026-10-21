@@ -1007,6 +1007,42 @@ def stale_universe_months(conn: psycopg.Connection) -> list[StaleUniverseMonth]:
 
 
 @dataclass(frozen=True)
+class ObsoleteUniverseKey:
+    """A stored Universe member whose Instrument key a later rebuild retired (#35).
+
+    The stored row is kept as it was. ``current_key`` is the member's Instrument
+    now: the one its Symbol named on the day before the month, the Symbol in force
+    on the window's last day (``resolve_symbol``'s rule). None if no Instrument
+    answers for it.
+    """
+
+    month: date
+    rule_version: str
+    symbol: str
+    stored_key: str
+    current_key: str | None
+
+
+def obsolete_universe_keys(
+    conn: psycopg.Connection, *, month: date | None = None, rule_version: str | None = None
+) -> list[ObsoleteUniverseKey]:
+    """Every stored member whose key names no Instrument of the last rebuild, by rule
+    version, month, then rank; narrowed to one month or rule version if given."""
+    rows = conn.execute(
+        "SELECT m.month, m.rule_version, m.symbol, m.instrument_key,"
+        f" ({_named_by('m.symbol', 'm.month - 1')})"
+        " FROM universe_membership m"
+        " WHERE m.instrument_key IS NOT NULL"
+        " AND NOT EXISTS (SELECT 1 FROM instruments i WHERE i.key = m.instrument_key)"
+        " AND (%(month)s::date IS NULL OR m.month = %(month)s)"
+        " AND (%(rule_version)s::text IS NULL OR m.rule_version = %(rule_version)s)"
+        " ORDER BY m.rule_version, m.month, m.rank",
+        {"month": month, "rule_version": rule_version},
+    ).fetchall()
+    return [ObsoleteUniverseKey(*row) for row in rows]
+
+
+@dataclass(frozen=True)
 class Sector:
     # The Symbol asked about.
     symbol: str

@@ -304,18 +304,18 @@ manual link is unmatched.
 
 ### Unresolved
 
-- **CCAVENUE's consolidation** (10 to 1, new ISIN from 2026-10-19) is not in
+- **CCAVENUE's consolidation** (#31; 10 to 1, new ISIN from 2026-10-19) is not in
   NSE's Corporate Action list. Its history is split, INFIBEAM's Instrument
   shows as ended, and November 2026's Universe window will see CCAVENUE as
   newly listed unless the action is listed and ingested first.
-- **Listing dates later than an Instrument's first row**: SUBEX (2020-11-05),
+- **Listing dates later than an Instrument's first row** (#32): SUBEX (2020-11-05),
   NESTLEIND (2023-08-01), FORCEMOT, CAMS and SHAKTIPUMP among ever-members.
   No month changes here, but listing age from such a date understates a long
   history.
-- **Explained by inference, not citation**: the 21 SME and 71 fund ISIN
+- **Explained by inference, not citation** (#33): the 21 SME and 71 fund ISIN
   changes (as classes), and TIDEWATER's and KARDA's four-fold changes (not
   explained). None touches an ever-member or an EQ Universe month.
-- **MAZDOCK's 8 candles from 2017 and 2018**, before its 2020 listing: an
+- **MAZDOCK's 8 candles from 2017 and 2018** (#34), before its 2020 listing: an
   earlier instrument under a reused Kite token is likely but unconfirmed.
 - **A stored member's key can be renamed under it.** The SUBEX link renamed
   the Instrument `SUBEXLTD@2020-11-05` to `SUBEX@2020-11-05` (its first Symbol
@@ -323,8 +323,13 @@ manual link is unmatched.
   (2021-07 to 2021-12) keep the old key, which no longer names an
   Instrument, and recomputing them reports a difference in that key alone.
   The stale check counts a new key over the same grouping as no change (#27),
-  so it did not report them. Which of the two should give way is a decision
-  for a follow-up.
+  so it did not report them. Settled by #35: a recompute now compares
+  members by Instrument identity (the Instrument a member's Symbol named on
+  the day before its month), and a key a rebuild retired is reported, never
+  rewritten (`queries.obsolete_universe_keys`, the `instruments` report, and
+  each rebuild's run details). Recomputed again, all 120 months write
+  nothing and none differs; the six are reported as obsolete keys, each now
+  `SUBEX@2020-11-05`.
 - **Reconcile still fails** at 4.50 percent against 0.1. The rest is series
   moves (for #17), Kite's additive adjustment and coarse rounding, the
   muhurat sessions and BAFNAPH, as in #13.

@@ -14,6 +14,10 @@ writes nothing, so it can be run at any time:
   no token for them), never "missing data";
 - the Link Candidates: a new Symbol under an ISIN an earlier Symbol had, with
   no record joining them, for the Operator to cite in a manual link or leave;
+- the obsolete Universe keys: stored members whose Instrument key a later
+  rebuild retired without regrouping their window, each with the key now
+  current (or none), so a stored row can be read as today's Instrument
+  without being rewritten;
 - the stale Universe months, by rule version: months stored under a rule that
   ranks Instruments whose window a later rebuild regrouped. Their membership
   is kept as stored; recomputing one is the Operator's deliberate act.
@@ -41,6 +45,7 @@ class InstrumentsReport:
     without_candles: tuple[queries.EndReason, ...]
     link_candidates: tuple[LinkCandidate, ...]
     stale: tuple[queries.StaleUniverseMonth, ...]
+    obsolete_keys: tuple[queries.ObsoleteUniverseKey, ...] = ()
 
     def text(self) -> str:
         """The human-readable report."""
@@ -69,6 +74,12 @@ class InstrumentsReport:
                 f"  {c.old_symbol} to {c.new_symbol}  {c.isin}  {c.old_last}  {c.new_first}"
                 for c in self.link_candidates
             )
+        lines += ["", f"Obsolete Universe keys: {len(self.obsolete_keys)}"]
+        lines.extend(
+            f"  rule {o.rule_version}  {o.month:%Y-%m}  {o.symbol}  {o.stored_key}"
+            f" now {o.current_key or 'unresolved'}"
+            for o in self.obsolete_keys
+        )
         lines += ["", f"Stale Universe months: {len(self.stale)}"]
         for version, months in self._stale_by_version().items():
             lines.append(f"  rule {version}: {', '.join(f'{m:%Y-%m}' for m in months)}")
@@ -85,6 +96,7 @@ class InstrumentsReport:
                 for reason, members in self._without_candles_by_reason().items()
             },
             "link_candidates": len(self.link_candidates),
+            "obsolete_universe_keys": len(self.obsolete_keys),
             "stale_months": {
                 version: [f"{m:%Y-%m}" for m in months]
                 for version, months in self._stale_by_version().items()
@@ -112,6 +124,7 @@ def instruments_report(conn: psycopg.Connection) -> InstrumentsReport:
         without_candles=tuple(queries.members_without_candles(conn)),
         link_candidates=tuple(queries.link_candidates(conn)),
         stale=tuple(queries.stale_universe_months(conn)),
+        obsolete_keys=tuple(queries.obsolete_universe_keys(conn)),
     )
 
 
