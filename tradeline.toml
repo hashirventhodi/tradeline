@@ -13,3 +13,10 @@ min_listing_trading_days = 126  # trading days since listing
 min_presence_percent = 90       # rows required on this share of the window's days
 series = "EQ"                   # excludes SME (SM, ST) and trade-for-trade (BE, BZ)
 excluded_isin_prefix = "INF"    # ETFs and other fund units trade in EQ with INF ISINs
+
+[reconcile]
+# A close mismatch: further than this fraction of the price (plus half a
+# 5 paisa tick) from the end-of-day close, after Kite's own adjustment.
+close_tolerance = 0.001
+# The command fails above this percentage of discrepant rows.
+max_discrepancy_pct = 0.1
