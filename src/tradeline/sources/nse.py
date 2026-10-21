@@ -1,5 +1,5 @@
-"""NSE: end-of-day files, the equity master, symbol changes, index constituents, corporate
-actions, and announcements.
+"""NSE: end-of-day files, the equity master, symbol changes, delisted securities, index
+constituents, corporate actions, and announcements.
 
 NSE's site refuses requests that do not look like a browser and rate-limits
 aggressively. ``NseSession`` owns that: it sends browser headers on every
@@ -9,6 +9,8 @@ Adapters call ``session.get`` and never touch headers themselves.
 
 The symbol-change list is one CSV file on the archives host, every rename NSE
 records (old Symbol, new Symbol, effective date), republished whole as it grows.
+The delisted-securities list is another such file: Symbol, company, date, and
+the kind of delisting, nothing more (it never says a company merged).
 
 Index constituent lists are CSV files on the archives host, one row per
 constituent with NSE's sector in a column headed ``Industry``.
@@ -53,6 +55,7 @@ ARCHIVES_HOST = "https://nsearchives.nseindia.com"
 SITE_HOST = "https://www.nseindia.com"
 EQUITY_MASTER_URL = f"{ARCHIVES_HOST}/content/equities/EQUITY_L.csv"
 SYMBOL_CHANGES_URL = f"{ARCHIVES_HOST}/content/equities/symbolchange.csv"
+DELISTINGS_URL = f"{ARCHIVES_HOST}/content/equities/delisted.csv"
 CORPORATE_ACTIONS_URL = f"{SITE_HOST}/api/corporates-corporateActions"
 ANNOUNCEMENTS_URL = f"{SITE_HOST}/api/corporate-announcements"
 
@@ -302,6 +305,57 @@ def parse_symbol_changes(body: bytes) -> list[SymbolChange]:
                 old_symbol=old,
                 new_symbol=new,
                 effective_date=_nse_date(effective),
+            )
+        )
+    return rows
+
+
+# --- Delisted securities ----------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Delisting:
+    """One record of NSE's list of delisted securities: ``symbol`` was delisted on
+    ``delisted_on``, by the kind of delisting NSE names (``Voluntary Delisting``,
+    ``Compulsory Delisting``, ``Delisting - Liquidation``). NSE states no other reason."""
+
+    symbol: str
+    company_name: str
+    delisted_on: date
+    kind: str
+
+
+def fetch_delistings(session: NseSession) -> list[Delisting]:
+    """NSE's whole list of delisted securities as it stands today: one file."""
+    response = session.get(DELISTINGS_URL)
+    if response.status != 200:
+        raise NseError(f"HTTP {response.status} fetching {DELISTINGS_URL}")
+    return parse_delistings(response.body)
+
+
+def parse_delistings(body: bytes) -> list[Delisting]:
+    reader = csv.reader(io.StringIO(body.decode("utf-8-sig")))
+    expected = ["Symbol", "Company", "Delisted Date", "Type of Delisting"]
+    # NSE pads every line with five empty columns.
+    header = [name.strip() for name in next(reader, [])]
+    if header[: len(expected)] != expected or any(header[len(expected) :]):
+        raise NseError(f"unrecognised delisted-securities list: header {header}")
+    rows: list[Delisting] = []
+    for values in reader:
+        if not any(v.strip() for v in values):
+            continue
+        if any(v.strip() for v in values[len(expected) :]):
+            raise NseError(f"delisted-securities record has extra fields: {values}")
+        symbol, name, delisted, kind = (v.strip() for v in values[: len(expected)])
+        if not symbol or not kind:
+            raise NseError(f"delisted-securities record without a symbol or kind: {values}")
+        rows.append(
+            Delisting(
+                symbol=symbol,
+                company_name=name,
+                # The list writes ``15-Apr-02``.
+                delisted_on=datetime.strptime(delisted, "%d-%b-%y").date(),
+                kind=kind,
             )
         )
     return rows

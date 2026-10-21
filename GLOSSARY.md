@@ -22,6 +22,10 @@ _Avoid_: Mapping, alias, merge
 A new Symbol trading under an ISIN an earlier Symbol had, with no NSE record or manual link joining them. Never a link: the Operator reviews it and cites a manual link, or leaves the history split.
 _Avoid_: Candidate (a Strategy's Candidate), suggested link
 
+**End Reason**:
+Why an Instrument's rows in a series stop: its series moved (the rows continue in another series), it merged or was delisted (only on an official record: a scheme of amalgamation NSE lists, or NSE's delisted list), or it ended with no reason stated. Never inferred, and never reported as missing data.
+_Avoid_: Missing, dropped, dead
+
 ### Universe and selection
 
 **Universe**:

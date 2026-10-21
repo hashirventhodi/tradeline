@@ -559,6 +559,25 @@ def test_ingest_symbol_changes_then_rebuild_instruments_log_their_runs(
     assert rebuilt[-1]["instruments"] == 0
 
 
+END_REASON_FIXTURES = REPO_ROOT / "tests" / "fixtures" / "end_reasons"
+
+
+def test_ingest_delistings_logs_its_run(
+    fresh_database_url: str,
+    repo_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", fresh_database_url)
+
+    assert main(["ingest", "delistings", "--play-fixtures", str(END_REASON_FIXTURES)]) == 0
+    ingested = json_lines(capsys.readouterr().out)
+
+    assert all(line["command"] == "ingest" for line in ingested)
+    assert ingested[-1]["msg"] == "ingest delistings finished"
+    assert (ingested[-1]["rows_seen"], ingested[-1]["rows_written"]) == (4, 4)
+
+
 def test_rebuild_instruments_with_a_manual_link_lacking_a_citation_fails_naming_the_row(
     fresh_database_url: str,
     tmp_path: Path,

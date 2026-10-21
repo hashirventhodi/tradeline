@@ -1,0 +1,67 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://nsearchives.nseindia.com/content/historical/EQUITIES/2019/MAY/cm22MAY2019bhav.csv.zip",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "x-frame-options",
+        "DENY"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "accept-ranges",
+        "bytes"
+      ],
+      [
+        "etag",
+        "W/\"68084-1558526543000\""
+      ],
+      [
+        "last-modified",
+        "Wed, 22 May 2019 12:02:23 GMT"
+      ],
+      [
+        "content-type",
+        "application/zip"
+      ],
+      [
+        "content-length",
+        "342"
+      ],
+      [
+        "date",
+        "Wed, 21 Oct 2026 14:39:45 GMT"
+      ],
+      [
+        "akamai-grn",
+        "0.15d70b17.1792593585.165a4d07"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "content-security-policy",
+        "default-src 'self'; script-src 'strict-dynamic' 'nonce-MC4yMDg2Mzc3MzEw' 'unsafe-inline' http: https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.nse.co.in https://*.nseindia.com; font-src 'self'; frame-src 'self'; base-uri 'self'; frame-ancestors 'self'; connect-src 'self' https://*.nseindia.com https://c.go-mpulse.net https://stats.g.doubleclick.net https://*.akstat.io/ https://*.akamaihd.net"
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000 ; includeSubDomains ; preload"
+      ]
+    ],
+    "body": "UEsDBBQAAAAIAIChVV2k/sjezgAAAFQBAAATAAAAY20yMk1BWTIwMTliaGF2LmNzdm2PTY7DIAyF9znLawQEB1iShrZIBFJAqTL3P8iA2kVHGln+lfz5uZzbkgKKy94VpN1FPPz9gZBeuIZUHIItFXt2x7utqda8Puv5qQ4bUP3mSrXb3mc21GzXBvPFRww23n1csfyAjeY/J0ySYWIzhLhs9rwIxg0IPjrG1cp4Mwz+yNfg4y1buGdbk9QCfRdv50JLLSTmBlV65H+gXJuO1YpsgwrC0P7d3VI6k+ZRgEwTRRKkurA20qCeiWZMQglSql/8hspJd6gkSl2rwfALUEsBAhQDFAAAAAgAgKFVXaT+yN7OAAAAVAEAABMAAAAAAAAAAAAAAIABAAAAAGNtMjJNQVkyMDE5Ymhhdi5jc3ZQSwUGAAAAAAEAAQBBAAAA/wAAAAAA",
+    "body_encoding": "base64"
+  }
+}

@@ -9,6 +9,7 @@ candles, Universe membership, sectors, announcements.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
@@ -20,7 +21,7 @@ import psycopg
 from tradeline.adjust import KINDS, AdjustedBar, CorporateAction, Kind, RawBar, adjust
 from tradeline.dates import IST
 from tradeline.instruments import Anomaly, Interval, KeyFrom, Link, LinkCandidate
-from tradeline.sources.nse import SymbolChange
+from tradeline.sources.nse import Delisting, SymbolChange
 
 
 @dataclass(frozen=True)
@@ -601,6 +602,18 @@ def symbol_changes(conn: psycopg.Connection, *, symbol: str | None = None) -> li
     return [SymbolChange(*row) for row in rows]
 
 
+def delistings(conn: psycopg.Connection, *, symbol: str | None = None) -> list[Delisting]:
+    """NSE's delisted-securities records as published, oldest first: every record, or
+    ``symbol``'s."""
+    rows = conn.execute(
+        "SELECT symbol, company_name, delisted_on, kind FROM delistings"
+        " WHERE %s::text IS NULL OR symbol = %s"
+        " ORDER BY delisted_on, symbol",
+        (symbol, symbol),
+    ).fetchall()
+    return [Delisting(*row) for row in rows]
+
+
 @dataclass(frozen=True)
 class Instrument:
     """An Instrument as last rebuilt (``tradeline.rebuild_instruments``)."""
@@ -696,12 +709,121 @@ def link_candidates(conn: psycopg.Connection) -> list[LinkCandidate]:
     return [LinkCandidate(*row) for row in rows]
 
 
+SERIES_MOVED = "series moved"
+MERGED = "merged"
+DELISTED = "delisted"
+ENDED = "ended, reason not stated"
+STILL_TRADING = "still trading"
+# A Symbol in no Instrument: none rebuilt yet, so no reason can be read.
+NO_INSTRUMENT = "no Instrument"
+
+
+@dataclass(frozen=True)
+class EndReason:
+    """Why an Instrument's rows in a series stop, as the stored rows and NSE's records say.
+
+    ``reason`` is one of: ``series moved`` (the Instrument's rows continue in
+    another series), ``merged`` or ``delisted`` (it ended, and an official
+    record says so: a scheme of amalgamation NSE lists for its last Symbol, or
+    NSE's delisted list), ``ended, reason not stated`` (no later rows and no
+    such record), or ``still trading`` (rows in the series on the Raw Series'
+    last day). Never inferred from a name or a price.
+    """
+
+    instrument: str
+    series: str
+    reason: str
+    # The last row in the series (series moved, still trading), or the Instrument's last row.
+    last_day: date
+    # The Symbol of that last row.
+    last_symbol: str
+    # Where the rows continue, or the official record; empty where there is none.
+    detail: str
+
+
+_INTERVALS_OF = (
+    "SELECT symbol, series, isin, first_day, last_day FROM instrument_intervals"
+    " WHERE instrument_key = %s ORDER BY last_day DESC, series, symbol"
+)
+# The earliest official record of an ended Instrument's end, under its last
+# Symbol, after its last row and before any later Instrument took the Symbol.
+_NOT_REUSED = (
+    "NOT EXISTS (SELECT 1 FROM instrument_intervals r WHERE r.symbol = %(symbol)s"
+    " AND r.first_day > %(last_day)s AND r.first_day <= {on})"
+)
+_SCHEME = (
+    "SELECT ex_date, subject FROM corporate_actions"
+    " WHERE symbol = %(symbol)s AND ex_date > %(last_day)s AND subject ILIKE '%%amalgamation%%'"
+    " AND (isin IS NULL OR %(isin)s::text IS NULL OR isin = %(isin)s)"
+    f" AND {_NOT_REUSED.format(on='ex_date')}"
+    " ORDER BY ex_date, subject LIMIT 1"
+)
+_DELISTING = (
+    "SELECT delisted_on, kind FROM delistings"
+    " WHERE symbol = %(symbol)s AND delisted_on > %(last_day)s"
+    f" AND {_NOT_REUSED.format(on='delisted_on')}"
+    " ORDER BY delisted_on LIMIT 1"
+)
+
+
+def end_reasons(conn: psycopg.Connection, wanted: Iterable[tuple[str, str]]) -> list[EndReason]:
+    """The reason each (Instrument key, series) in ``wanted`` stops, in the order given.
+
+    An unknown key is refused with a ``LookupError``.
+    """
+    raw_last = instruments_last_day(conn)
+    return [_end_reason(conn, key, series, raw_last) for key, series in wanted]
+
+
+def _end_reason(
+    conn: psycopg.Connection, key: str, series: str, raw_last: date | None
+) -> EndReason:
+    intervals = [Interval(*row) for row in conn.execute(_INTERVALS_OF, (key,)).fetchall()]
+    if not intervals:
+        raise LookupError(f"no Instrument {key}")
+    last = intervals[0]
+    if last.last != raw_last:
+        return _ended(conn, key, series, last)
+    in_series = [i for i in intervals if i.series == series]
+    if in_series and in_series[0].last == raw_last:
+        return EndReason(key, series, STILL_TRADING, raw_last, in_series[0].symbol, "")
+    moved_from = in_series[0] if in_series else last
+    after = [i for i in intervals if i.series != series and i.first > moved_from.last]
+    onward = min(after, key=lambda i: (i.first, i.series)) if after else last
+    return EndReason(
+        key,
+        series,
+        SERIES_MOVED,
+        moved_from.last,
+        moved_from.symbol,
+        f"continues in {onward.series} from {onward.first}",
+    )
+
+
+def _ended(conn: psycopg.Connection, key: str, series: str, last: Interval) -> EndReason:
+    params = {"symbol": last.symbol, "last_day": last.last, "isin": last.isin}
+    scheme = conn.execute(_SCHEME, params).fetchone()
+    if scheme is not None:
+        ex_date, subject = scheme
+        detail = f"NSE corporate action ex {ex_date}: {subject}"
+        return EndReason(key, series, MERGED, last.last, last.symbol, detail)
+    delisting = conn.execute(_DELISTING, params).fetchone()
+    if delisting is not None:
+        delisted_on, kind = delisting
+        detail = f"NSE delisted list: {kind} on {delisted_on}"
+        return EndReason(key, series, DELISTED, last.last, last.symbol, detail)
+    return EndReason(key, series, ENDED, last.last, last.symbol, "")
+
+
 @dataclass(frozen=True)
 class EndedInstrument:
     key: str
     # The Instrument's last end-of-day row, and the Symbol it was under.
     last_day: date
     last_symbol: str
+    # ``merged``, ``delisted``, or ``ended, reason not stated`` (``EndReason``), and its record.
+    reason: str
+    detail: str
 
 
 def instruments_last_day(conn: psycopg.Connection) -> date | None:
@@ -711,20 +833,51 @@ def instruments_last_day(conn: psycopg.Connection) -> date | None:
 
 
 def ended_instruments(conn: psycopg.Connection) -> list[EndedInstrument]:
-    """The Instruments whose history stops before the Raw Series does, by key.
+    """The Instruments whose history stops before the Raw Series does, by key, each with
+    the reason an official record gives (``end_reasons``).
 
     An Instrument with no row on the last day of any Instrument's history has
     ended, as far as the stored rows show: delisted, suspended, absorbed, or
-    renamed with no link to its new Symbol.
+    renamed with no link to its new Symbol. Only NSE's records say which.
     """
     rows = conn.execute(
-        "SELECT DISTINCT ON (instrument_key) instrument_key, last_day, symbol"
+        "SELECT DISTINCT ON (instrument_key) instrument_key, series"
         " FROM instrument_intervals"
         " WHERE instrument_key NOT IN (SELECT instrument_key FROM instrument_intervals"
         "  WHERE last_day = (SELECT max(last_day) FROM instrument_intervals))"
         " ORDER BY instrument_key, last_day DESC, series"
     ).fetchall()
-    return [EndedInstrument(*row) for row in rows]
+    return [
+        EndedInstrument(r.instrument, r.last_day, r.last_symbol, r.reason, r.detail)
+        for r in end_reasons(conn, [(key, series) for key, series in rows])
+    ]
+
+
+def members_without_candles(conn: psycopg.Connection) -> list[EndReason]:
+    """Every Instrument ever in the Universe, in the series it was ranked in, with no Kite
+    daily candle stored for it, each with its end reason; by reason, then key.
+
+    A member is the Instrument it was ranked as, if the last rebuild still has
+    it; otherwise (a rule that ranks Symbols, or a stale month whose Instrument
+    a later rebuild regrouped) the Instrument its Symbol names in its month. A
+    member whose Symbol is in no Instrument is left out: the report reads a
+    rebuild.
+    """
+    rows = conn.execute(
+        # One pass over the candles, not one per member.
+        "WITH fetched AS MATERIALIZED (SELECT DISTINCT instrument FROM candles_daily_instruments),"
+        " members AS (SELECT DISTINCT coalesce(i.key, s.instrument_key) AS key, m.series"
+        "  FROM universe_membership m"
+        "  LEFT JOIN instruments i ON i.key = m.instrument_key"
+        "  LEFT JOIN symbol_instruments s ON i.key IS NULL AND s.symbol = m.symbol"
+        "   AND (s.after IS NULL OR m.month > s.after)"
+        "   AND (s.through IS NULL OR m.month <= s.through))"
+        " SELECT key, series FROM members"
+        " WHERE key IS NOT NULL AND key NOT IN (SELECT instrument FROM fetched)"
+        " ORDER BY key, series"
+    ).fetchall()
+    reasons = end_reasons(conn, [(key, series) for key, series in rows])
+    return sorted(reasons, key=lambda r: (r.reason, r.instrument, r.series))
 
 
 @dataclass(frozen=True)

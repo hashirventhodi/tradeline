@@ -191,6 +191,30 @@ of month, rank, symbol and traded value in month and rank order) under rule
 version `53181efb8726`. Nine months were stored by the query before it was
 materialized; the second run reproduced them too.
 
+## Why an ever-member has no Kite candles (#26)
+
+Checked on 2026-10-21 against NSE's live list of delisted securities, fetched
+through the NSE session (recorded and trimmed under
+`tests/fixtures/end_reasons/`), and against the #13 database's corporate
+actions.
+
+| Question | Answer | Checked on |
+|---|---|---|
+| Where is NSE's delisted list? | `https://nsearchives.nseindia.com/content/equities/delisted.csv`, beside `EQUITY_L.csv` and `symbolchange.csv`. The JSON paths tried on `www.nseindia.com` (`/api/delisted-securities`, `/api/corporates-delisting`) answer 404. | 2026-10-21 |
+| Does it say why a security was delisted? | **Only the kind of delisting.** Its columns are Symbol, Company, Delisted Date (`15-Apr-02`, a two-digit year), and Type of Delisting: Compulsory Delisting (137), Delisting - Liquidation (99), or Voluntary Delisting (92). It never says merged: HDFC, MINDTREE, GRUH, IDFC and the merged PSU banks are not on it. | 2026-10-21 |
+| Is it current? | **No.** 328 records from 15 April 2002 to 9 November 2020 (HEXAWARE); the server's `Last-Modified` is 11 November 2020. Nothing delisted since is listed. | 2026-10-21 |
+| How much of the #13 Universe does it cover? | One of the 544 ever-members: HEXAWARE. | 2026-10-21 |
+| Does NSE's corporate-action list record mergers? | Rarely, and only for the company absorbed. Of 26,264 actions from 2015, three subjects name an amalgamation without a demerger: PENPEBS ex 2019-06-07 (its last row 2019-06-06), IFGLREFRAC ex 2017-09-14 (last row 2017-09-13), and SABTN 2016-03-22 (a composite scheme; SABTN kept trading). The merged large caps (HDFC, MINDTREE, the PSU banks) have no scheme action at all. | 2026-10-21 |
+
+Consequence: an Instrument's end reason is **merged** only where NSE lists a
+scheme of amalgamation for its last Symbol with an Ex-Date after its last row,
+and **delisted** only where the delisted list names its last Symbol after its
+last row, with the kind of delisting as the detail. Everything else that
+ended is **ended, reason not stated**. Of the #13 run's 52 ever-members that
+were delisted, merged, or now trade only in BE or BZ, expect the last to show
+**series moved** and nearly all the rest **ended, reason not stated**. `ingest delistings` stores the list
+as published; a newer official source would be a new ingest, not an inference.
+
 ## US-market findings (for reference; not the chosen market)
 
 Alpaca offers free paper trading with IEX data and ₹99-equivalent full SIP data; Massive (formerly Polygon) runs 29 to 199 dollars a month; SEC EDGAR is free. These made the US the easier engineering choice. The Operator chose Indian equities, which cost more in friction (no sandbox, daily login, static IP) but is the market they trade.

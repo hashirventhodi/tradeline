@@ -23,6 +23,11 @@ a symbol is fetched as the Instrument it names (on the range's end, or in the
 Universe month) through the token of that Instrument's current Symbol, the
 one it was named last, and its bars are stored under that Symbol: ZOMATO is
 fetched as ETERNAL, and ``fetched_through`` in the run's details records it.
+There is no fallback to an old Symbol's token. A member without a token is
+reported with the reason its Instrument has none (``queries.end_reasons``:
+its series moved, it merged or was delisted on NSE's record, it ended with no
+reason stated, or it still trades and Kite's dump lacks it), in
+``without_token_by_reason`` with the name requested and the name looked up.
 An Instrument asked for under two of its Symbols is fetched once. A symbol in
 no Instrument (none rebuilt yet) is fetched under itself.
 
@@ -44,6 +49,7 @@ from typing import Any
 
 import psycopg
 
+from tradeline import queries
 from tradeline.dates import month_of
 from tradeline.ingest import COMMAND, IngestRunCounters, record_ingest_run
 from tradeline.logging import log_context
@@ -73,11 +79,15 @@ class CandleIngestResult:
     rows_written: int
     anomalies: int
     requests: int
+    # Each reason's members without a token: the Kite name looked up, the one requested,
+    # the Instrument, and the reason's detail (``queries.EndReason``).
+    without_token_by_reason: dict[str, list[dict[str, str | None]]]
 
     def summary(self) -> dict[str, Any]:
         return {
             "symbols_loaded": self.symbols_loaded,
             "symbols_without_token": list(self.symbols_without_token),
+            "without_token_by_reason": self.without_token_by_reason,
             "rows_written": self.rows_written,
             "anomalies": self.anomalies,
             "requests": self.requests,
@@ -93,6 +103,8 @@ class _Instrument:
     symbol: str
     series: str
     token: int | None
+    # The Instrument's key; None for a symbol in no Instrument.
+    instrument: str | None
 
 
 @dataclass(frozen=True)
@@ -169,6 +181,7 @@ def ingest_candles(
         rows_written=run.rows_written,
         anomalies=run.details["anomalies"],
         requests=run.details["requests"],
+        without_token_by_reason=run.details["without_token_by_reason"],
     )
 
 
@@ -221,7 +234,8 @@ def _through_current_symbols(
     yet, or a series the Instruments leave out) is fetched under itself.
     """
     rows = conn.execute(
-        "SELECT r.symbol, coalesce(cur.symbol, r.symbol), r.series, s.kite_instrument_token"
+        "SELECT r.symbol, coalesce(cur.symbol, r.symbol), r.series, s.kite_instrument_token,"
+        " m.instrument_key"
         " FROM unnest(%s::text[], %s::text[]) WITH ORDINALITY AS r(symbol, series, n)"
         " LEFT JOIN symbol_instruments m ON m.symbol = r.symbol"
         "  AND (m.after IS NULL OR %s::date > m.after)"
@@ -236,9 +250,9 @@ def _through_current_symbols(
         ([symbol for symbol, _ in requested], [series for _, series in requested], as_of, as_of),
     ).fetchall()
     instruments: dict[tuple[str, str], _Instrument] = {}
-    for requested_symbol, symbol, series, token in rows:
+    for requested_symbol, symbol, series, token, key in rows:
         instruments.setdefault(
-            (symbol, series), _Instrument(requested_symbol, symbol, series, token)
+            (symbol, series), _Instrument(requested_symbol, symbol, series, token, key)
         )
     return list(instruments.values())
 
@@ -257,10 +271,12 @@ def _load_symbols(
     anomalies = 0
     anomaly_bars: list[dict[str, Any]] = []
     without_token: list[str] = []
+    without_token_by_reason: dict[str, list[dict[str, str | None]]] = {}
     run.details.update(
         {
             "symbols_requested": len(instruments),
             "symbols_without_token": without_token,
+            "without_token_by_reason": without_token_by_reason,
             # An old Symbol fetched through its Instrument's current one, by Kite trading symbol.
             "fetched_through": {
                 kite.trading_symbol(i.requested, i.series): kite.trading_symbol(i.symbol, i.series)
@@ -272,11 +288,13 @@ def _load_symbols(
             "requests": 0,
         }
     )
+    tokenless: list[_Instrument] = []
     for instrument in instruments:
         with log_context(symbol=instrument.symbol, series=instrument.series):
             if instrument.token is None:
                 log.warning("symbol has no kite instrument token; skipped")
                 without_token.append(kite.trading_symbol(instrument.symbol, instrument.series))
+                tokenless.append(instrument)
                 continue
             before = session.requests_sent
             candles = kite.fetch_candles(
@@ -303,9 +321,33 @@ def _load_symbols(
                 },
             )
     run.details["anomalies"] = anomalies
+    without_token_by_reason.update(_by_reason(conn, tokenless))
     if without_token:
-        log.warning("symbols without a kite instrument token", extra={"symbols": without_token})
+        log.warning(
+            "symbols without a kite instrument token",
+            extra={"symbols": without_token, "by_reason": without_token_by_reason},
+        )
     return loaded
+
+
+def _by_reason(
+    conn: psycopg.Connection, tokenless: list[_Instrument]
+) -> dict[str, list[dict[str, str | None]]]:
+    """Each Instrument without a token under the reason it has none, in the order fetched."""
+    keyed = [(i.instrument, i.series) for i in tokenless if i.instrument is not None]
+    found = dict(zip(keyed, queries.end_reasons(conn, keyed), strict=True))
+    by_reason: dict[str, list[dict[str, str | None]]] = {}
+    for i in tokenless:
+        reason = found.get((i.instrument, i.series)) if i.instrument is not None else None
+        by_reason.setdefault(queries.NO_INSTRUMENT if reason is None else reason.reason, []).append(
+            {
+                "symbol": kite.trading_symbol(i.symbol, i.series),
+                "requested": kite.trading_symbol(i.requested, i.series),
+                "instrument": i.instrument,
+                "detail": "" if reason is None else reason.detail,
+            }
+        )
+    return by_reason
 
 
 _CANDLE_VALUES = ("open", "high", "low", "close", "volume")  # everything but the key

@@ -142,6 +142,7 @@ def test_the_instruments_command_prints_the_report_and_writes_nothing(
         "last_day": "2025-04-11",
         "anomalies": {"conflicting_link": 1},
         "ended": 6,
+        "without_candles": {},
         "candidates": 1,
         "stale_months": {},
     }

@@ -25,6 +25,7 @@ from tradeline.environment import Environment
 from tradeline.ingest.announcements import ingest_announcements
 from tradeline.ingest.candles import CurrentUniverse, ingest_candles
 from tradeline.ingest.corporate_actions import ingest_corporate_actions
+from tradeline.ingest.delistings import ingest_delistings
 from tradeline.ingest.eod import ingest_eod
 from tradeline.ingest.news import Feed, ingest_news
 from tradeline.ingest.symbol_changes import ingest_symbol_changes
@@ -113,6 +114,8 @@ def ingest(ctx: Context, args: argparse.Namespace) -> int:
         return _ingest_news(ctx, args)
     if args.source == "symbol-changes":
         return _ingest_symbol_changes(ctx, args)
+    if args.source == "delistings":
+        return _ingest_delistings(ctx, args)
     end = args.start if args.end is None else args.end
     with _scope(args.start, end, getattr(args, "symbols", None)):
         return _ingest_range(ctx, args, end)
@@ -201,6 +204,14 @@ def _ingest_symbol_changes(ctx: Context, args: argparse.Namespace) -> int:
     with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
         result = ingest_symbol_changes(conn, transport)
     log.info("ingest symbol-changes finished", extra=result.summary())
+    return 0
+
+
+def _ingest_delistings(ctx: Context, args: argparse.Namespace) -> int:
+    transport = _transport(ctx, args)
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = ingest_delistings(conn, transport)
+    log.info("ingest delistings finished", extra=result.summary())
     return 0
 
 
@@ -498,6 +509,11 @@ def build_parser() -> argparse.ArgumentParser:
         "symbol-changes",
         parents=[fixtures],
         help="NSE's symbol-change list as it stands today, stored as published",
+    )
+    sources.add_parser(
+        "delistings",
+        parents=[fixtures],
+        help="NSE's list of delisted securities as it stands today, stored as published",
     )
     news = sources.add_parser(
         "news",

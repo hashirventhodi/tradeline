@@ -1,0 +1,67 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://nsearchives.nseindia.com/content/historical/EQUITIES/2019/MAY/cm14MAY2019bhav.csv.zip",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "x-frame-options",
+        "DENY"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "accept-ranges",
+        "bytes"
+      ],
+      [
+        "etag",
+        "W/\"68432-1557835321000\""
+      ],
+      [
+        "last-modified",
+        "Tue, 14 May 2019 12:02:01 GMT"
+      ],
+      [
+        "content-type",
+        "application/zip"
+      ],
+      [
+        "content-length",
+        "343"
+      ],
+      [
+        "date",
+        "Wed, 21 Oct 2026 14:39:44 GMT"
+      ],
+      [
+        "akamai-grn",
+        "0.15d70b17.1792593584.165a4cac"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "content-security-policy",
+        "default-src 'self'; script-src 'strict-dynamic' 'nonce-MC4yMDg2Mzc3MzEw' 'unsafe-inline' http: https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.nse.co.in https://*.nseindia.com; font-src 'self'; frame-src 'self'; base-uri 'self'; frame-ancestors 'self'; connect-src 'self' https://*.nseindia.com https://c.go-mpulse.net https://stats.g.doubleclick.net https://*.akstat.io/ https://*.akamaihd.net"
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000 ; includeSubDomains ; preload"
+      ]
+    ],
+    "body": "UEsDBBQAAAAIAIChVV3blpCvzwAAAFkBAAATAAAAY20xNE1BWTIwMTliaGF2LmNzdlWPXW7DIBCE332WiWV+NjaPOKYJEgYHkCv3/gfp4qRSI2CYXWk/hnKscwooLntXkDYX8fD3B0L6xi2k4hBsqdiy219lTbXm5VmPt9ttQPWrK9WuW+vZULNdGOaLj+hsvPu4YP7B0E/EYv6bd6EUQU7US4LQl9UeFzkIA4KPbhDjMghe6Pyeb8HHr2zhnjyp22koRX/uJSAiKYyBVEaMQvXjJ1hPsqGnkSyD+dWOP765uTQucY63KN6ckfR5E0ieQYW+Xrn9EfUEaqLUshp0v1BLAQIUAxQAAAAIAIChVV3blpCvzwAAAFkBAAATAAAAAAAAAAAAAACAAQAAAABjbTE0TUFZMjAxOWJoYXYuY3N2UEsFBgAAAAABAAEAQQAAAAABAAAAAA==",
+    "body_encoding": "base64"
+  }
+}
