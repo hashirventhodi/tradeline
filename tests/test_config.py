@@ -58,9 +58,10 @@ def test_the_committed_config_file_loads() -> None:
     assert config.logging.level == "INFO"
 
 
-def test_the_committed_config_states_the_universe_rule_of_adr_0005() -> None:
+def test_the_committed_config_states_the_universe_rule_of_adr_0005_ranking_instruments() -> None:
     config = load_config(Path(__file__).resolve().parents[1] / "tradeline.toml")
 
+    # ADR 0016: the Universe Rule ranks Instruments, under a new version.
     assert config.universe == UniverseRule(
         top_n=200,
         lookback_trading_days=126,
@@ -68,6 +69,7 @@ def test_the_committed_config_states_the_universe_rule_of_adr_0005() -> None:
         min_presence_percent=90,
         series="EQ",
         excluded_isin_prefix="INF",
+        rank_by="instrument",
     )
 
 
