@@ -24,7 +24,10 @@ Instruments it compares them with the new build over the window of every
 month stored under a rule that ranks Instruments: where any (Symbol, day) in
 the window falls in a different Instrument, which is to say the window's rows
 are grouped differently (a new key for the same grouping is not a change),
-the month is recorded as stale (``universe_stale_months``) and its membership
+or where an in-window Instrument's listing date moves across the rule's
+``min_listing_trading_days`` (the equity master corrected, or a link joined
+a listed Symbol), so its listing-age eligibility for the month changes, the
+month is recorded as stale (``universe_stale_months``) and its membership
 kept. Recomputing it is the Operator's deliberate act. A rule that ranks
 Symbols never reads the Instruments, so its months are never stale. A link
 dated after a window leaves the rows in it grouped as they were, so an
@@ -186,14 +189,16 @@ def _listings(conn: psycopg.Connection) -> list[Listing]:
 def _record_stale_months(
     conn: psycopg.Connection, built: InstrumentBuild, *, found_by: uuid.UUID
 ) -> int:
-    """Record each stored Universe month the build regroups; returns how many were new.
+    """Record each stored Universe month the build regroups or changes the listing age of;
+    returns how many were new.
 
     Only months under a rule that ranks Instruments and not already stale are
     compared. Each is compared over its window as the rule defines it: the
     ``lookback_trading_days`` days with end-of-day rows before the month.
     """
     months = conn.execute(
-        "SELECT DISTINCT m.month, m.rule_version, (v.parameters->>'lookback_trading_days')::int"
+        "SELECT DISTINCT m.month, m.rule_version, (v.parameters->>'lookback_trading_days')::int,"
+        " (v.parameters->>'min_listing_trading_days')::int"
         " FROM universe_membership m JOIN universe_rule_versions v ON v.version = m.rule_version"
         " WHERE v.parameters->>'rank_by' = 'instrument' AND NOT EXISTS ("
         "  SELECT 1 FROM universe_stale_months s"
@@ -209,24 +214,28 @@ def _record_stale_months(
         ).fetchall()
     ]
     old = [
-        (key, Interval(symbol, series, isin, first, last))
-        for key, symbol, series, isin, first, last in conn.execute(
-            "SELECT instrument_key, symbol, series, isin, first_day, last_day"
-            " FROM instrument_intervals"
+        (key, listed_on, Interval(symbol, series, isin, first, last))
+        for key, listed_on, symbol, series, isin, first, last in conn.execute(
+            "SELECT v.instrument_key, i.listed_on, v.symbol, v.series, v.isin, v.first_day,"
+            " v.last_day FROM instrument_intervals v JOIN instruments i ON i.key = v.instrument_key"
         ).fetchall()
     ]
-    new = [(i.key, interval) for i in built.instruments for interval in i.intervals]
+    new = [(i.key, i.listed_on, v) for i in built.instruments for v in i.intervals]
     stale = []
-    for month, version, lookback in months:
+    for month, version, lookback, min_listing in months:
         end = bisect_left(calendar, month)
         if end == 0:
             continue
         first, last = calendar[max(0, end - lookback)], calendar[end - 1]
-        if _grouping(old, first, last) != _grouping(new, first, last):
+        # The latest listing date with ``min_listing`` trading days to the month, as the
+        # Universe counts them; None when the calendar holds too few.
+        listed_by = calendar[end - min_listing] if end >= min_listing else None
+        if _grouping(old, first, last, listed_by) != _grouping(new, first, last, listed_by):
             stale.append((month, version))
     for month, version in stale:
         log.warning(
-            "universe month stale: the rebuild regroups its window; stored membership kept",
+            "universe month stale: the rebuild regroups its window or changes a listing age;"
+            " stored membership kept",
             extra={"month": month.isoformat(), "rule_version": version},
         )
     conn.execute(
@@ -238,12 +247,18 @@ def _record_stale_months(
 
 
 def _grouping(
-    intervals: Sequence[tuple[str, Interval]], first: date, last: date
-) -> frozenset[frozenset[tuple[str, str, date, date]]]:
-    """How the rows from ``first`` to ``last`` are grouped into Instruments, keys aside."""
+    intervals: Sequence[tuple[str, date, Interval]],
+    first: date,
+    last: date,
+    listed_by: date | None,
+) -> frozenset[tuple[frozenset[tuple[str, str, date, date]], bool]]:
+    """How the rows from ``first`` to ``last`` are grouped into Instruments, keys aside, each
+    group with whether its Instrument was listed by ``listed_by``, long enough for the month."""
     groups: defaultdict[str, set[tuple[str, str, date, date]]] = defaultdict(set)
-    for key, interval in intervals:
+    eligible: dict[str, bool] = {}
+    for key, listed_on, interval in intervals:
         if interval.first <= last and interval.last >= first:
+            eligible[key] = listed_by is not None and listed_on <= listed_by
             groups[key].add(
                 (
                     interval.symbol,
@@ -252,7 +267,7 @@ def _grouping(
                     min(interval.last, last),
                 )
             )
-    return frozenset(frozenset(group) for group in groups.values())
+    return frozenset((frozenset(group), eligible[key]) for key, group in groups.items())
 
 
 def _replace(conn: psycopg.Connection, built: InstrumentBuild) -> None:

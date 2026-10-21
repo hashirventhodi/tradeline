@@ -10,6 +10,10 @@ a manual link, which arrives late.
 The rules' windows are shrunk. Over 20 trading days, May 2025's window runs
 from 28 March to 30 April, across the rename. Over 10, April 2025's runs from
 17 to 28 March, before it.
+
+A listing date the equity master corrects is the master played back with
+RELIANCE's listing date moved to 25 March 2025 (``playback.lines``), then the
+recorded one.
 """
 
 from collections.abc import Iterator
@@ -29,6 +33,7 @@ from tradeline.ingest.symbol_changes import ingest_symbol_changes
 from tradeline.instruments import ManualLink
 from tradeline.instruments_report import instruments_report
 from tradeline.rebuild_instruments import rebuild_instruments
+from tradeline.transport import Request
 from tradeline.universe import compute_universe
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -132,3 +137,33 @@ def test_a_stale_month_stays_stale_and_is_reported_by_rule_version(
     assert report.text().endswith(
         f"\nStale Universe months: 1\n  rule {BY_INSTRUMENT.version}: 2025-05\n"
     )
+
+
+def listed_late(request: Request, body: bytes) -> bytes:
+    """NSE's equity master with RELIANCE listed on 25 March 2025, inside the data."""
+    if not request.url.endswith("/EQUITY_L.csv"):
+        return body
+    relist = lines(lambda rows: [row.replace("29-NOV-1995", "25-MAR-2025") for row in rows])
+    return relist(request, body)
+
+
+def test_a_corrected_listing_date_that_changes_a_members_listing_age_makes_its_month_stale(
+    fresh_database_url: str,
+) -> None:
+    # Five trading days since listing: on 25 March RELIANCE had four before April.
+    listing = replace(SHORT, min_listing_trading_days=5)
+    with app_connection(fresh_database_url) as conn:
+        ingest_eod(conn, Playback(FIXTURES, EOD_FIXTURES, edit=listed_late), start=START, end=END)
+        ingest_symbol_changes(conn, Playback(INSTRUMENT_FIXTURES))
+        rebuild_instruments(conn)
+        stored = store(conn, [(listing, APRIL)])
+        # The next load brings the master's listing date back to 1995.
+        ingest_eod(conn, Playback(FIXTURES, EOD_FIXTURES), start=END, end=END)
+        rebuild_instruments(conn)
+        report = instruments_report(conn)
+        kept = membership(conn, [(listing, APRIL)])
+
+    assert "RELIANCE" not in [m.symbol for m in stored]
+    # The window's rows are grouped as before; only RELIANCE's listing age changed.
+    assert [(s.rule_version, s.month) for s in report.stale] == [(listing.version, APRIL)]
+    assert kept == stored
