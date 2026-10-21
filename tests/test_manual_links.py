@@ -60,7 +60,6 @@ def test_a_row_with_an_unparseable_date_is_refused_with_the_row_named(tmp_path: 
         f"RUCHI,PATANJALI,2022-07-13,{CIRCULAR},extra",
         "RUCHI,PATANJALI,2022-07-13",
         f",PATANJALI,2022-07-13,{CIRCULAR}",
-        f"RUCHI,RUCHI,2022-07-13,{CIRCULAR}",
     ],
 )
 def test_a_malformed_row_is_refused_with_its_line_named(tmp_path: Path, row: str) -> None:
@@ -68,6 +67,18 @@ def test_a_malformed_row_is_refused_with_its_line_named(tmp_path: Path, row: str
 
     with pytest.raises(ValueError, match=r"manual_links.csv line 2"):
         load_manual_links(path)
+
+
+def test_a_row_under_one_symbol_is_read_as_a_link_across_an_isin_change(tmp_path: Path) -> None:
+    path = write(
+        tmp_path, HEADER + "YESBANK,YESBANK,2020-03-16,Yes Bank Limited Reconstruction Scheme\n"
+    )
+
+    assert load_manual_links(path) == [
+        ManualLink(
+            "YESBANK", "YESBANK", date(2020, 3, 16), "Yes Bank Limited Reconstruction Scheme"
+        )
+    ]
 
 
 def test_a_file_without_the_expected_header_is_refused(tmp_path: Path) -> None:

@@ -10,12 +10,15 @@ reviewed like code. A row is one rename::
 
 ``effective_date`` is ISO (``YYYY-MM-DD``), the first day the new Symbol
 trades, and ``citation`` an official source: an exchange circular's URL or
-number, or a company filing. Lines starting with ``#`` are comments, and blank
+number, or a company filing. A row may also name one Symbol on both sides: an
+ISIN change under that Symbol that no split or bonus explains (YESBANK's,
+when the depositories applied its 2020 reconstruction scheme's lock-in),
+effective the new ISIN's first day. Lines starting with ``#`` are comments, and blank
 lines are skipped. The builder joins a manual link by the same rules as an NSE
 record, and records the citation as the link's source.
 
-A malformed row (the wrong number of columns, a blank Symbol, the same Symbol
-on both sides, an unparseable date) or a row without a citation refuses the
+A malformed row (the wrong number of columns, a blank Symbol, an unparseable
+date) or a row without a citation refuses the
 whole file, naming the line, so a rebuild never runs on part of it.
 """
 
@@ -53,8 +56,6 @@ def _row(path: Path, number: int, line: str) -> ManualLink:
     if not old_symbol or not new_symbol:
         raise ValueError(f"{where}: both Symbols are required: {line}")
     where = f"{where}: {old_symbol} to {new_symbol}"
-    if old_symbol == new_symbol:
-        raise ValueError(f"{where}: the old and new Symbol are the same")
     try:
         effective_date = date.fromisoformat(effective)
     except ValueError:

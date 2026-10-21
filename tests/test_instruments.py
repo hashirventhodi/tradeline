@@ -524,3 +524,59 @@ def test_a_bonus_between_two_isins_years_apart_explains_neither_end_of_the_gap()
     assert [(a.kind, a.on) for a in built.anomalies] == [
         ("unexplained_isin_change", date(2020, 1, 1))
     ]
+
+
+YESBANK_OLD = "INE528G01027"
+YESBANK_NEW = "INE528G01035"
+YESBANK_SCHEME = "Yes Bank Limited Reconstruction Scheme, 2020"
+
+
+def yesbank_lock_in(effective: date) -> ManualLink:
+    return ManualLink(
+        old_symbol="YESBANK",
+        new_symbol="YESBANK",
+        effective_date=effective,
+        citation=YESBANK_SCHEME,
+    )
+
+
+def test_a_manual_link_under_one_symbol_joins_an_isin_change_no_action_explains() -> None:
+    # The depositories moved every YESBANK share to a new ISIN to apply the
+    # Reconstruction Scheme's lock-in; NSE lists no Corporate Action for it.
+    evidence = Evidence(
+        spans=[
+            span("YESBANK", YESBANK_OLD, date(2017, 9, 22), date(2020, 3, 13)),
+            span("YESBANK", YESBANK_NEW, date(2020, 3, 16), date(2026, 10, 19)),
+        ],
+        manual_links=[yesbank_lock_in(date(2020, 3, 16))],
+    )
+
+    built = build_instruments(evidence)
+
+    (instrument,) = built.instruments
+    assert [v.isin for v in instrument.intervals] == [YESBANK_OLD, YESBANK_NEW]
+    (link,) = instrument.links
+    assert (link.kind, link.on, link.from_isin, link.to_isin) == (
+        "manual",
+        date(2020, 3, 16),
+        YESBANK_OLD,
+        YESBANK_NEW,
+    )
+    assert link.source == f"manual link YESBANK to YESBANK effective 2020-03-16: {YESBANK_SCHEME}"
+    assert built.anomalies == ()
+    assert built.link_candidates == ()
+
+
+def test_a_manual_link_under_one_symbol_dated_away_from_its_isin_change_joins_nothing() -> None:
+    evidence = Evidence(
+        spans=[
+            span("YESBANK", YESBANK_OLD, date(2017, 9, 22), date(2020, 3, 13)),
+            span("YESBANK", YESBANK_NEW, date(2020, 3, 16), date(2026, 10, 19)),
+        ],
+        manual_links=[yesbank_lock_in(date(2020, 3, 23))],
+    )
+
+    built = build_instruments(evidence)
+
+    assert len(built.instruments) == 2
+    assert [a.kind for a in built.anomalies] == ["unexplained_isin_change"]

@@ -39,10 +39,14 @@ Instrument Link with a date and a source:
 - ``manual``: a reviewed row of the checked-in manual-links file
   (``tradeline.manual_links``), for a rename NSE's list omits (RUCHI to
   PATANJALI). It joins by the same rule as an NSE record, and its source
-  carries the row's citation.
+  carries the row's citation. A row naming one Symbol on both sides joins
+  that Symbol's ISIN change where no split or bonus does, if its effective
+  date is the new ISIN's first day or falls in the gap before it (YESBANK
+  2020-03-16, the depositories applying its reconstruction scheme's lock-in).
 
 Anything else splits the history. An ISIN change under one Symbol with no
-split or bonus to explain it is never joined and is recorded as an anomaly.
+split, bonus, or manual link to explain it is never joined and is recorded as
+an anomaly.
 
 A proposed link, from any source, is refused when it would give one
 Instrument two live Symbols on a day (a span of one overlapping a span of the
@@ -271,7 +275,7 @@ def _propose(
 ) -> list[_Proposal]:
     """Every link the rules propose, in a fixed order."""
     proposals = [
-        *_isin_changes(stretches, evidence.corporate_actions, anomalies),
+        *_isin_changes(stretches, evidence.corporate_actions, evidence.manual_links, anomalies),
         *_renames(stretches, evidence.symbol_changes, evidence.manual_links),
     ]
     return sorted(proposals, key=lambda p: (p.link.on, p.link.kind, p.joins[0].id, p.joins[1].id))
@@ -280,9 +284,11 @@ def _propose(
 def _isin_changes(
     stretches: list[_Stretch],
     actions: Sequence[CorporateAction],
+    manual_links: Sequence[ManualLink],
     anomalies: list[Anomaly],
 ) -> list[_Proposal]:
-    """Successive ISINs of one Symbol: joined on a split's or bonus's Ex-Date, else an anomaly.
+    """Successive ISINs of one Symbol: joined on a split's or bonus's Ex-Date, else by a
+    manual link under the Symbol dated at the change, else an anomaly.
 
     The action is the Symbol's, or one filed under another Symbol with the old
     or the new ISIN: NSE files an Instrument's past actions under its Symbol of
@@ -295,6 +301,10 @@ def _isin_changes(
             by_symbol[action.symbol].add(action)
             if action.isin is not None:
                 by_isin[action.isin].add(action)
+    manual_by_symbol: dict[str, set[ManualLink]] = defaultdict(set)
+    for m in manual_links:
+        if m.old_symbol == m.new_symbol:
+            manual_by_symbol[m.old_symbol].add(m)
     proposals: list[_Proposal] = []
     for symbol, found in sorted(_by_symbol(stretches).items()):
         for old, new in zip(found, found[1:], strict=False):
@@ -306,6 +316,18 @@ def _isin_changes(
                 key=lambda a: (a.ex_date, a.symbol != symbol, a.symbol, a.series, a.subject),
             )
             if not explaining:
+                manual = sorted(
+                    (
+                        m
+                        for m in manual_by_symbol.get(symbol, set())
+                        if old.last < m.effective_date <= new.first
+                    ),
+                    key=_manual_order,
+                )
+                if manual:
+                    link = _manual_link(manual[0], from_isin=old.isin, to_isin=new.isin)
+                    proposals.append(_Proposal(link, (old, new)))
+                    continue
                 anomalies.append(
                     Anomaly(
                         kind="unexplained_isin_change",
@@ -359,14 +381,7 @@ def _renames(
         )
         for r in sorted(set(records), key=_record_order)
     ] + [
-        (
-            m.old_symbol,
-            m.new_symbol,
-            m.effective_date,
-            "manual",
-            f"manual link {m.old_symbol} to {m.new_symbol}"
-            f" effective {m.effective_date.isoformat()}: {m.citation}",
-        )
+        (m.old_symbol, m.new_symbol, m.effective_date, "manual", _manual_source(m))
         for m in sorted(set(rows), key=_manual_order)
     ]
     proposals = (
@@ -414,6 +429,26 @@ def _record_order(record: SymbolChange) -> tuple[date, str, str, str]:
 
 def _manual_order(row: ManualLink) -> tuple[date, str, str, str]:
     return (row.effective_date, row.old_symbol, row.new_symbol, row.citation)
+
+
+def _manual_source(row: ManualLink) -> str:
+    return (
+        f"manual link {row.old_symbol} to {row.new_symbol}"
+        f" effective {row.effective_date.isoformat()}: {row.citation}"
+    )
+
+
+def _manual_link(row: ManualLink, *, from_isin: str | None, to_isin: str | None) -> Link:
+    """A manual link under one Symbol, across its ISIN change."""
+    return Link(
+        kind="manual",
+        on=row.effective_date,
+        from_symbol=row.old_symbol,
+        from_isin=from_isin,
+        to_symbol=row.new_symbol,
+        to_isin=to_isin,
+        source=_manual_source(row),
+    )
 
 
 def _by_symbol(stretches: list[_Stretch]) -> dict[str, list[_Stretch]]:

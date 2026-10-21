@@ -11,7 +11,7 @@ Neither Symbol nor ISIN is a stable identity on its own. Renames keep the ISIN (
 - same Symbol and same ISIN;
 - same Symbol with a new ISIN on the Ex-Date of a split, bonus, or consolidation NSE lists;
 - an NSE symbol-change record (stored as published, then links derived from it);
-- a reviewed, checked-in manual link that cites an official source, for renames NSE's list omits (RUCHI to PATANJALI).
+- a reviewed, checked-in manual link that cites an official source, for renames NSE's list omits (RUCHI to PATANJALI), or for an ISIN change under one Symbol that no Corporate Action explains (YESBANK in March 2020, when the depositories moved every share to a new ISIN to apply the Reconstruction Scheme's lock-in; added in #29, since leaving it split dropped a top-50 stock from the new rule's Universe for months).
 
 Anything else splits the history and is reported as an anomaly: an unexplained ISIN change, a same-ISIN rename with no record, or a link that would give one Instrument two live Symbols on a day. Mergers never join. A wrongly split history is visible and can be fixed with a cited link. A wrong join silently mixes two companies' prices into the Adjusted Series and the Universe.
 
