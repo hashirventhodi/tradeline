@@ -12,7 +12,8 @@ The evidence:
 - NSE's symbol-change records, as published;
 - the Corporate Actions, of which the splits and bonuses (a consolidation is a
   split with a factor above one) can explain an ISIN change;
-- NSE's listing dates, each for a (Symbol, ISIN) of the equity master.
+- NSE's listing dates, each for a (Symbol, ISIN) of the equity master;
+- the manual links, each citing an official source.
 
 A **stretch** is every span of one Symbol under one ISIN: the same Symbol with
 the same ISIN is one Instrument whatever the gap between its spans, and an
@@ -31,7 +32,11 @@ Instrument Link with a date and a source:
   joins the old Symbol's stretch that ended before the effective date to the
   new Symbol's stretch that started on or after it. Chains follow, since each
   record is one link. A record with no stretch on either side (a rename before
-  the Raw Series starts) joins nothing.
+  the Raw Series starts) joins nothing;
+- ``manual``: a reviewed row of the checked-in manual-links file
+  (``tradeline.manual_links``), for a rename NSE's list omits (RUCHI to
+  PATANJALI). It joins by the same rule as an NSE record, and its source
+  carries the row's citation.
 
 Anything else splits the history. An ISIN change under one Symbol with no
 split or bonus to explain it is never joined and is recorded as an anomaly.
@@ -59,7 +64,7 @@ from typing import Literal
 from tradeline.adjust import ADJUSTED_KINDS, CorporateAction
 from tradeline.sources.nse import SymbolChange
 
-LinkKind = Literal["corporate_action", "symbol_change"]
+LinkKind = Literal["corporate_action", "symbol_change", "manual"]
 KeyFrom = Literal["listing_date", "first_row"]
 AnomalyKind = Literal["unexplained_isin_change"]
 
@@ -91,11 +96,24 @@ class Listing:
 
 
 @dataclass(frozen=True)
+class ManualLink:
+    """A reviewed rename NSE's symbol-change list omits: from ``effective_date`` the old
+    Symbol trades under the new one, as the official source ``citation`` says."""
+
+    old_symbol: str
+    new_symbol: str
+    effective_date: date
+    # An official URL or circular number.
+    citation: str
+
+
+@dataclass(frozen=True)
 class Evidence:
     spans: Sequence[Span]
     symbol_changes: Sequence[SymbolChange] = ()
     corporate_actions: Sequence[CorporateAction] = ()
     listings: Sequence[Listing] = ()
+    manual_links: Sequence[ManualLink] = ()
 
 
 @dataclass(frozen=True)
@@ -215,6 +233,7 @@ def _propose(
     proposals = [
         *_isin_changes(stretches, evidence.corporate_actions, anomalies),
         *_symbol_changes(stretches, evidence.symbol_changes),
+        *_manual_links(stretches, evidence.manual_links),
     ]
     return sorted(proposals, key=lambda p: (p.link.on, p.link.kind, p.joins[0].id, p.joins[1].id))
 
@@ -274,33 +293,81 @@ def _symbol_changes(stretches: list[_Stretch], records: Sequence[SymbolChange]) 
     by_symbol = _by_symbol(stretches)
     proposals: list[_Proposal] = []
     for record in sorted(set(records), key=_record_order):
-        if record.old_symbol == record.new_symbol:
-            continue
         effective = record.effective_date
-        before = [s for s in by_symbol.get(record.old_symbol, []) if s.last < effective]
-        after = [s for s in by_symbol.get(record.new_symbol, []) if s.first >= effective]
-        if not before or not after:
-            continue
-        old = max(before, key=lambda s: (s.last, s.id))
-        new = min(after, key=lambda s: (s.first, s.id))
-        link = Link(
+        proposal = _rename(
+            by_symbol,
+            record.old_symbol,
+            record.new_symbol,
+            effective,
             kind="symbol_change",
-            on=effective,
-            from_symbol=old.symbol,
-            from_isin=old.isin,
-            to_symbol=new.symbol,
-            to_isin=new.isin,
             source=(
                 f"NSE symbol change {record.old_symbol} to {record.new_symbol}"
                 f" effective {effective.isoformat()}"
             ),
         )
-        proposals.append(_Proposal(link, (old, new)))
+        if proposal is not None:
+            proposals.append(proposal)
     return proposals
+
+
+def _manual_links(stretches: list[_Stretch], rows: Sequence[ManualLink]) -> list[_Proposal]:
+    """A manual link joins as an NSE record does; its source is its citation."""
+    by_symbol = _by_symbol(stretches)
+    proposals: list[_Proposal] = []
+    for row in sorted(set(rows), key=_manual_order):
+        effective = row.effective_date
+        proposal = _rename(
+            by_symbol,
+            row.old_symbol,
+            row.new_symbol,
+            effective,
+            kind="manual",
+            source=(
+                f"manual link {row.old_symbol} to {row.new_symbol}"
+                f" effective {effective.isoformat()}: {row.citation}"
+            ),
+        )
+        if proposal is not None:
+            proposals.append(proposal)
+    return proposals
+
+
+def _rename(
+    by_symbol: dict[str, list[_Stretch]],
+    old_symbol: str,
+    new_symbol: str,
+    effective: date,
+    *,
+    kind: LinkKind,
+    source: str,
+) -> _Proposal | None:
+    """The old Symbol's stretch ending before ``effective`` joined to the new one's from it."""
+    if old_symbol == new_symbol:
+        return None
+    before = [s for s in by_symbol.get(old_symbol, []) if s.last < effective]
+    after = [s for s in by_symbol.get(new_symbol, []) if s.first >= effective]
+    if not before or not after:
+        return None
+    old = max(before, key=lambda s: (s.last, s.id))
+    new = min(after, key=lambda s: (s.first, s.id))
+    link = Link(
+        kind=kind,
+        on=effective,
+        from_symbol=old.symbol,
+        from_isin=old.isin,
+        to_symbol=new.symbol,
+        to_isin=new.isin,
+        source=source,
+    )
+    return _Proposal(link, (old, new))
 
 
 def _record_order(record: SymbolChange) -> tuple[date, str, str, str]:
     return (record.effective_date, record.old_symbol, record.new_symbol, record.company_name or "")
+
+
+def _manual_order(row: ManualLink) -> tuple[date, str, str, str]:
+    return (row.effective_date, row.old_symbol, row.new_symbol, row.citation)
 
 
 def _by_symbol(stretches: list[_Stretch]) -> dict[str, list[_Stretch]]:

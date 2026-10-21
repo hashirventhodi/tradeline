@@ -11,7 +11,14 @@ from datetime import date
 from fractions import Fraction
 
 from tradeline.adjust import CorporateAction
-from tradeline.instruments import Evidence, Instrument, Listing, Span, build_instruments
+from tradeline.instruments import (
+    Evidence,
+    Instrument,
+    Listing,
+    ManualLink,
+    Span,
+    build_instruments,
+)
 from tradeline.sources.nse import SymbolChange
 
 
@@ -304,3 +311,36 @@ def test_a_listing_date_another_instrument_of_the_symbol_already_keys_is_not_use
         ("ALANKIT@2015-06-30", "first_row"),
         ("ALANKIT@2016-12-16", "first_row"),
     ]
+
+
+RUCHI_ISIN = "INE619A01035"
+RUCHI_CIRCULAR = "https://archives.nseindia.com/content/circulars/CML52890.pdf"
+
+
+def test_a_manual_link_joins_a_rename_nse_list_omits_and_carries_its_citation() -> None:
+    evidence = Evidence(
+        spans=[
+            span("RUCHI", RUCHI_ISIN, date(2020, 1, 27), date(2022, 7, 12), series="BE"),
+            span("PATANJALI", RUCHI_ISIN, date(2022, 7, 13), date(2026, 10, 19), series="BE"),
+        ],
+        manual_links=[
+            ManualLink(
+                old_symbol="RUCHI",
+                new_symbol="PATANJALI",
+                effective_date=date(2022, 7, 13),
+                citation=RUCHI_CIRCULAR,
+            )
+        ],
+    )
+
+    (instrument,) = build_instruments(evidence).instruments
+
+    assert [v.symbol for v in instrument.intervals] == ["RUCHI", "PATANJALI"]
+    (link,) = instrument.links
+    assert (link.kind, link.on, link.from_symbol, link.to_symbol) == (
+        "manual",
+        date(2022, 7, 13),
+        "RUCHI",
+        "PATANJALI",
+    )
+    assert link.source == f"manual link RUCHI to PATANJALI effective 2022-07-13: {RUCHI_CIRCULAR}"
