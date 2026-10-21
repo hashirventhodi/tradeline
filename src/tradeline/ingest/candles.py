@@ -238,8 +238,7 @@ def _through_current_symbols(
         " m.instrument_key"
         " FROM unnest(%s::text[], %s::text[]) WITH ORDINALITY AS r(symbol, series, n)"
         " LEFT JOIN symbol_instruments m ON m.symbol = r.symbol"
-        "  AND (m.after IS NULL OR %s::date > m.after)"
-        "  AND (m.through IS NULL OR %s::date <= m.through)"
+        "  AND names_on(m.after, m.through, %s::date)"
         " LEFT JOIN LATERAL ("
         "  SELECT c.symbol FROM symbol_instruments c WHERE c.instrument_key = m.instrument_key"
         "  ORDER BY c.named_until DESC, c.symbol LIMIT 1"
@@ -247,7 +246,7 @@ def _through_current_symbols(
         " LEFT JOIN symbols s"
         "  ON (s.symbol, s.series) = (coalesce(cur.symbol, r.symbol), r.series)"
         " ORDER BY r.n",
-        ([symbol for symbol, _ in requested], [series for _, series in requested], as_of, as_of),
+        ([symbol for symbol, _ in requested], [series for _, series in requested], as_of),
     ).fetchall()
     instruments: dict[tuple[str, str], _Instrument] = {}
     for requested_symbol, symbol, series, token, key in rows:

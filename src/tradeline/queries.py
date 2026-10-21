@@ -646,6 +646,16 @@ class InstrumentHistory:
     links: tuple[Link, ...]
 
 
+def _named_by(symbol: str, day: str) -> str:
+    """SQL for the key of the Instrument the Symbol ``symbol`` (an SQL expression) named on
+    ``day``, or last named before it; NULL if none. ``resolve_symbol``'s rule."""
+    return (
+        "SELECT v.instrument_key FROM instrument_intervals v"
+        f" WHERE v.symbol = {symbol} AND v.first_day <= {day}"
+        " ORDER BY v.first_day DESC, v.series LIMIT 1"
+    )
+
+
 def resolve_symbol(conn: psycopg.Connection, symbol: str, *, as_of: date) -> Instrument:
     """The Instrument ``symbol`` named on ``as_of``, or the one it last named before then.
 
@@ -656,11 +666,9 @@ def resolve_symbol(conn: psycopg.Connection, symbol: str, *, as_of: date) -> Ins
     ``NoInstrument``, so a Symbol is never read into a past before it existed.
     """
     row = conn.execute(
-        "SELECT i.key, i.first_symbol, i.listed_on, i.key_from"
-        " FROM instrument_intervals v JOIN instruments i ON i.key = v.instrument_key"
-        " WHERE v.symbol = %s AND v.first_day <= %s"
-        " ORDER BY v.first_day DESC, v.series LIMIT 1",
-        (symbol, as_of),
+        "SELECT key, first_symbol, listed_on, key_from FROM instruments"
+        f" WHERE key = ({_named_by('%(symbol)s', '%(as_of)s')})",
+        {"symbol": symbol, "as_of": as_of},
     ).fetchone()
     if row is None:
         raise NoInstrument(
@@ -882,8 +890,7 @@ def members_without_candles(conn: psycopg.Connection) -> list[EndReason]:
         "  FROM universe_membership m"
         "  LEFT JOIN instruments i ON i.key = m.instrument_key"
         "  LEFT JOIN symbol_instruments s ON i.key IS NULL AND s.symbol = m.symbol"
-        "   AND (s.after IS NULL OR m.month > s.after)"
-        "   AND (s.through IS NULL OR m.month <= s.through))"
+        "   AND names_on(s.after, s.through, m.month))"
         " SELECT key, series FROM members"
         " WHERE key IS NOT NULL AND key NOT IN (SELECT instrument FROM fetched)"
         " ORDER BY key, series"
@@ -1016,17 +1023,12 @@ def sectors(
         "  SELECT DISTINCT unnest(coalesce(%(symbols)s::text[], ARRAY("
         "    SELECT symbol FROM sectors WHERE effective_from <= %(as_of)s))) AS symbol"
         "), target AS ("
-        "  SELECT a.symbol, ("
-        "    SELECT v.instrument_key FROM instrument_intervals v"
-        "    WHERE v.symbol = a.symbol AND v.first_day <= %(as_of)s"
-        "    ORDER BY v.first_day DESC, v.series LIMIT 1"
-        "  ) AS instrument_key FROM asked a"
+        f"  SELECT a.symbol, ({_named_by('a.symbol', '%(as_of)s')}) AS instrument_key"
+        "  FROM asked a"
         "), recorded AS ("
-        "  SELECT s.symbol, s.sector, s.effective_from, ("
-        "    SELECT v.instrument_key FROM instrument_intervals v"
-        "    WHERE v.symbol = s.symbol AND v.first_day <= s.effective_from"
-        "    ORDER BY v.first_day DESC, v.series LIMIT 1"
-        "  ) AS instrument_key FROM sectors s WHERE s.effective_from <= %(as_of)s"
+        "  SELECT s.symbol, s.sector, s.effective_from,"
+        f"  ({_named_by('s.symbol', 's.effective_from')}) AS instrument_key"
+        "  FROM sectors s WHERE s.effective_from <= %(as_of)s"
         ")"
         " SELECT DISTINCT ON (t.symbol) t.symbol, r.sector, r.effective_from, r.symbol"
         " FROM target t JOIN recorded r ON r.instrument_key = t.instrument_key"
