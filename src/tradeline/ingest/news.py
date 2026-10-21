@@ -29,14 +29,13 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import psycopg
 
-from tradeline.ingest import IngestRunCounters, record_ingest_run
+from tradeline.ingest import COMMAND, IngestRunCounters, record_ingest_run
 from tradeline.sources import rss
 from tradeline.text_matching import TextMatcher
 from tradeline.transport import Transport
 
 log = logging.getLogger(__name__)
 
-COMMAND = "ingest"
 SOURCE = "rss"
 
 

@@ -23,9 +23,9 @@ import pytest
 
 from tradeline import queries
 from tradeline.config import UniverseRule
+from tradeline.dates import IST
 from tradeline.db import app_connection
 from tradeline.ingest.eod import ingest_eod
-from tradeline.queries import IST
 from tradeline.transport import PlaybackTransport
 from tradeline.universe import compute_universe
 

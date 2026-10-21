@@ -12,12 +12,12 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import psycopg
 import pytest
 
 from tradeline import queries
+from tradeline.dates import IST
 from tradeline.db import app_connection
 from tradeline.ingest.eod import ingest_eod
 from tradeline.ingest.news import Feed, NewsIngestResult, content_hash, ingest_news
@@ -30,7 +30,6 @@ FEEDS = (
     Feed("et_stocks", "https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms"),
 )
 ITEMS_SEEN, SHARED = 10, 3
-IST = ZoneInfo("Asia/Kolkata")
 DAY_START = datetime(2026, 10, 21, tzinfo=IST)
 DAY_END = datetime(2026, 10, 21, 23, 59, 59, tzinfo=IST)
 

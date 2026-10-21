@@ -13,13 +13,13 @@ import sys
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 from tradeline.collect import CollectResult
 from tradeline.collect import collect_daily as collect_daily_service
 from tradeline.config import Config, default_config_path, load_config
+from tradeline.dates import IST, month_end, month_of, next_month, parse_month
 from tradeline.db import app_connection, connect
 from tradeline.environment import Environment
 from tradeline.ingest.announcements import ingest_announcements
@@ -57,9 +57,6 @@ from tradeline.universe import compute_universe
 from tradeline.verify_universe import verify_universe as verify_universe_service
 
 log = logging.getLogger(__name__)
-
-# Kite's access tokens are issued and expire on the Indian calendar day.
-IST = ZoneInfo("Asia/Kolkata")
 
 
 @dataclass(frozen=True)
@@ -151,7 +148,7 @@ def _ingest_candles(ctx: Context, args: argparse.Namespace, end: date) -> int:
     universe = None
     if args.interval == INTERVAL_MINUTE and args.symbols is None:
         # Minute history is kept for the current Universe under the configured rule.
-        month = args.universe_month or datetime.now(IST).date().replace(day=1)
+        month = args.universe_month or month_of(datetime.now(IST).date())
         universe = CurrentUniverse(month=month, rule_version=ctx.config.universe.version)
     elif args.universe_month is not None:
         raise ValueError("--universe-month applies to minute candles without --symbol")
@@ -274,15 +271,6 @@ def _scope(start: date, end: date, symbols: Sequence[str] | None = None) -> Iter
         yield
 
 
-def _month_end(month: date) -> date:
-    """The last day of the month starting ``month``."""
-    return _next_month(month) - timedelta(days=1)
-
-
-def _next_month(month: date) -> date:
-    return (month.replace(day=28) + timedelta(days=4)).replace(day=1)
-
-
 def _transport(ctx: Context, args: argparse.Namespace, *, browser_tls: bool = False) -> Transport:
     """Live by default (refused under test); fixtures can be played back or recorded."""
     if args.play_fixtures is not None:
@@ -355,13 +343,13 @@ def universe(ctx: Context, args: argparse.Namespace) -> int:
     if end < args.month:
         raise ValueError(f"month {end:%Y-%m} is before {args.month:%Y-%m}")
     with (
-        _scope(args.month, _month_end(end)),
+        _scope(args.month, month_end(end)),
         app_connection(ctx.secrets.require(DATABASE_URL)) as conn,
     ):
         month = args.month
         while month <= end:
             compute_universe(conn, ctx.config.universe, month=month)
-            month = _next_month(month)
+            month = next_month(month)
     return 0
 
 
@@ -391,9 +379,9 @@ def verify_universe(ctx: Context, args: argparse.Namespace) -> int:
     The report goes to stderr; its summary is the last JSON line on stdout.
     """
     today = datetime.now(IST).date()
-    month = today.replace(day=1) if args.month is None else args.month
+    month = month_of(today) if args.month is None else args.month
     transport = _transport(ctx, args)
-    with _scope(month, _month_end(month)):
+    with _scope(month, month_end(month)):
         with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
             check = verify_universe_service(
                 conn, transport, ctx.config.universe, month=month, as_of=today
@@ -401,11 +389,6 @@ def verify_universe(ctx: Context, args: argparse.Namespace) -> int:
         sys.stderr.write(check.report())
         log.info("verify-universe finished", extra={"report": check.summary()})
     return 0
-
-
-def _month(text: str) -> date:
-    """A month as YYYY-MM, as its first day."""
-    return datetime.strptime(text, "%Y-%m").date()
 
 
 Command = Callable[[Context, argparse.Namespace], int]
@@ -498,7 +481,7 @@ def build_parser() -> argparse.ArgumentParser:
     candles.add_argument(
         "--universe-month",
         metavar="YYYY-MM",
-        type=_month,
+        type=parse_month,
         help="minute candles: the Universe month whose members are loaded, under the"
         " configured rule; defaults to the current month in India",
     )
@@ -537,12 +520,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="compute and record the Universe for months from loaded end-of-day files",
     )
     universe_parser.add_argument(
-        "--month", metavar="YYYY-MM", type=_month, required=True, help="the first month"
+        "--month", metavar="YYYY-MM", type=parse_month, required=True, help="the first month"
     )
     universe_parser.add_argument(
         "--to",
         metavar="YYYY-MM",
-        type=_month,
+        type=parse_month,
         help="the last month; defaults to --month",
     )
 
@@ -560,7 +543,7 @@ def build_parser() -> argparse.ArgumentParser:
     verify_parser.add_argument(
         "--month",
         metavar="YYYY-MM",
-        type=_month,
+        type=parse_month,
         help="the Universe month to compare; defaults to the current month",
     )
 

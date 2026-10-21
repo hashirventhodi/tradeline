@@ -24,17 +24,17 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 
 import psycopg
 
-from tradeline.ingest import IngestRunCounters, record_ingest_run
+from tradeline.dates import calendar_days
+from tradeline.ingest import COMMAND, IngestRunCounters, record_ingest_run
 from tradeline.sources import kite, nse
 from tradeline.transport import Transport
 
 log = logging.getLogger(__name__)
 
-COMMAND = "ingest"
 SOURCE_EQUITY_MASTER = "nse_equity_master"
 SOURCE_EOD = "nse_eod"
 SOURCE_KITE_INSTRUMENTS = "kite_instruments"
@@ -116,7 +116,7 @@ def _load_days(
     missing: list[str] = []
     anomalies = 0
     symbol_updates = 0
-    for day in _calendar_days(start, end):
+    for day in calendar_days(start, end):
         rows = nse.fetch_bhavcopy(session, day)
         if rows is None:
             if day.weekday() < 5:
@@ -149,13 +149,6 @@ def _load_days(
     }
     if missing:
         log.warning("trading days without an end-of-day file", extra={"missing_days": missing})
-
-
-def _calendar_days(start: date, end: date) -> Iterable[date]:
-    day = start
-    while day <= end:
-        yield day
-        day += timedelta(days=1)
 
 
 # Every column of eod_bhavcopy with its SQL type, in the order the row type holds them.

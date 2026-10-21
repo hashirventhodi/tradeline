@@ -29,13 +29,12 @@ from typing import Any
 import psycopg
 
 from tradeline.adjust import CorporateAction, interpret, looks_adjusting
-from tradeline.ingest import IngestRunCounters, record_ingest_run
+from tradeline.ingest import COMMAND, IngestRunCounters, record_ingest_run
 from tradeline.sources import nse
 from tradeline.transport import Transport
 
 log = logging.getLogger(__name__)
 
-COMMAND = "ingest"
 SOURCE = "nse_corporate_actions"
 # Unparsed subjects and anomalies are counted in full; this many of each are recorded in detail.
 MAX_RECORDED = 100

@@ -3,14 +3,13 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import pytest
 
 from tradeline.cli import main
+from tradeline.dates import IST
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-IST = ZoneInfo("Asia/Kolkata")
 
 
 def json_lines(text: str) -> list[dict[str, object]]:

@@ -23,8 +23,8 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 from urllib.parse import urlencode
-from zoneinfo import ZoneInfo
 
+from tradeline.dates import IST
 from tradeline.transport import Request, Response, Transport
 
 log = logging.getLogger(__name__)
@@ -37,7 +37,6 @@ ATTACHMENT_FOLDERS = {
     0: f"{SITE_HOST}/xml-data/corpfiling/AttachLive/",
     1: f"{SITE_HOST}/xml-data/corpfiling/AttachHis/",
 }
-IST = ZoneInfo("Asia/Kolkata")
 
 BROWSER_HEADERS: dict[str, str] = {
     "User-Agent": (

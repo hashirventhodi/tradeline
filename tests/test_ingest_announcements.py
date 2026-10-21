@@ -18,12 +18,12 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import psycopg
 import pytest
 
 from tradeline import queries
+from tradeline.dates import IST
 from tradeline.db import app_connection
 from tradeline.ingest.announcements import AnnouncementIngestResult, ingest_announcements
 from tradeline.ingest.eod import ingest_eod
@@ -32,7 +32,6 @@ from tradeline.transport import PlaybackTransport
 FIXTURES = Path(__file__).parent / "fixtures" / "ingest_announcements"
 MASTER_FIXTURES = Path(__file__).parent / "fixtures" / "ingest_announcements_master"
 DAY = date(2024, 7, 23)
-IST = ZoneInfo("Asia/Kolkata")
 LATER = datetime(2026, 1, 1, tzinfo=IST)
 NSE_FILINGS, BSE_FILINGS = 8, 9
 

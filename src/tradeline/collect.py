@@ -32,6 +32,7 @@ import psycopg
 
 from tradeline import queries
 from tradeline.config import UniverseRule
+from tradeline.dates import month_of
 from tradeline.ingest import in_collection, record_ingest_run
 from tradeline.ingest.announcements import SOURCE_BSE, SOURCE_NSE, ingest_announcements
 from tradeline.ingest.candles import SOURCE_DAILY, CurrentUniverse, ingest_candles
@@ -142,7 +143,7 @@ def collect_daily(
 
 def _current_universe(conn: psycopg.Connection, rule: UniverseRule, day: date) -> CurrentUniverse:
     """``day``'s Universe under ``rule``, computing the month's membership if it is not stored."""
-    month = day.replace(day=1)
+    month = month_of(day)
     if not queries.universe_membership(conn, month, as_of=day, rule_version=rule.version):
         compute_universe(conn, rule, month=month)
     return CurrentUniverse(month=month, rule_version=rule.version)

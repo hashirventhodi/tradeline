@@ -39,8 +39,8 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from urllib.parse import urlencode, urlsplit
-from zoneinfo import ZoneInfo
 
+from tradeline.dates import IST
 from tradeline.transport import Request, Response, Transport
 
 log = logging.getLogger(__name__)
@@ -50,7 +50,6 @@ SITE_HOST = "https://www.nseindia.com"
 EQUITY_MASTER_URL = f"{ARCHIVES_HOST}/content/equities/EQUITY_L.csv"
 CORPORATE_ACTIONS_URL = f"{SITE_HOST}/api/corporates-corporateActions"
 ANNOUNCEMENTS_URL = f"{SITE_HOST}/api/corporate-announcements"
-IST = ZoneInfo("Asia/Kolkata")
 
 # The first trading day with no legacy file; UDiFF is used from here on.
 UDIFF_FROM = date(2024, 7, 8)

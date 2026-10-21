@@ -13,13 +13,13 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import psycopg
 import pytest
 
 from tradeline import queries
 from tradeline.config import UniverseRule
+from tradeline.dates import IST
 from tradeline.db import app_connection
 from tradeline.ingest.candles import CandleIngestResult, CurrentUniverse, ingest_candles
 from tradeline.ingest.eod import ingest_eod
@@ -30,7 +30,6 @@ from tradeline.universe import compute_universe
 UNIVERSE_FIXTURES = Path(__file__).parent / "fixtures" / "universe"
 FIXTURES = Path(__file__).parent / "fixtures" / "ingest_minute_candles"
 RESEND = Path(__file__).parent / "fixtures" / "ingest_minute_candles_resend"
-IST = ZoneInfo("Asia/Kolkata")
 AUGUST = date(2024, 8, 1)
 JULY_31 = date(2024, 7, 31)
 RULE = UniverseRule(top_n=2, lookback_trading_days=20, min_listing_trading_days=21)

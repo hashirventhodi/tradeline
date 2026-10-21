@@ -19,20 +19,20 @@ second run over a loaded day writes nothing.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 import psycopg
 
-from tradeline.ingest import IngestRunCounters, record_ingest_run
+from tradeline.dates import calendar_days
+from tradeline.ingest import COMMAND, IngestRunCounters, record_ingest_run
 from tradeline.matching import SymbolMatcher
 from tradeline.sources import bse, nse
 from tradeline.transport import Transport
 
 log = logging.getLogger(__name__)
 
-COMMAND = "ingest"
 SOURCE_NSE = "nse_announcements"
 SOURCE_BSE = "bse_announcements"
 
@@ -131,7 +131,7 @@ def _load(
 ) -> None:
     # Filled in as the run goes, so a failed run's record still shows what it got to.
     run.details = {"requests": 0, "matched": 0, "unmatched": 0}
-    for day in _calendar_days(start, end):
+    for day in calendar_days(start, end):
         filings, requests = fetch_day(day)
         written = _insert(conn, filings)
         conn.commit()
@@ -150,13 +150,6 @@ def _load(
                 "matched": matched,
             },
         )
-
-
-def _calendar_days(start: date, end: date) -> Iterator[date]:
-    day = start
-    while day <= end:
-        yield day
-        day += timedelta(days=1)
 
 
 def _nse_filing(a: nse.NseAnnouncement, matcher: SymbolMatcher) -> Filing:

@@ -14,14 +14,11 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from fractions import Fraction
 from typing import Any, cast
-from zoneinfo import ZoneInfo
 
 import psycopg
 
 from tradeline.adjust import KINDS, AdjustedBar, CorporateAction, Kind, RawBar, adjust
-
-# Exchange days are Indian calendar days.
-IST = ZoneInfo("Asia/Kolkata")
+from tradeline.dates import IST
 
 
 @dataclass(frozen=True)
@@ -378,10 +375,6 @@ def universe_rule_versions(conn: psycopg.Connection) -> list[UniverseRuleVersion
         " ORDER BY recorded_at, version"
     ).fetchall()
     return [UniverseRuleVersion(*row) for row in rows]
-
-
-# Minute bars are stamped in Indian time; a trading day is an Indian calendar day.
-IST = ZoneInfo("Asia/Kolkata")
 
 
 @dataclass(frozen=True)

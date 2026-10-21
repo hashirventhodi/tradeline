@@ -25,6 +25,9 @@ from tradeline.logging import log_context
 
 log = logging.getLogger(__name__)
 
+# The command every ingest service records its runs under.
+COMMAND = "ingest"
+
 # The collection (``collect-daily``) the runs started now belong to, if any.
 _collection: contextvars.ContextVar[uuid.UUID | None] = contextvars.ContextVar(
     "tradeline_collection", default=None
