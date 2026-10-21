@@ -5,6 +5,8 @@
 # Every row is reviewed like code and must cite an official source: an
 # exchange circular's URL or number, or a company filing. A row without a
 # citation, or with a date that is not YYYY-MM-DD, fails `rebuild-instruments`.
+# A row may name one Symbol on both sides: an ISIN change under that Symbol that
+# no split or bonus explains, effective the new ISIN's first day.
 # Mergers are never links. `tradeline.manual_links` reads this file; its
 # location is `instruments.manual_links` in tradeline.toml.
 #
@@ -12,3 +14,50 @@
 # Ruchi Soya Industries Limited", w.e.f. July 13, 2022.
 old_symbol,new_symbol,effective_date,citation
 RUCHI,PATANJALI,2022-07-13,https://archives.nseindia.com/content/circulars/CML52890.pdf
+#
+# Found as Link Candidates by the #29 rerun on the #13 data; each circular was
+# read. Where the circular's date is earlier than the new Symbol's first row in
+# NSE's files (KEEPLEARN, ESSENTIA), the circular's date is used.
+#
+# RELDIVOPP to NETFDIVOPP: NSE circular NSE/CML/42484 (a zip whose Annexure I
+# lists INF204KA1MS3), w.e.f. October 30, 2019.
+RELDIVOPP,NETFDIVOPP,2019-10-30,https://nsearchives.nseindia.com/content/circulars/CML42484.zip
+# YESBANK's ISIN change (INE528G01027 to INE528G01035), under one Symbol: NSE
+# circular 17/2020 (NSE/CML/43833), "Yes Bank Limited Reconstruction Scheme and
+# its trading in new ISIN": with 75 percent of holdings locked in for three
+# years (clause 3(8) of the scheme, G.S.R. 174(E) of 13 March 2020), dealing is
+# in the new ISIN from March 16, 2020. NSE lists no Corporate Action for it.
+YESBANK,YESBANK,2020-03-16,https://nsearchives.nseindia.com/content/circulars/INSP43833.pdf
+# PHILIPCARB to PCBL: NSE/CML/50952, "Change in name and symbol of Phillips
+# Carbon Black Limited", w.e.f. January 13, 2022.
+PHILIPCARB,PCBL,2022-01-13,https://nsearchives.nseindia.com/content/circulars/CML50952.pdf
+# DSML to DIL: NSE/CML/50948, Debock Sales And Marketing to Debock Industries, w.e.f. January 14, 2022.
+DSML,DIL,2022-01-14,https://nsearchives.nseindia.com/content/circulars/CML50948.pdf
+# PDSMFL to PDSL: NSE/CML/51294, w.e.f. February 17, 2022.
+PDSMFL,PDSL,2022-02-17,https://nsearchives.nseindia.com/content/circulars/CML51294.pdf
+# BURGERKING to RBA: NSE/CML/51298, w.e.f. February 17, 2022.
+BURGERKING,RBA,2022-02-17,https://nsearchives.nseindia.com/content/circulars/CML51298.pdf
+# INTEGRA to ESSENTIA: NSE/CML/51409, Integra Essentia Limited, w.e.f. March 02, 2022.
+INTEGRA,ESSENTIA,2022-03-02,https://nsearchives.nseindia.com/content/circulars/CML51409.pdf
+# SHRIRAMEPC to SEPC: NSE/CML/51480, w.e.f. March 09, 2022.
+SHRIRAMEPC,SEPC,2022-03-09,https://nsearchives.nseindia.com/content/circulars/CML51480.pdf
+# DUDIGITAL to DUGLOBAL: NSE/CML/51580, w.e.f. March 17, 2022.
+DUDIGITAL,DUGLOBAL,2022-03-17,https://nsearchives.nseindia.com/content/circulars/CML51580.pdf
+# WABCOINDIA to ZFCVINDIA: NSE/CML/51782, w.e.f. April 01, 2022.
+WABCOINDIA,ZFCVINDIA,2022-04-01,https://nsearchives.nseindia.com/content/circulars/CML51782.pdf
+# DALALSTCOM to KEEPLEARN: NSE/CML/51842, "Change in symbol of DSJ Keep Learning Limited", w.e.f April 06, 2022.
+DALALSTCOM,KEEPLEARN,2022-04-06,https://nsearchives.nseindia.com/content/circulars/CML51842.pdf
+# Nippon ETFs: NSE/CML/52187 (13 ETFs), w.e.f. May 10, 2022.
+NETFDIVOPP,DIVOPPBEES,2022-05-10,https://nsearchives.nseindia.com/content/circulars/CML52187.pdf
+NETFLTGILT,LTGILTBEES,2022-05-10,https://nsearchives.nseindia.com/content/circulars/CML52187.pdf
+# ICICI Prudential ETFs: NSE/CML/59760 (28 ETFs, with ISINs), w.e.f. December 20, 2023.
+ICICIBANKN,BANKIETF,2023-12-20,https://nsearchives.nseindia.com/content/circulars/CML59760.pdf
+ICICIGOLD,GOLDIETF,2023-12-20,https://nsearchives.nseindia.com/content/circulars/CML59760.pdf
+ICICILOVOL,LOWVOLIETF,2023-12-20,https://nsearchives.nseindia.com/content/circulars/CML59760.pdf
+ICICIMCAP,MIDSELIETF,2023-12-20,https://nsearchives.nseindia.com/content/circulars/CML59760.pdf
+ICICINF100,NIF100IETF,2023-12-20,https://nsearchives.nseindia.com/content/circulars/CML59760.pdf
+ICICINIFTY,NIFTYIETF,2023-12-20,https://nsearchives.nseindia.com/content/circulars/CML59760.pdf
+ICICINV20,NV20IETF,2023-12-20,https://nsearchives.nseindia.com/content/circulars/CML59760.pdf
+ICICISENSX,SENSEXIETF,2023-12-20,https://nsearchives.nseindia.com/content/circulars/CML59760.pdf
+# KOTAKNV20 to NV20: NSE/CML/61135 (gives ISIN INF174K01Z71), w.e.f. March 20, 2024.
+KOTAKNV20,NV20,2024-03-20,https://nsearchives.nseindia.com/content/circulars/CML61135.pdf
