@@ -294,3 +294,51 @@ def universe_rule_versions(conn: psycopg.Connection) -> list[UniverseRuleVersion
         " ORDER BY recorded_at, version"
     ).fetchall()
     return [UniverseRuleVersion(*row) for row in rows]
+
+
+@dataclass(frozen=True)
+class NewsItem:
+    feed: str
+    title: str
+    link: str
+    summary: str | None
+    published_at: datetime | None
+    fetched_at: datetime
+    symbols: tuple[str, ...]
+
+
+def news(
+    conn: psycopg.Connection,
+    symbol: str | None,
+    *,
+    start: datetime,
+    end: datetime,
+    as_of: datetime,
+) -> list[NewsItem]:
+    """RSS news items dated from ``start`` to ``end`` inclusive that were knowable at ``as_of``.
+
+    With a symbol, only items matched to it; with ``None``, every item. An
+    item is dated by its feed's publication timestamp, or, when the feed gave
+    none, by when this collector first saw it; it is returned only if that
+    date is on or before ``as_of``, so a decision replayed at ``as_of`` sees
+    no later story. Oldest first. All three times must carry a zone.
+
+    What this does not model: an item backfilled from a feed after the fact
+    is dated by its publication timestamp, not by when it was collected.
+    """
+    for name, value in (("start", start), ("end", end), ("as_of", as_of)):
+        if value.tzinfo is None:
+            raise ValueError(f"{name} {value} has no time zone")
+    rows = conn.execute(
+        "SELECT feed, title, link, summary, published_at, fetched_at, symbols"
+        " FROM news_items"
+        " WHERE coalesce(published_at, fetched_at) BETWEEN %s AND %s"
+        " AND coalesce(published_at, fetched_at) <= %s"
+        " AND (%s::text IS NULL OR %s = ANY(symbols))"
+        " ORDER BY coalesce(published_at, fetched_at), content_hash",
+        (start, end, as_of, symbol, symbol),
+    ).fetchall()
+    return [
+        NewsItem(feed, title, link, summary, published, fetched, tuple(symbols))
+        for feed, title, link, summary, published, fetched, symbols in rows
+    ]

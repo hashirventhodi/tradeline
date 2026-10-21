@@ -83,6 +83,16 @@ def test_the_application_role_cannot_update_or_delete_daily_candles(database_url
         conn.rollback()
 
 
+def test_the_application_role_cannot_update_or_delete_news_items(database_url: str) -> None:
+    with app_connection(database_url) as conn:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("UPDATE news_items SET symbols = '{}'")
+        conn.rollback()
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("DELETE FROM news_items")
+        conn.rollback()
+
+
 def test_the_application_role_cannot_update_or_delete_corporate_actions(
     database_url: str,
 ) -> None:
