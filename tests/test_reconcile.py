@@ -180,7 +180,7 @@ def test_a_close_altered_within_tolerance_is_not_reported(fresh_database_url: st
     assert report.discrepancies == 0
 
 
-def test_the_run_fails_when_discrepancies_exceed_the_threshold_and_passes_within_it(
+def test_the_run_fails_when_discrepancies_exceed_the_threshold_and_passes_under_it(
     fresh_database_url: str,
 ) -> None:
     load(fresh_database_url, drop_day(INFY_TOKEN, "2024-07-15"))
@@ -194,6 +194,26 @@ def test_the_run_fails_when_discrepancies_exceed_the_threshold_and_passes_within
     assert Decimal("99.41") < strict.reconciliation_pct < Decimal("99.42")
     assert not strict.passed
     assert lenient.passed
+
+
+def test_a_run_exactly_at_the_threshold_fails_since_it_must_be_under_it(
+    fresh_database_url: str,
+) -> None:
+    load(fresh_database_url, drop_day(INFY_TOKEN, "2024-07-15"))
+
+    with app_connection(fresh_database_url) as conn:
+        # Monday 15 to Friday 19 July less Wednesday's Muharram holiday: four
+        # days of four symbols, one row missing, so 6.25 percent.
+        report = reconcile(
+            conn,
+            Config.Reconcile(max_discrepancy_pct=6.25),
+            start=date(2024, 7, 15),
+            end=date(2024, 7, 19),
+        )
+
+    assert report.rows == 16
+    assert report.discrepancy_pct == Decimal("6.25")
+    assert not report.passed
 
 
 def test_an_empty_database_cannot_pass(fresh_database_url: str) -> None:

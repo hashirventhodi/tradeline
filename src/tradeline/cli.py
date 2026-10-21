@@ -235,7 +235,7 @@ def _ingest_news(ctx: Context, args: argparse.Namespace) -> int:
 
 
 def reconcile(ctx: Context, args: argparse.Namespace) -> int:
-    """Compare candles with end-of-day rows; fail above the configured threshold.
+    """Compare candles with end-of-day rows; fail unless under the configured threshold.
 
     The summary is the last JSON line on stdout; the table goes to stderr.
     """
@@ -527,7 +527,7 @@ def build_parser() -> argparse.ArgumentParser:
     reconcile_parser = subparsers.add_parser(
         "reconcile",
         parents=[date_range],
-        help="compare daily candles with NSE end-of-day files; exit 1 above the threshold",
+        help="compare daily candles with NSE end-of-day files; exit 1 unless under the threshold",
     )
     reconcile_parser.add_argument(
         "--symbol",

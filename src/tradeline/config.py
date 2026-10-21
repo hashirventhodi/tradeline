@@ -79,8 +79,9 @@ class Config:
         # from it, once Kite's own adjustment factor is taken out, than this
         # fraction of the price plus half of Kite's 5 paisa tick.
         close_tolerance: float = 0.001
-        # ``reconcile`` fails when missing, extra, and mismatched rows together
-        # exceed this percentage of the rows compared (Phase 1: under 0.1).
+        # ``reconcile`` passes only when missing, extra, and close-mismatched
+        # rows together are under this percentage of the rows compared; a run
+        # exactly at it fails (Phase 1: under 0.1).
         max_discrepancy_pct: float = 0.1
 
     logging: Logging = field(default_factory=Logging)
