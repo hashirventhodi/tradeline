@@ -463,3 +463,35 @@ def news(
         NewsItem(feed, title, link, summary, published, fetched, tuple(symbols))
         for feed, title, link, summary, published, fetched, symbols in rows
     ]
+
+
+@dataclass(frozen=True)
+class Sector:
+    symbol: str
+    sector: str
+    effective_from: date
+
+
+def sector(conn: psycopg.Connection, symbol: str, *, as_of: date) -> Sector | None:
+    """NSE's sector for ``symbol`` in force on ``as_of``, or None if none was recorded by then.
+
+    Point in time. NSE publishes only its current classification, so each
+    load is in force from the day it was taken (``tradeline.sectors``): a
+    date before the first load has no sector, and a date between two loads
+    that disagree reads the earlier one.
+    """
+    found = sectors(conn, as_of=as_of, symbols=[symbol])
+    return found[0] if found else None
+
+
+def sectors(
+    conn: psycopg.Connection, *, as_of: date, symbols: list[str] | None = None
+) -> list[Sector]:
+    """The sector in force on ``as_of`` for every symbol that has one (or for those named)."""
+    rows = conn.execute(
+        "SELECT DISTINCT ON (symbol) symbol, sector, effective_from FROM sectors"
+        " WHERE effective_from <= %s AND (%s::text[] IS NULL OR symbol = ANY(%s))"
+        " ORDER BY symbol, effective_from DESC",
+        (as_of, symbols, symbols),
+    ).fetchall()
+    return [Sector(*row) for row in rows]

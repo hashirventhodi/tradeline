@@ -36,6 +36,7 @@ from tradeline.secrets import (
     MissingSecret,
     SecretsProvider,
 )
+from tradeline.sectors import load_sectors
 from tradeline.sources.kite import (
     INTERVAL_DAY,
     INTERVAL_MINUTE,
@@ -50,6 +51,7 @@ from tradeline.transport import (
     transport_for,
 )
 from tradeline.universe import compute_universe
+from tradeline.verify_universe import verify_universe as verify_universe_service
 
 log = logging.getLogger(__name__)
 
@@ -273,6 +275,43 @@ def universe(ctx: Context, args: argparse.Namespace) -> int:
     return 0
 
 
+def sectors(ctx: Context, args: argparse.Namespace) -> int:
+    """Load NSE's current sector classification, in force from today (IST)."""
+    transport = _transport(ctx, args)
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = load_sectors(conn, transport, effective_date=datetime.now(IST).date())
+    log.info(
+        "sectors finished",
+        extra={
+            "effective_date": result.effective_date.isoformat(),
+            "rows_seen": result.rows_seen,
+            "rows_written": result.rows_written,
+            "changes": [
+                {"symbol": c.symbol, "before": c.before, "after": c.after} for c in result.changes
+            ],
+            "anomalies": result.anomalies,
+        },
+    )
+    return 0
+
+
+def verify_universe(ctx: Context, args: argparse.Namespace) -> int:
+    """Compare the month's Universe with NSE's current NIFTY 200; a report, so exit 0.
+
+    The report goes to stderr; its summary is the last JSON line on stdout.
+    """
+    today = datetime.now(IST).date()
+    month = today.replace(day=1) if args.month is None else args.month
+    transport = _transport(ctx, args)
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        check = verify_universe_service(
+            conn, transport, ctx.config.universe, month=month, as_of=today
+        )
+    sys.stderr.write(check.report())
+    log.info("verify-universe finished", extra={"report": check.summary()})
+    return 0
+
+
 def _month(text: str) -> date:
     """A month as YYYY-MM, as its first day."""
     return datetime.strptime(text, "%Y-%m").date()
@@ -286,6 +325,8 @@ COMMANDS: dict[str, Command] = {
     "ingest": ingest,
     "universe": universe,
     "reconcile": reconcile,
+    "sectors": sectors,
+    "verify-universe": verify_universe,
 }
 
 
@@ -411,6 +452,24 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="YYYY-MM",
         type=_month,
         help="the last month; defaults to --month",
+    )
+
+    subparsers.add_parser(
+        "sectors",
+        parents=[fixtures],
+        help="load NSE's sector classification, in force from today; changes add dated rows",
+    )
+    verify_parser = subparsers.add_parser(
+        "verify-universe",
+        parents=[fixtures],
+        help="report the Universe's overlap with NSE's current NIFTY 200, and members without"
+        " a sector",
+    )
+    verify_parser.add_argument(
+        "--month",
+        metavar="YYYY-MM",
+        type=_month,
+        help="the Universe month to compare; defaults to the current month",
     )
 
     reconcile_parser = subparsers.add_parser(
