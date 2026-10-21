@@ -377,6 +377,71 @@ def universe_rule_versions(conn: psycopg.Connection) -> list[UniverseRuleVersion
     return [UniverseRuleVersion(*row) for row in rows]
 
 
+# Minute bars are stamped in Indian time; a trading day is an Indian calendar day.
+IST = ZoneInfo("Asia/Kolkata")
+
+
+@dataclass(frozen=True)
+class MinuteCandle:
+    ts: datetime  # the minute the bar starts
+    symbol: str
+    series: str
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: int
+
+
+def minute_candles(
+    conn: psycopg.Connection, symbol: str, *, day: date, series: str | None = None
+) -> list[MinuteCandle]:
+    """Kite's minute candles for ``symbol`` on the trading day ``day``, in time order.
+
+    Exactly as Kite returned them, adjusted by Kite's rules as of the day they
+    were fetched, like ``daily_candles``. ``ts`` is timezone-aware. All series
+    are returned unless one is named.
+    """
+    opens = datetime.combine(day, time(), IST)
+    rows = conn.execute(
+        "SELECT ts, symbol, series, open, high, low, close, volume"
+        " FROM candles_minute"
+        " WHERE symbol = %s AND ts >= %s AND ts < %s"
+        " AND (%s::text IS NULL OR series = %s)"
+        " ORDER BY ts, series",
+        (symbol, opens, opens + timedelta(days=1), series, series),
+    ).fetchall()
+    return [MinuteCandle(*row) for row in rows]
+
+
+@dataclass(frozen=True)
+class MinutePartition:
+    month: date  # the first day of the Indian calendar month it holds
+    name: str
+    rows: int
+
+
+def minute_candle_partitions(conn: psycopg.Connection) -> list[MinutePartition]:
+    """Every monthly partition of the minute candles with its row count, oldest first.
+
+    The counts are exact and so read every stored bar; this is a report for
+    the Operator, not something to call in a loop.
+    """
+    rows = conn.execute(
+        "WITH counts AS ("
+        "  SELECT tableoid AS oid, count(*) AS n FROM candles_minute GROUP BY tableoid)"
+        " SELECT c.relname, coalesce(counts.n, 0)"
+        " FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid"
+        " LEFT JOIN counts ON counts.oid = i.inhrelid"
+        " WHERE i.inhparent = 'candles_minute'::regclass"
+        " ORDER BY c.relname"
+    ).fetchall()
+    return [
+        MinutePartition(datetime.strptime(name[-7:], "%Y_%m").date(), name, int(count))
+        for name, count in rows
+    ]
+
+
 @dataclass(frozen=True)
 class NewsItem:
     feed: str
@@ -423,3 +488,35 @@ def news(
         NewsItem(feed, title, link, summary, published, fetched, tuple(symbols))
         for feed, title, link, summary, published, fetched, symbols in rows
     ]
+
+
+@dataclass(frozen=True)
+class Sector:
+    symbol: str
+    sector: str
+    effective_from: date
+
+
+def sector(conn: psycopg.Connection, symbol: str, *, as_of: date) -> Sector | None:
+    """NSE's sector for ``symbol`` in force on ``as_of``, or None if none was recorded by then.
+
+    Point in time. NSE publishes only its current classification, so each
+    load is in force from the day it was taken (``tradeline.sectors``): a
+    date before the first load has no sector, and a date between two loads
+    that disagree reads the earlier one.
+    """
+    found = sectors(conn, as_of=as_of, symbols=[symbol])
+    return found[0] if found else None
+
+
+def sectors(
+    conn: psycopg.Connection, *, as_of: date, symbols: list[str] | None = None
+) -> list[Sector]:
+    """The sector in force on ``as_of`` for every symbol that has one (or for those named)."""
+    rows = conn.execute(
+        "SELECT DISTINCT ON (symbol) symbol, sector, effective_from FROM sectors"
+        " WHERE effective_from <= %s AND (%s::text[] IS NULL OR symbol = ANY(%s))"
+        " ORDER BY symbol, effective_from DESC",
+        (as_of, symbols, symbols),
+    ).fetchall()
+    return [Sector(*row) for row in rows]

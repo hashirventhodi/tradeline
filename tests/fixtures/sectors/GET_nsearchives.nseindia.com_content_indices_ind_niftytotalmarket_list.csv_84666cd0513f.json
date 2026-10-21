@@ -1,0 +1,87 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://nsearchives.nseindia.com/content/indices/ind_niftytotalmarket_list.csv",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "x-frame-options",
+        "DENY"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "accept-ranges",
+        "bytes"
+      ],
+      [
+        "etag",
+        "W/\"49426-1792467143175\""
+      ],
+      [
+        "last-modified",
+        "Tue, 20 Oct 2026 03:32:23 GMT"
+      ],
+      [
+        "content-type",
+        "text/csv"
+      ],
+      [
+        "vary",
+        "Accept-Encoding"
+      ],
+      [
+        "content-encoding",
+        "gzip"
+      ],
+      [
+        "date",
+        "Wed, 21 Oct 2026 08:56:53 GMT"
+      ],
+      [
+        "content-length",
+        "15847"
+      ],
+      [
+        "connection",
+        "keep-alive"
+      ],
+      [
+        "akamai-grn",
+        "0.152a336a.1792573013.1e858c51"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "content-security-policy",
+        "default-src 'self'; script-src 'strict-dynamic' 'nonce-MC4yMDg2Mzc3MzEw' 'unsafe-inline' http: https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.nse.co.in https://*.nseindia.com; font-src 'self'; frame-src 'self'; base-uri 'self'; frame-ancestors 'self'; connect-src 'self' https://*.nseindia.com https://c.go-mpulse.net https://stats.g.doubleclick.net https://*.akstat.io/ https://*.akamaihd.net"
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000 ; includeSubDomains ; preload"
+      ],
+      [
+        "set-cookie",
+        "_abck=62B257B96BF9902C82803FF74137A613~-1~YAAQFSozav7dWR6hAQAAGX2tXRBVPElS0RnYX2+AhY+Qw3DOuAXne2FGnj3A75tY2m5VWRW0KAJTAbu9QTMKk5owDQIs2zoTMdmmQZbh8imo8ldjNAZ2AbFJtQ1oLEUDaoTdwhnpV0HTeqiRgWzuirDx2bR9k2m8c23u4oCuIKbv4FoLdxxfpKDlLeBZL53BP0LnrmjXQkDrisGafJHqdPfLE4igwnSoLeEqFevca/UAcfpjxe7t8AdGvGRuOT+NjhpKVKEkDqkLI2XI6+eJTArJomYwNHHCSByC2Qz9LbiZm89ux9PaarjXaI4VbwoD4faYEtfvBQeDreg4lIB9p/vx9oV6qb2H9FDMU7iiwPnLpP7Y+cHiVG2sdmFUqHOKpafRdvgP8R9YOWfj9Ctl5r+pR7Iuk0snDBJWtuQwaXVJEqazfQbpZohkPHcd8c/ryRTo7hdMP1wZOA==~-1~-1~-1~-1~-1; Domain=.nseindia.com; Path=/; Expires=Thu, 21 Oct 2027 08:56:53 GMT; Max-Age=31536000; Secure"
+      ],
+      [
+        "set-cookie",
+        "bm_sz=E6C1DD3CE829DEACE3290559F9C07320~YAAQFSozav/dWR6hAQAAGX2tXQGcGKXhb687zOkq1T38iNjE5NwoAeJv/CCiuZzJSbj5bA9/xMfP+dj85p/g4rUlaRlDdwro7ia0aL7Q/m0dVwK3W2FIae5s+iaaWCEoNMCdFXsysmY2AUr8ZyPGE/C+bMYp51C7u6z8ITuY0NQKjgEvWxonzeY/h+URell3e+HozaBrFtZwFvc5n65WI/eRS40uJEivlZqZG/n55S9/fXgSa7gTws6X5mfjb3AYNuAM5U/EvsJnrne968WGiu9FalEgW7ij3xUTjxfTqLSXqeguY3tK3ktFQVnQL0RsVj9YvguWicM3co4i08tOYyu2mJJJk78i3Zg0yMnM33ixvCXBiNqmqUA2ahsTtOlzW9iP61PV~3425843~3420209; Domain=.nseindia.com; Path=/; Expires=Wed, 21 Oct 2026 12:56:53 GMT; Max-Age=14400"
+      ]
+    ],
+    "body": "Company Name,Industry,Symbol,Series,ISIN Code\nAllied Blenders and Distillers Ltd.,Fast Moving Consumer Goods,ABDL,EQ,INE552Z01027\nBajaj Auto Ltd.,Automobile and Auto Components,BAJAJ-AUTO,EQ,INE917I01010\nEmcure Pharmaceuticals Ltd.,Healthcare,EMCURE,EQ,INE168P01015\nHDFC Bank Ltd.,Financial Services,HDFCBANK,EQ,INE040A01034\nInfosys Ltd.,Information Technology,INFY,EQ,INE009A01021\nReliance Industries Ltd.,Oil Gas & Consumable Fuels,RELIANCE,EQ,INE002A01018\nTata Consultancy Services Ltd.,Information Technology,TCS,EQ,INE467B01029\n",
+    "body_encoding": "utf-8"
+  }
+}

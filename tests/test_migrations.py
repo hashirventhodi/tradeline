@@ -83,6 +83,19 @@ def test_the_application_role_cannot_update_or_delete_daily_candles(database_url
         conn.rollback()
 
 
+def test_the_application_role_cannot_update_or_delete_minute_candles_in_any_partition(
+    database_url: str,
+) -> None:
+    with app_connection(database_url) as conn:
+        (partition,) = conn.execute("SELECT candles_minute_partition('2024-07-01')").fetchone()  # type: ignore[misc]
+        conn.commit()
+        for table in ("candles_minute", partition):
+            for statement in ("UPDATE {} SET close = 0", "DELETE FROM {}"):
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    conn.execute(psycopg.sql.SQL(statement).format(psycopg.sql.Identifier(table)))
+                conn.rollback()
+
+
 def test_the_application_role_cannot_update_or_delete_news_items(database_url: str) -> None:
     with app_connection(database_url) as conn:
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
@@ -154,6 +167,14 @@ def test_the_application_role_cannot_update_or_delete_universe_tables(database_u
     )
     with app_connection(database_url) as conn:
         for statement in statements:
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                conn.execute(statement)
+            conn.rollback()
+
+
+def test_the_application_role_cannot_update_or_delete_sectors(database_url: str) -> None:
+    with app_connection(database_url) as conn:
+        for statement in ("UPDATE sectors SET sector = 'Other'", "DELETE FROM sectors"):
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 conn.execute(statement)
             conn.rollback()

@@ -1,0 +1,95 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://nsearchives.nseindia.com/content/indices/ind_nifty200list.csv",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "x-frame-options",
+        "DENY"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "accept-ranges",
+        "bytes"
+      ],
+      [
+        "etag",
+        "W/\"13020-1792467059487\""
+      ],
+      [
+        "last-modified",
+        "Tue, 20 Oct 2026 03:30:59 GMT"
+      ],
+      [
+        "content-type",
+        "text/csv"
+      ],
+      [
+        "cross-origin-embedder-policy",
+        "unsafe-none"
+      ],
+      [
+        "cross-origin-resource-policy",
+        "unsafe-none"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "unsafe-none"
+      ],
+      [
+        "permissions-policy",
+        "camera=(), microphone=(), geolocation=()"
+      ],
+      [
+        "content-encoding",
+        "gzip"
+      ],
+      [
+        "content-length",
+        "4416"
+      ],
+      [
+        "date",
+        "Wed, 21 Oct 2026 08:56:53 GMT"
+      ],
+      [
+        "connection",
+        "keep-alive"
+      ],
+      [
+        "vary",
+        "Accept-Encoding"
+      ],
+      [
+        "akamai-grn",
+        "0.152a336a.1792573013.1e858c5a"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "content-security-policy",
+        "default-src 'self'; script-src 'strict-dynamic' 'nonce-MC4yMDg2Mzc3MzEw' 'unsafe-inline' http: https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.nse.co.in https://*.nseindia.com; font-src 'self'; frame-src 'self'; base-uri 'self'; frame-ancestors 'self'; connect-src 'self' https://*.nseindia.com https://c.go-mpulse.net https://stats.g.doubleclick.net https://*.akstat.io/ https://*.akamaihd.net"
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000 ; includeSubDomains ; preload"
+      ]
+    ],
+    "body": "Company Name,Industry,Symbol,Series,ISIN Code\nBajaj Auto Ltd.,Automobile and Auto Components,BAJAJ-AUTO,EQ,INE917I01010\nHDFC Bank Ltd.,Financial Services,HDFCBANK,EQ,INE040A01034\nInfosys Ltd.,Information Technology,INFY,EQ,INE009A01021\nReliance Industries Ltd.,Oil Gas & Consumable Fuels,RELIANCE,EQ,INE002A01018\nTata Consultancy Services Ltd.,Information Technology,TCS,EQ,INE467B01029\n",
+    "body_encoding": "utf-8"
+  }
+}

@@ -32,7 +32,7 @@ from tradeline import queries
 from tradeline.config import UniverseRule
 from tradeline.ingest import in_collection, record_ingest_run
 from tradeline.ingest.announcements import SOURCE_BSE, SOURCE_NSE, ingest_announcements
-from tradeline.ingest.candles import SOURCE_DAILY, ingest_candles
+from tradeline.ingest.candles import SOURCE_DAILY, CurrentUniverse, ingest_candles
 from tradeline.ingest.eod import (
     SOURCE_EOD,
     SOURCE_EQUITY_MASTER,
@@ -94,8 +94,8 @@ def collect_daily(
     collection_id = uuid.uuid4()
 
     def candles() -> None:
-        symbols = _universe(conn, rule, day)
-        ingest_candles(conn, kite(), start=day, end=day, symbols=symbols)
+        universe = _current_universe(conn, rule, day)
+        ingest_candles(conn, kite(), start=day, end=day, universe=universe)
 
     steps: list[tuple[str, tuple[str, ...], Callable[[], object]]] = [
         (
@@ -134,15 +134,12 @@ def collect_daily(
     return result
 
 
-def _universe(conn: psycopg.Connection, rule: UniverseRule, day: date) -> list[str]:
-    """The symbols of ``day``'s Universe, computing the month's membership if it is not stored."""
+def _current_universe(conn: psycopg.Connection, rule: UniverseRule, day: date) -> CurrentUniverse:
+    """``day``'s Universe under ``rule``, computing the month's membership if it is not stored."""
     month = day.replace(day=1)
-    members = queries.universe_membership(conn, month, as_of=day, rule_version=rule.version)
-    if not members:
-        members = list(compute_universe(conn, rule, month=month).members)
-    if not members:
-        raise ValueError(f"the Universe for {month:%Y-%m} has no members")
-    return [m.symbol for m in members]
+    if not queries.universe_membership(conn, month, as_of=day, rule_version=rule.version):
+        compute_universe(conn, rule, month=month)
+    return CurrentUniverse(month=month, rule_version=rule.version)
 
 
 def _record_unrecorded_failure(
