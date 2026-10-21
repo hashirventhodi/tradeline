@@ -64,6 +64,17 @@ class IngestRun:
     rows_written: int
     error: str | None
     details: dict[str, Any]
+    # The ``collect-daily`` collection the run was part of; None when run on its own.
+    collection_id: uuid.UUID | None
+
+    @property
+    def status(self) -> str:
+        """``failed`` when the run ended in an error (or was interrupted), else ``succeeded``."""
+        return "failed" if self.error is not None else "succeeded"
+
+    @property
+    def duration(self) -> timedelta:
+        return self.finished_at - self.started_at
 
 
 def end_of_day(
@@ -101,14 +112,28 @@ def symbols(conn: psycopg.Connection, *, symbol: str | None = None) -> list[Symb
     return [Symbol(*row) for row in rows]
 
 
-def ingest_runs(conn: psycopg.Connection, *, source: str | None = None) -> list[IngestRun]:
-    """Run history, newest first."""
+def ingest_runs(
+    conn: psycopg.Connection,
+    *,
+    source: str | None = None,
+    collection_id: uuid.UUID | None = None,
+    since: datetime | None = None,
+) -> list[IngestRun]:
+    """Run history, newest first: every run, or one source's, one collection's, or since a time.
+
+    Each run carries its status, row counts, start and finish (so its
+    duration), its error, and its source's details.
+    """
+    if since is not None and since.tzinfo is None:
+        raise ValueError(f"since must carry a time zone, not {since}")
     rows = conn.execute(
         "SELECT id, command, source, range_start, range_end, started_at, finished_at,"
-        " rows_seen, rows_written, error, details"
+        " rows_seen, rows_written, error, details, collection_id"
         " FROM ingest_runs WHERE (%s::text IS NULL OR source = %s)"
+        " AND (%s::uuid IS NULL OR collection_id = %s)"
+        " AND (%s::timestamptz IS NULL OR started_at >= %s)"
         " ORDER BY started_at DESC, id",
-        (source, source),
+        (source, source, collection_id, collection_id, since, since),
     ).fetchall()
     return [IngestRun(*row) for row in rows]
 

@@ -1,7 +1,8 @@
 """``ingest announcements``: NSE and BSE corporate announcements into ``announcements``.
 
 Two sources, each recorded as its own ingest run over the date range:
-``nse_announcements`` and ``bse_announcements``. Each calendar day in the
+``nse_announcements`` and ``bse_announcements``; a failure of the first does
+not stop the second. Each calendar day in the
 range is fetched from each exchange (BSE a page at a time), so a weekend
 filing is loaded like any other.
 
@@ -88,8 +89,15 @@ def ingest_announcements(
         fetched = bse.fetch_announcements(bse_session, day)
         return [_bse_filing(a, matcher) for a in fetched.announcements], fetched.requests
 
+    # One exchange's outage does not cost the other's window: BSE is loaded
+    # even when NSE fails, and NSE's error is raised once BSE is done.
+    try:
+        nse_result = _run(conn, SOURCE_NSE, start, end, nse_day)
+    except Exception:
+        _run(conn, SOURCE_BSE, start, end, bse_day)
+        raise
     return AnnouncementIngestResult(
-        nse=_run(conn, SOURCE_NSE, start, end, nse_day),
+        nse=nse_result,
         bse=_run(conn, SOURCE_BSE, start, end, bse_day),
     )
 
