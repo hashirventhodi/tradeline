@@ -12,7 +12,7 @@ import os
 import tomllib
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, get_type_hints
+from typing import Any, get_args, get_origin, get_type_hints
 
 CONFIG_PATH_VAR = "TRADELINE_CONFIG"
 DEFAULT_CONFIG_PATH = Path("tradeline.toml")
@@ -28,7 +28,13 @@ class Config:
     class Logging:
         level: str = "INFO"
 
+    @dataclass(frozen=True)
+    class News:
+        # Feed name -> RSS URL. The name is what each stored item records as its feed.
+        feeds: dict[str, str] = field(default_factory=dict)
+
     logging: Logging = field(default_factory=Logging)
+    news: News = field(default_factory=News)
 
 
 def default_config_path() -> Path:
@@ -59,6 +65,8 @@ def _build[T](cls: type[T], raw: dict[str, Any], *, prefix: str) -> T:
             if not isinstance(value, dict):
                 raise ConfigError(f"config key {prefix}{name} must be a table")
             values[name] = _build(expected, value, prefix=f"{prefix}{name}.")
+        elif get_origin(expected) is dict:
+            values[name] = _string_table(value, prefix=f"{prefix}{name}", types=get_args(expected))
         elif not isinstance(value, expected):
             raise ConfigError(
                 f"config key {prefix}{name} must be {expected.__name__}, got {type(value).__name__}"
@@ -66,3 +74,15 @@ def _build[T](cls: type[T], raw: dict[str, Any], *, prefix: str) -> T:
         else:
             values[name] = value
     return cls(**values)
+
+
+def _string_table(value: Any, *, prefix: str, types: tuple[Any, ...]) -> dict[str, str]:
+    """A table of string values (the only kind of table that is not a section)."""
+    if types != (str, str):
+        raise TypeError(f"config key {prefix}: only tables of strings are supported")
+    if not isinstance(value, dict):
+        raise ConfigError(f"config key {prefix} must be a table")
+    for key, item in value.items():
+        if not isinstance(item, str):
+            raise ConfigError(f"config key {prefix}.{key} must be str, got {type(item).__name__}")
+    return dict(value)

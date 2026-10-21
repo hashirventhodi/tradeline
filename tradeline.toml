@@ -3,3 +3,11 @@
 
 [logging]
 level = "INFO"
+
+# RSS feeds for `ingest news`: a name for each feed and its URL. Items carried
+# by more than one feed are stored once, under the first feed listed.
+[news.feeds]
+et_markets = "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms"
+et_stocks = "https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms"
+livemint_markets = "https://www.livemint.com/rss/markets"
+moneycontrol_latest = "https://www.moneycontrol.com/rss/latestnews.xml"

@@ -56,3 +56,32 @@ def test_the_committed_config_file_loads() -> None:
     config = load_config(Path(__file__).resolve().parents[1] / "tradeline.toml")
 
     assert config.logging.level == "INFO"
+
+
+def test_news_feeds_are_a_table_of_names_and_urls(tmp_path: Path) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text(
+        '[news.feeds]\nfirst = "https://a.example/rss"\nsecond = "https://b.example/rss"\n'
+    )
+
+    config = load_config(path)
+
+    assert config.news.feeds == {
+        "first": "https://a.example/rss",
+        "second": "https://b.example/rss",
+    }
+
+
+def test_a_news_feed_that_is_not_a_string_is_refused_by_name(tmp_path: Path) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text("[news.feeds]\nfirst = 3\n")
+
+    with pytest.raises(ConfigError, match="news.feeds.first"):
+        load_config(path)
+
+
+def test_the_committed_config_names_at_least_two_news_feeds() -> None:
+    config = load_config(Path(__file__).resolve().parents[1] / "tradeline.toml")
+
+    assert len(config.news.feeds) >= 2
+    assert all(url.startswith("https://") for url in config.news.feeds.values())

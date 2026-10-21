@@ -22,6 +22,7 @@ from tradeline.environment import Environment
 from tradeline.ingest.candles import ingest_candles
 from tradeline.ingest.corporate_actions import ingest_corporate_actions
 from tradeline.ingest.eod import ingest_eod
+from tradeline.ingest.news import Feed, ingest_news
 from tradeline.logging import configure_logging
 from tradeline.login import login as login_service
 from tradeline.migrations import apply_migrations
@@ -93,6 +94,8 @@ def login(ctx: Context, args: argparse.Namespace) -> int:
 
 
 def ingest(ctx: Context, args: argparse.Namespace) -> int:
+    if args.source == "news":
+        return _ingest_news(ctx, args)
     end = args.start if args.end is None else args.end
     if args.source == "eod":
         return _ingest_eod(ctx, args, end)
@@ -156,6 +159,29 @@ def _ingest_corporate_actions(ctx: Context, args: argparse.Namespace, end: date)
         },
     )
     return 0
+
+
+def _ingest_news(ctx: Context, args: argparse.Namespace) -> int:
+    """Every configured feed, or the ones named; exits 1 if any feed failed."""
+    configured = ctx.config.news.feeds
+    names = list(configured) if args.feeds is None else args.feeds
+    unknown = [name for name in names if name not in configured]
+    if unknown:
+        raise ValueError(f"news feeds not configured in [news.feeds]: {', '.join(unknown)}")
+    feeds = [Feed(name, configured[name]) for name in names]
+    transport = _transport(ctx, args)
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = ingest_news(conn, transport, feeds=feeds)
+    log.log(
+        logging.ERROR if result.failed_feeds else logging.INFO,
+        "ingest news finished",
+        extra={
+            "rows_seen": result.rows_seen,
+            "rows_written": result.rows_written,
+            "failed_feeds": list(result.failed_feeds),
+        },
+    )
+    return 1 if result.failed_feeds else 0
 
 
 def _transport(ctx: Context, args: argparse.Namespace) -> Transport:
@@ -260,6 +286,18 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="SYMBOL",
         action="append",
         help="an NSE symbol to load; repeatable; defaults to every symbol NSE lists",
+    )
+    news = sources.add_parser(
+        "news",
+        parents=[fixtures],
+        help="the stories the configured RSS feeds carry now, de-duplicated and matched",
+    )
+    news.add_argument(
+        "--feed",
+        dest="feeds",
+        metavar="NAME",
+        action="append",
+        help="a feed named in [news.feeds] to load; repeatable; defaults to every feed",
     )
     return parser
 
