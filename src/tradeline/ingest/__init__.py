@@ -9,6 +9,7 @@ log line inside the run carries it, with the source and range.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import uuid
 from collections.abc import Iterator
@@ -23,6 +24,22 @@ from psycopg.types.json import Jsonb
 from tradeline.logging import log_context
 
 log = logging.getLogger(__name__)
+
+# The collection (``collect-daily``) the runs started now belong to, if any.
+_collection: contextvars.ContextVar[uuid.UUID | None] = contextvars.ContextVar(
+    "tradeline_collection", default=None
+)
+
+
+@contextmanager
+def in_collection(collection_id: uuid.UUID) -> Iterator[None]:
+    """Every ingest run recorded inside this block carries ``collection_id``."""
+    token = _collection.set(collection_id)
+    try:
+        with log_context(collection_id=str(collection_id)):
+            yield
+    finally:
+        _collection.reset(token)
 
 
 @dataclass
@@ -95,11 +112,12 @@ def _write_record(
         conn.rollback()  # anything half-done by a failed step is not part of the record
         conn.execute(
             "INSERT INTO ingest_runs"
-            " (id, command, source, range_start, range_end, started_at, finished_at,"
-            "  rows_seen, rows_written, error, details)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            " (id, collection_id, command, source, range_start, range_end, started_at,"
+            "  finished_at, rows_seen, rows_written, error, details)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 counters.id,
+                _collection.get(),
                 command,
                 source,
                 range_start,

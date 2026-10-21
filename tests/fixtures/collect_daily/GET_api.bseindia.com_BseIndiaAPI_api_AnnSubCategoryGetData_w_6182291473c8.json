@@ -1,0 +1,75 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w?pageno=1&strCat=-1&strPrevDate=20240801&strScrip=&strSearch=P&strToDate=20240801&strType=C&subcategory=-1",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "content-type",
+        "application/json; charset=utf-8"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "x-xss-protection",
+        "1; mode=block"
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000; includeSubDomains; preload"
+      ],
+      [
+        "referrer-policy",
+        "no-referrer | same-origin | origin | strict-origin | no-origin-when-downgrading"
+      ],
+      [
+        "expect-ct",
+        "max-age=604800"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "access-control-allow-methods",
+        "GET,POST"
+      ],
+      [
+        "content-encoding",
+        "gzip"
+      ],
+      [
+        "cache-control",
+        "private, max-age=60"
+      ],
+      [
+        "expires",
+        "Wed, 21 Oct 2026 09:15:27 GMT"
+      ],
+      [
+        "date",
+        "Wed, 21 Oct 2026 09:14:27 GMT"
+      ],
+      [
+        "vary",
+        "Accept-Encoding"
+      ],
+      [
+        "access-control-allow-origin",
+        "https://www.bseindia.com"
+      ],
+      [
+        "akamai-grn",
+        "0.8fc033b8.1792574064.9dd7a50"
+      ]
+    ],
+    "body": "{\"Table\":[{\"NEWSID\":\"45208d65-4b22-4c54-a261-9916ffbce10d\",\"SCRIP_CD\":500209,\"XML_NAME\":\"ANN_500209_45208D65-4B22-4C54-A261-9916FFBCE10D\",\"NEWSSUB\":\"Infosys Ltd - 500209 - Update On Company Statement Dated July 31, 2024, On Pre-Show Cause Notice On GST\",\"DT_TM\":\"2024-08-01T21:12:59.033\",\"NEWS_DT\":\"2024-08-01T21:12:59.033\",\"CRITICALNEWS\":\"0\",\"ANNOUNCEMENT_TYPE\":\"A\",\"QUARTER_ID\":null,\"FILESTATUS\":\"N    \",\"ATTACHMENTNAME\":\"5915007f-6040-43a9-8745-75765b732137.pdf\",\"MORE\":\"\",\"HEADLINE\":\"Update on Company statement dated July 31, 2024, on pre-show cause notice on GST\",\"CATEGORYNAME\":\"Company Update\",\"OLD\":1,\"RN\":1,\"PDFFLAG\":1,\"NSURL\":\"https://www.bseindia.com/stock-share-price/infosys-ltd/infy/500209/\",\"SLONGNAME\":\"Infosys Ltd\",\"AGENDA_ID\":1,\"News_submission_dt\":\"2024-08-01T21:12:58\",\"DissemDT\":\"2024-08-01T21:12:59.033\",\"TimeDiff\":\"00:00:01\",\"Fld_Attachsize\":186230,\"SUBCATNAME\":\"General\",\"BSENewsid\":null,\"Investor_Presentation\":null,\"AUDIO_VIDEO_FILE\":null},{\"NEWSID\":\"55b2060c-413e-4655-97f0-328513f72706\",\"SCRIP_CD\":532540,\"XML_NAME\":\"ANN_532540_55B2060C-413E-4655-97F0-328513F72706\",\"NEWSSUB\":\"Tata Consultancy Services Ltd - 532540 - Announcement under Regulation 30 (LODR)-Analyst / Investor Meet - Intimation\",\"DT_TM\":\"2024-08-01T19:20:27.99\",\"NEWS_DT\":\"2024-08-01T19:20:27.99\",\"CRITICALNEWS\":\"0\",\"ANNOUNCEMENT_TYPE\":\"A\",\"QUARTER_ID\":null,\"FILESTATUS\":\"N    \",\"ATTACHMENTNAME\":\"cdafcac6-aa35-4722-abdb-be994540b4e2.pdf\",\"MORE\":\"Pursuant to Regulation 30 of SEBI (Listing Obligations and Disclosure Requirements) Regulations, 2015, we enclose herewith Schedule of Analyst/Institutional Investor Meetings with Key Managerial Personnel (KMP) of the Company planned for the month of August 2024, and that took place during the month of July 2024.\",\"HEADLINE\":\"Pursuant to Regulation 30 of SEBI (Listing Obligations and Disclosure Requirements) Regulations, 2015, we enclose herewith Schedule of Analyst/Institutional Investor Meetings with Key Managerial ....\",\"CATEGORYNAME\":\"Company Update\",\"OLD\":1,\"RN\":1,\"PDFFLAG\":1,\"NSURL\":\"https://www.bseindia.com/stock-share-price/tata-consultancy-services-ltd/tcs/532540/\",\"SLONGNAME\":\"Tata Consultancy Services Ltd\",\"AGENDA_ID\":80,\"News_submission_dt\":\"2024-08-01T19:20:27\",\"DissemDT\":\"2024-08-01T19:20:27.99\",\"TimeDiff\":\"00:00:00\",\"Fld_Attachsize\":249516,\"SUBCATNAME\":\"Analyst / Investor Meet\",\"BSENewsid\":null,\"Investor_Presentation\":null,\"AUDIO_VIDEO_FILE\":null},{\"NEWSID\":\"49f4cc84-e60e-4043-8bf5-45d862680ce0\",\"SCRIP_CD\":500325,\"XML_NAME\":\"ANN_500325_49F4CC84-E60E-4043-8BF5-45D862680CE0\",\"NEWSSUB\":\"Reliance Industries Ltd - 500325 - Compliances-Reg. 39 (3) - Details of Loss of Certificate / Duplicate Certificate\",\"DT_TM\":\"2024-08-01T17:26:17.423\",\"NEWS_DT\":\"2024-08-01T17:26:17.423\",\"CRITICALNEWS\":\"0\",\"ANNOUNCEMENT_TYPE\":\"A\",\"QUARTER_ID\":null,\"FILESTATUS\":\"N    \",\"ATTACHMENTNAME\":\"dd42df3a-5f03-4f2a-80b8-3649dc4e900c.pdf\",\"MORE\":\"\",\"HEADLINE\":\"We enclose the information regarding loss of share certificate(s) for 3,272 shares received from the shareholder(s) of the Company on July 31, 2024.\",\"CATEGORYNAME\":\"Others\",\"OLD\":1,\"RN\":1,\"PDFFLAG\":1,\"NSURL\":\"https://www.bseindia.com/stock-share-price/reliance-industries-ltd/reliance/500325/\",\"SLONGNAME\":\"Reliance Industries Ltd\",\"AGENDA_ID\":177,\"News_submission_dt\":\"2024-08-01T17:26:17\",\"DissemDT\":\"2024-08-01T17:26:17.423\",\"TimeDiff\":\"00:00:00\",\"Fld_Attachsize\":582703,\"SUBCATNAME\":\"Reg. 39 (3) - Details of Loss of Certificate / Duplicate Certificate\",\"BSENewsid\":null,\"Investor_Presentation\":null,\"AUDIO_VIDEO_FILE\":null},{\"NEWSID\":\"98b9dec6-a8f9-4545-a6bd-66f9838ea15a\",\"SCRIP_CD\":500209,\"XML_NAME\":\"ANN_500209_98B9DEC6-A8F9-4545-A6BD-66F9838EA15A\",\"NEWSSUB\":\"Infosys Ltd - 500209 - Infosys And Servicenow Expand AI Collaboration\\r\\nTo Revolutionize Service Delivery\",\"DT_TM\":\"2024-08-01T15:26:17.387\",\"NEWS_DT\":\"2024-08-01T15:26:17.387\",\"CRITICALNEWS\":\"0\",\"ANNOUNCEMENT_TYPE\":\"A\",\"QUARTER_ID\":null,\"FILESTATUS\":\"N    \",\"ATTACHMENTNAME\":\"a4e7687d-af5b-4d88-ae55-435447c7c468.pdf\",\"MORE\":\"\",\"HEADLINE\":\"Press release enclosed\",\"CATEGORYNAME\":\"Company Update\",\"OLD\":1,\"RN\":1,\"PDFFLAG\":1,\"NSURL\":\"https://www.bseindia.com/stock-share-price/infosys-ltd/infy/500209/\",\"SLONGNAME\":\"Infosys Ltd\",\"AGENDA_ID\":1,\"News_submission_dt\":\"2024-08-01T15:26:17\",\"DissemDT\":\"2024-08-01T15:26:17.387\",\"TimeDiff\":\"00:00:00\",\"Fld_Attachsize\":313888,\"SUBCATNAME\":\"General\",\"BSENewsid\":null,\"Investor_Presentation\":null,\"AUDIO_VIDEO_FILE\":null},{\"NEWSID\":\"0e1cac29-eafd-4822-8231-644c822d8131\",\"SCRIP_CD\":532977,\"XML_NAME\":\"ANN_532977_0E1CAC29-EAFD-4822-8231-644C822D8131\",\"NEWSSUB\":\"Bajaj Auto Ltd - 532977 - Announcement under Regulation 30 (LODR)-Press Release / Media Release\",\"DT_TM\":\"2024-08-01T09:05:37.93\",\"NEWS_DT\":\"2024-08-01T09:05:37.93\",\"CRITICALNEWS\":\"0\",\"ANNOUNCEMENT_TYPE\":\"A\",\"QUARTER_ID\":null,\"FILESTATUS\":\"N    \",\"ATTACHMENTNAME\":\"cf742d6d-bb91-45a4-bc87-cb5cf9cbbc49.pdf\",\"MORE\":\"\",\"HEADLINE\":\"Sales for the month of July 2024.\",\"CATEGORYNAME\":\"Company Update\",\"OLD\":1,\"RN\":1,\"PDFFLAG\":1,\"NSURL\":\"https://www.bseindia.com/stock-share-price/bajaj-auto-ltd/bajaj-auto/532977/\",\"SLONGNAME\":\"Bajaj Auto Ltd\",\"AGENDA_ID\":35,\"News_submission_dt\":\"2024-08-01T09:05:37\",\"DissemDT\":\"2024-08-01T09:05:37.93\",\"TimeDiff\":\"00:00:00\",\"Fld_Attachsize\":262390,\"SUBCATNAME\":\"Press Release / Media Release\",\"BSENewsid\":null,\"Investor_Presentation\":null,\"AUDIO_VIDEO_FILE\":null}],\"Table1\":[{\"ROWCNT\":5}]}",
+    "body_encoding": "utf-8"
+  }
+}

@@ -16,6 +16,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from tradeline.collect import collect_daily as collect_daily_service
 from tradeline.config import Config, default_config_path, load_config
 from tradeline.db import app_connection, connect
 from tradeline.environment import Environment
@@ -262,6 +263,56 @@ def _transport(ctx: Context, args: argparse.Namespace, *, browser_tls: bool = Fa
     return transport
 
 
+def collect_daily(ctx: Context, args: argparse.Namespace) -> int:
+    """Every source for one day (today in IST by default); exits 1 if any source failed.
+
+    A failed source never stops the others, so the command is safe to run
+    unattended: the exit code and the last JSON line say what went wrong, and
+    the ingest run history has a row for every source.
+    """
+    day = datetime.now(IST).date() if args.day is None else args.day
+    configured = ctx.config.news.feeds
+    feeds = [Feed(name, url) for name, url in configured.items()]
+
+    def kite() -> KiteSession:
+        return KiteSession(
+            _transport(ctx, args),
+            api_key=ctx.secrets.require(KITE_API_KEY),
+            access_token=ctx.secrets.require(KITE_ACCESS_TOKEN),
+        )
+
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = collect_daily_service(
+            conn,
+            day=day,
+            rule=ctx.config.universe,
+            feeds=feeds,
+            transport=_transport(ctx, args),
+            browser_transport=_transport(ctx, args, browser_tls=True),
+            kite=kite,
+        )
+    log.log(
+        logging.INFO if result.succeeded else logging.ERROR,
+        "collect-daily finished",
+        extra={
+            "day": day.isoformat(),
+            "collection_id": str(result.collection_id),
+            "runs": {
+                r.source: {
+                    "status": r.status,
+                    "rows_seen": r.rows_seen,
+                    "rows_written": r.rows_written,
+                    "seconds": round(r.duration.total_seconds(), 3),
+                }
+                for r in result.runs
+            },
+            "failed_sources": list(result.failed_sources),
+            "failed_feeds": list(result.failed_feeds),
+        },
+    )
+    return 0 if result.succeeded else 1
+
+
 def universe(ctx: Context, args: argparse.Namespace) -> int:
     """The Universe for each month from ``--month`` to ``--to`` under the configured rule."""
     end = args.month if args.to is None else args.to
@@ -327,6 +378,7 @@ COMMANDS: dict[str, Command] = {
     "reconcile": reconcile,
     "sectors": sectors,
     "verify-universe": verify_universe,
+    "collect-daily": collect_daily,
 }
 
 
@@ -483,6 +535,19 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="SYMBOL",
         action="append",
         help="an NSE symbol to compare; repeatable; defaults to every symbol with candles",
+    )
+    collect_parser = subparsers.add_parser(
+        "collect-daily",
+        parents=[fixtures],
+        help="the day's end-of-day file, Universe candles, announcements, and news;"
+        " exit 1 if any source failed (needs `login` today for the candles)",
+    )
+    collect_parser.add_argument(
+        "--date",
+        dest="day",
+        metavar="DATE",
+        type=date.fromisoformat,
+        help="the trading day to collect; defaults to today in IST",
     )
     return parser
 

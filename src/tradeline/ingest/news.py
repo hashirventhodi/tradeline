@@ -13,7 +13,8 @@ edits is a new story by this rule.
 
 A feed that fails (an HTTP error or a body that is not RSS) is logged and
 listed in the run's details, and the other feeds are still loaded, so one
-publisher's outage does not cost the window for the rest.
+publisher's outage does not cost the window for the rest. When every feed
+fails, the run fails.
 """
 
 from __future__ import annotations
@@ -104,6 +105,8 @@ def _load(
         log.info(
             "loaded feed", extra={"feed": feed.name, "rows": len(items), "rows_written": written}
         )
+    if len(failed) == len(feeds):
+        raise rss.RssError(f"every feed failed: {', '.join(failed)}")
 
 
 def _row(feed: Feed, item: rss.FeedItem, matcher: TextMatcher) -> _Row:

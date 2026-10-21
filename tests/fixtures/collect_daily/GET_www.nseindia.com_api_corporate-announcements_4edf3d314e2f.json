@@ -1,0 +1,123 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://www.nseindia.com/api/corporate-announcements?index=equities&from_date=01-08-2024&to_date=01-08-2024",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "server",
+        "Apache"
+      ],
+      [
+        "x-dns-prefetch-control",
+        "off"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "x-download-options",
+        "noopen"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-xss-protection",
+        "1; mode=block"
+      ],
+      [
+        "content-security-policy",
+        "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; script-src 'self' 'nonce-zWloD9xgF+0zQWoCCGZevw==' https://www.google-analytics.com https://analytics.google.com https://*.highcharts.com https://*.nse.co.in https://*.nseindia.com https://*.nseindia.in https://*.nseroot.com https://www.googletagmanager.com https://*.nse.in https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://*.nse.co.in https://*.nseindia.com https://*.nseindia.in https://*.nseroot.com https://www.google.co.in https://www.gstatic.com https://*.highcharts.com https://*.nse.in; font-src 'self' https://fonts.gstatic.com https://fonts.googleapis.com https://*.bootstrapcdn.com https://*.nse.co.in https://*.nseindia.com https://*.nseindia.in https://*.nseroot.com https://*.nse.in; img-src 'self' data: blob: https://www.google-analytics.com https://analytics.google.com https://www.googletagmanager.com https://www.google.co.in https://*.nse.co.in https://*.nseindia.com https://*.nseindia.in https://*.nseroot.com https://*.nse.in https://i.ytimg.com https://*.youtube.com; connect-src 'self' https://www.google-analytics.com https://analytics.google.com https://stats.g.doubleclick.net https://*.go-mpulse.net https://*.akstat.io https://*.akamaihd.net https://*.highcharts.com https://*.nse.co.in https://*.nseindia.com https://*.nseindia.in https://*.nseroot.com wss://*.nse.co.in wss://*.nseindia.com wss://*.nseindia.in wss://*.nseroot.com https://www.google.com https://*.nse.in; frame-src 'self' https://www.googletagmanager.com https://td.doubleclick.net https://www.youtube.com https://*.nse.co.in https://*.nseindia.com https://*.nseindia.in https://*.nseroot.com https://www.google.com https://recaptcha.google.com https://www.recaptcha.net https://*.nse.in; media-src 'self' https://*.nse.co.in https://*.nseindia.com https://*.nseindia.in https://*.nseroot.com https://*.nse.in; form-action 'self' https://*.highcharts.com"
+      ],
+      [
+        "referrer-policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "access-control-allow-origin",
+        "beta.nseindia.com"
+      ],
+      [
+        "access-control-allow-origin",
+        "nseindia.com"
+      ],
+      [
+        "access-control-allow-methods",
+        "GET,POST"
+      ],
+      [
+        "access-control-allow-headers",
+        "Content-Type"
+      ],
+      [
+        "content-type",
+        "application/json; charset=utf-8"
+      ],
+      [
+        "cross-origin-embedder-policy",
+        "unsafe-none"
+      ],
+      [
+        "cross-origin-resource-policy",
+        "unsafe-none"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "unsafe-none"
+      ],
+      [
+        "permissions-policy",
+        "camera=(), microphone=(), geolocation=()"
+      ],
+      [
+        "content-encoding",
+        "br"
+      ],
+      [
+        "date",
+        "Wed, 21 Oct 2026 09:14:24 GMT"
+      ],
+      [
+        "server-timing",
+        "cdn-cache; desc=HIT"
+      ],
+      [
+        "server-timing",
+        "edge; dur=1471"
+      ],
+      [
+        "akamai-grn",
+        "0.1501c045.1792574062.12501e86"
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000 ; includeSubDomains ; preload"
+      ],
+      [
+        "set-cookie",
+        "bm_mi=D1DACFD31CF894EA78E7758F577873E7~YAAQFQHARWHUzzmhAQAA7Ia9XQHFyJlfgnYXvEnIQVgYUG9KaBQ4HU9yxrtZ6Qw/atstDxWrk53Y+HzJ830EpMdODf3a6GwxTJfr6k1cgUaaVYkUBsc2fOyMQIupIGOrWoShILXXhSZPkxU4r1DUL/PNqAno7qBviwHHyrK0biaiXXNz7OYaFKaJosw5PKR2khIDGWdLIZDnOjoPM9UumI3tngrsS8a0bYDTA8EBHb9zK4HVTAQ5rDmV39a+8unVZIs390D+/TIfhv1YmgdAt6FOJpuDPUYFeFlCf6Ow47qum83FTvvuPkyjyI6Om1g=~1; Domain=.nseindia.com; Path=/; Expires=Wed, 21 Oct 2026 09:14:22 GMT; Max-Age=0; Secure"
+      ],
+      [
+        "set-cookie",
+        "bm_sv=94EED5FBC3ABB6573A2E43D1BD783569~YAAQFQHARWLUzzmhAQAA7Ia9XQE+h9U8a8ZQCN7zKUIhzdas1ES9KGdDOP8bb5OhxKVqmfDCoIDNW7x1IUj+4qUwX1uJNZShKEKAfqUPmKmic0UM/zUulE4xFsG4SzaaZWIwX2Q8b7DXdSTZK0cHNwcOO4tldH/OGBN/ha0m6UbLHMz5opUMVvVF20EOJSCWDCzsm1y5IfAcHr8bTINPZVO9Qg2//kvcmMbarqAIiPU6c/i6QJTD5leUNRAa/qplZ6o=~1; Domain=.nseindia.com; Path=/; Expires=Wed, 21 Oct 2026 11:14:24 GMT; Max-Age=7200; Secure"
+      ],
+      [
+        "set-cookie",
+        "bm_sz=A4C64CA8308EFF1C8DA11F089AFAE034~YAAQFQHARWPUzzmhAQAA7Ia9XQGgsuXgFg51VxmMdz9ciDI6hjmhp6R9GCjWVVuXFLNRS/WtBKnvnZeS9mcDqcTZ+l9phLnFc0RucINayuoOW//YJxydVUUVZ/ZzERYc7pvSxmMigQ/YeyMjYd7wzHPCkBpLpi3YlWItAP8ByYP9gi9Zj5LLZVsSMWrQytJt/siOTu64gchyF+uwYT70eGlvJZV4IxoIHwBr6g65Cf+WouYJS9HtNC86nlgte+SHtqScrNTF1oB66P8INekPqRN1kHFg9jYVMjdr7cXe5axZYZbbU98W1PMC8J524HZ41M5tAIKUOXn21pC3gvGhOLzrd/3Jmp66XWZj40ITltysQCzAUdLpih+IPyCOmNDhmJG58KUIc6CvEzaOS4IZKjrrlZM=~3749429~3748915; Domain=.nseindia.com; Path=/; Expires=Wed, 21 Oct 2026 13:14:22 GMT; Max-Age=14398"
+      ],
+      [
+        "server-timing",
+        "ak_p; desc=\"1792574062867_1170211093_307240582_149764_25163_5_0_255\";dur=1"
+      ]
+    ],
+    "body": "[{\"an_dt\":\"01-Aug-2024 21:13:13\",\"attFileSize\":null,\"attchmntFile\":\"https://nsearchives.nseindia.com/corporate/INFY_01082024211313_Update.pdf\",\"attchmntText\":\"Infosys Limited has informed the Exchange regarding 'Update on Company statement dated July 31, 2024, on pre-show cause notice on GST'.\",\"bflag\":null,\"csvName\":null,\"desc\":\"Updates\",\"difference\":\"00:00:01\",\"dt\":\"01082024211313\",\"exchdisstime\":\"01-Aug-2024 21:13:14\",\"fileSize\":\"-\",\"hasXbrl\":false,\"old_new\":null,\"orgid\":null,\"seq_id\":\"105935667\",\"smIndustry\":\"Computers - Software\",\"sm_isin\":\"INE009A01021\",\"sm_name\":\"Infosys Limited\",\"sort_date\":\"2024-08-01 21:13:13\",\"symbol\":\"INFY\"},{\"an_dt\":\"01-Aug-2024 19:29:38\",\"attFileSize\":null,\"attchmntFile\":\"https://nsearchives.nseindia.com/corporate/TCS_01082024192938_SEint01082024Signed.pdf\",\"attchmntText\":\"Tata Consultancy Services Limited has informed the Exchange about Schedule of meet\",\"bflag\":null,\"csvName\":null,\"desc\":\"Analysts/Institutional Investor Meet/Con. Call Updates\",\"difference\":\"00:00:01\",\"dt\":\"01082024192938\",\"exchdisstime\":\"01-Aug-2024 19:29:39\",\"fileSize\":\"-\",\"hasXbrl\":false,\"old_new\":null,\"orgid\":null,\"seq_id\":\"105935549\",\"smIndustry\":\"Computers - Software\",\"sm_isin\":\"INE467B01029\",\"sm_name\":\"Tata Consultancy Services Limited\",\"sort_date\":\"2024-08-01 19:29:38\",\"symbol\":\"TCS\"},{\"an_dt\":\"01-Aug-2024 17:32:07\",\"attFileSize\":null,\"attchmntFile\":\"https://nsearchives.nseindia.com/corporate/RELIANCE_01082024173207_LossofCert31072024.pdf\",\"attchmntText\":\"Pursuant to Regulation 39(3) of the Securities and Exchange Board of India (ListingObligations and Disclosure Requirements) Regulations, 2015, we enclose the informationregarding loss of share certificate(s) for 3,272 (Three Thousand Two Hundred andSeventy Two) shares received from the shareholder(s) of the Company on July 31, 2024.As required under SEBI Circular No. SEBI / HO / MIRSD / MIRSD_RTAMB / P /CIR/2022/8 dated January 25, 2022, the Company shall issue  Letter of Confirmation  to theshareholders after compliance of required formalities.\",\"bflag\":null,\"csvName\":null,\"desc\":\"Loss of Share Certificates\",\"difference\":\"00:00:00\",\"dt\":\"01082024173207\",\"exchdisstime\":\"01-Aug-2024 17:32:07\",\"fileSize\":\"-\",\"hasXbrl\":false,\"old_new\":null,\"orgid\":null,\"seq_id\":\"105935201\",\"smIndustry\":\"Refineries\",\"sm_isin\":\"INE002A01018\",\"sm_name\":\"Reliance Industries Limited\",\"sort_date\":\"2024-08-01 17:32:07\",\"symbol\":\"RELIANCE\"},{\"an_dt\":\"01-Aug-2024 15:22:41\",\"attFileSize\":null,\"attchmntFile\":\"https://nsearchives.nseindia.com/corporate/INFY_01082024152241_PR_01082024.pdf\",\"attchmntText\":\"Infosys Limited has informed the Exchange regarding 'Infosys and ServiceNow Expand AI Collaboration to Revolutionize Service Delivery'.\",\"bflag\":null,\"csvName\":null,\"desc\":\"Updates\",\"difference\":\"00:00:01\",\"dt\":\"01082024152241\",\"exchdisstime\":\"01-Aug-2024 15:22:42\",\"fileSize\":\"-\",\"hasXbrl\":false,\"old_new\":null,\"orgid\":null,\"seq_id\":\"105934793\",\"smIndustry\":\"Computers - Software\",\"sm_isin\":\"INE009A01021\",\"sm_name\":\"Infosys Limited\",\"sort_date\":\"2024-08-01 15:22:41\",\"symbol\":\"INFY\"},{\"an_dt\":\"01-Aug-2024 09:06:31\",\"attFileSize\":null,\"attchmntFile\":\"https://nsearchives.nseindia.com/corporate/BAJAJ-AUTO_01082024090631_SALESJULY2024.pdf\",\"attchmntText\":\"Bajaj Auto Limited has informed the Exchange regarding a press release dated August 01, 2024, titled \\\"Sales for the month of July 2024\\\".\",\"bflag\":null,\"csvName\":null,\"desc\":\"Press Release\",\"difference\":\"00:00:01\",\"dt\":\"01082024090631\",\"exchdisstime\":\"01-Aug-2024 09:06:32\",\"fileSize\":\"-\",\"hasXbrl\":false,\"old_new\":null,\"orgid\":null,\"seq_id\":\"105934086\",\"smIndustry\":\"Automobiles - 2 And 3 Wheelers\",\"sm_isin\":\"INE917I01010\",\"sm_name\":\"Bajaj Auto Limited\",\"sort_date\":\"2024-08-01 09:06:31\",\"symbol\":\"BAJAJ-AUTO\"}]",
+    "body_encoding": "utf-8"
+  }
+}
