@@ -124,7 +124,7 @@ class ReconcileReport:
             ],
         }
 
-    def table(self) -> str:
+    def text(self) -> str:
         """The human-readable report."""
         lines = [
             f"reconcile {self.start} to {self.end}: {self.rows} rows,"

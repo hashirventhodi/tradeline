@@ -66,6 +66,15 @@ class CandleIngestResult:
     anomalies: int
     requests: int
 
+    def summary(self) -> dict[str, Any]:
+        return {
+            "symbols_loaded": self.symbols_loaded,
+            "symbols_without_token": list(self.symbols_without_token),
+            "rows_written": self.rows_written,
+            "anomalies": self.anomalies,
+            "requests": self.requests,
+        }
+
 
 @dataclass(frozen=True)
 class _Instrument:

@@ -25,6 +25,7 @@ import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
+from typing import Any
 
 import psycopg
 
@@ -49,6 +50,15 @@ class EodIngestResult:
     # ``symbols`` rows created or changed, summed over the three sources: a
     # symbol first seen by the equity master and then given a token counts twice.
     symbol_updates: int
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "days_loaded": self.days_loaded,
+            "missing_days": [day.isoformat() for day in self.missing_days],
+            "eod_rows_written": self.eod_rows_written,
+            "anomalies": self.anomalies,
+            "symbol_updates": self.symbol_updates,
+        }
 
 
 @dataclass(frozen=True)

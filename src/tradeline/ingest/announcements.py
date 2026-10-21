@@ -20,8 +20,9 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date, datetime
+from typing import Any
 
 import psycopg
 
@@ -70,6 +71,9 @@ class SourceResult:
 class AnnouncementIngestResult:
     nse: SourceResult
     bse: SourceResult
+
+    def summary(self) -> dict[str, Any]:
+        return {"nse": asdict(self.nse), "bse": asdict(self.bse)}
 
 
 def ingest_announcements(

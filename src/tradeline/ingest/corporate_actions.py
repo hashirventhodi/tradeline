@@ -48,6 +48,15 @@ class CorporateActionIngestResult:
     anomalies: int
     requests: int
 
+    def summary(self) -> dict[str, Any]:
+        return {
+            "rows_seen": self.rows_seen,
+            "rows_written": self.rows_written,
+            "unparsed": self.unparsed,
+            "anomalies": self.anomalies,
+            "requests": self.requests,
+        }
+
 
 def ingest_corporate_actions(
     conn: psycopg.Connection,

@@ -98,7 +98,7 @@ def test_the_report_prints_overlap_and_both_difference_lists_in_a_stable_format(
         conn, PlaybackTransport(SECTOR_FIXTURES), RULE, month=AUGUST, as_of=AUGUST
     )
 
-    assert check.report() == (
+    assert check.text() == (
         f"Universe 2024-08 (rule {RULE.version[:12]}) against NIFTY 200 as of 2024-08-01\n"
         "Overlap: 4 of 5 NIFTY 200 constituents (80.00%)\n"
         "\n"
@@ -116,7 +116,7 @@ def test_the_report_prints_overlap_and_both_difference_lists_in_a_stable_format(
     again = verify_universe(
         conn, PlaybackTransport(SECTOR_FIXTURES), RULE, month=AUGUST, as_of=AUGUST
     )
-    assert again.report() == check.report()
+    assert again.text() == check.text()
 
 
 def test_a_constituent_outside_the_universe_shows_where_the_rule_ranks_it(
@@ -145,7 +145,7 @@ def test_universe_members_without_a_sector_are_listed(other: psycopg.Connection)
     )
 
     assert [(m.rank, m.symbol) for m in check.without_sector] == [(5, "ABDL")]
-    assert check.report().endswith(
+    assert check.text().endswith(
         "Universe members without a sector: 1\n   rank  symbol\n      5  ABDL\n"
     )
 

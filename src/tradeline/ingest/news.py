@@ -25,6 +25,7 @@ import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import psycopg
@@ -50,6 +51,13 @@ class NewsIngestResult:
     rows_seen: int
     rows_written: int
     failed_feeds: tuple[str, ...]
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "rows_seen": self.rows_seen,
+            "rows_written": self.rows_written,
+            "failed_feeds": list(self.failed_feeds),
+        }
 
 
 def ingest_news(

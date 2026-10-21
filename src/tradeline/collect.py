@@ -27,6 +27,7 @@ import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
+from typing import Any
 
 import psycopg
 
@@ -80,6 +81,23 @@ class CollectResult:
     @property
     def succeeded(self) -> bool:
         return not self.failed_sources and not self.failed_feeds
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "day": self.day.isoformat(),
+            "collection_id": str(self.collection_id),
+            "runs": {
+                r.source: {
+                    "status": r.status,
+                    "rows_seen": r.rows_seen,
+                    "rows_written": r.rows_written,
+                    "seconds": round(r.duration.total_seconds(), 3),
+                }
+                for r in self.runs
+            },
+            "failed_sources": list(self.failed_sources),
+            "failed_feeds": list(self.failed_feeds),
+        }
 
 
 def collect_daily(

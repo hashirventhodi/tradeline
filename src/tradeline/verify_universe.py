@@ -55,7 +55,8 @@ class UniverseCheck:
         share = Decimal(100 * self.overlap) / Decimal(self.index_size)
         return share.quantize(Decimal("0.01"), rounding=ROUND_HALF_EVEN)
 
-    def report(self) -> str:
+    def text(self) -> str:
+        """The human-readable report."""
         lines = [
             f"Universe {self.month:%Y-%m} (rule {self.rule_version[:12]}) against {INDEX_NAME}"
             f" as of {self.as_of}",
@@ -74,6 +75,7 @@ class UniverseCheck:
         return "\n".join(lines) + "\n"
 
     def summary(self) -> dict[str, object]:
+        """The machine-readable report."""
         return {
             "month": self.month.isoformat(),
             "rule_version": self.rule_version,

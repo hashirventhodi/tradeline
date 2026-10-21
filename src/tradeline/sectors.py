@@ -53,6 +53,17 @@ class SectorLoadResult:
     changes: tuple[SectorChange, ...]
     anomalies: int
 
+    def summary(self) -> dict[str, Any]:
+        return {
+            "effective_date": self.effective_date.isoformat(),
+            "rows_seen": self.rows_seen,
+            "rows_written": self.rows_written,
+            "changes": [
+                {"symbol": c.symbol, "before": c.before, "after": c.after} for c in self.changes
+            ],
+            "anomalies": self.anomalies,
+        }
+
 
 def load_sectors(
     conn: psycopg.Connection, transport: Transport, *, effective_date: date

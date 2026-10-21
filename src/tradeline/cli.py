@@ -16,7 +16,6 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
-from tradeline.collect import CollectResult
 from tradeline.collect import collect_daily as collect_daily_service
 from tradeline.config import Config, default_config_path, load_config
 from tradeline.dates import IST, month_end, month_of, next_month, parse_month
@@ -126,16 +125,7 @@ def _ingest_eod(ctx: Context, args: argparse.Namespace, end: date) -> int:
     transport = _transport(ctx, args)
     with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
         result = ingest_eod(conn, transport, start=args.start, end=end)
-    log.info(
-        "ingest eod finished",
-        extra={
-            "days_loaded": result.days_loaded,
-            "missing_days": [day.isoformat() for day in result.missing_days],
-            "eod_rows_written": result.eod_rows_written,
-            "anomalies": result.anomalies,
-            "symbol_updates": result.symbol_updates,
-        },
-    )
+    log.info("ingest eod finished", extra=result.summary())
     return 0
 
 
@@ -162,17 +152,7 @@ def _ingest_candles(ctx: Context, args: argparse.Namespace, end: date) -> int:
             symbols=args.symbols,
             universe=universe,
         )
-    log.info(
-        "ingest candles finished",
-        extra={
-            "interval": args.interval,
-            "symbols_loaded": result.symbols_loaded,
-            "symbols_without_token": list(result.symbols_without_token),
-            "rows_written": result.rows_written,
-            "anomalies": result.anomalies,
-            "requests": result.requests,
-        },
-    )
+    log.info("ingest candles finished", extra={"interval": args.interval, **result.summary()})
     return 0
 
 
@@ -182,15 +162,7 @@ def _ingest_corporate_actions(ctx: Context, args: argparse.Namespace, end: date)
         result = ingest_corporate_actions(
             conn, transport, start=args.start, end=end, symbols=args.symbols
         )
-    log.info(
-        "ingest corporate-actions finished",
-        extra={
-            "rows_seen": result.rows_seen,
-            "rows_written": result.rows_written,
-            "unparsed": result.unparsed,
-            "requests": result.requests,
-        },
-    )
+    log.info("ingest corporate-actions finished", extra=result.summary())
     return 0
 
 
@@ -199,43 +171,32 @@ def _ingest_announcements(ctx: Context, args: argparse.Namespace, end: date) -> 
     transport = _transport(ctx, args, browser_tls=True)
     with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
         result = ingest_announcements(conn, transport, start=args.start, end=end)
-    log.info(
-        "ingest announcements finished",
-        extra={
-            source: {
-                "rows_seen": r.rows_seen,
-                "rows_written": r.rows_written,
-                "matched": r.matched,
-                "unmatched": r.unmatched,
-                "requests": r.requests,
-            }
-            for source, r in (("nse", result.nse), ("bse", result.bse))
-        },
-    )
+    log.info("ingest announcements finished", extra=result.summary())
     return 0
 
 
 def _ingest_news(ctx: Context, args: argparse.Namespace) -> int:
     """Every configured feed, or the ones named; exits 1 if any feed failed."""
-    configured = ctx.config.news.feeds
-    names = list(configured) if args.feeds is None else args.feeds
-    unknown = [name for name in names if name not in configured]
-    if unknown:
-        raise ValueError(f"news feeds not configured in [news.feeds]: {', '.join(unknown)}")
-    feeds = [Feed(name, configured[name]) for name in names]
+    feeds = _feeds(ctx, args.feeds)
     transport = _transport(ctx, args)
     with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
         result = ingest_news(conn, transport, feeds=feeds)
     log.log(
         logging.ERROR if result.failed_feeds else logging.INFO,
         "ingest news finished",
-        extra={
-            "rows_seen": result.rows_seen,
-            "rows_written": result.rows_written,
-            "failed_feeds": list(result.failed_feeds),
-        },
+        extra=result.summary(),
     )
     return 1 if result.failed_feeds else 0
+
+
+def _feeds(ctx: Context, names: Sequence[str] | None = None) -> list[Feed]:
+    """The configured feeds named, in that order; every configured feed by default."""
+    configured = ctx.config.news.feeds
+    names = list(configured) if names is None else names
+    unknown = [name for name in names if name not in configured]
+    if unknown:
+        raise ValueError(f"news feeds not configured in [news.feeds]: {', '.join(unknown)}")
+    return [Feed(name, configured[name]) for name in names]
 
 
 def reconcile(ctx: Context, args: argparse.Namespace) -> int:
@@ -249,7 +210,7 @@ def reconcile(ctx: Context, args: argparse.Namespace) -> int:
             report = reconcile_service(
                 conn, ctx.config.reconcile, start=args.start, end=end, symbols=args.symbols
             )
-        sys.stderr.write(report.table())
+        sys.stderr.write(report.text())
         log.log(
             logging.INFO if report.passed else logging.ERROR,
             "reconcile finished",
@@ -289,8 +250,7 @@ def collect_daily(ctx: Context, args: argparse.Namespace) -> int:
     the ingest run history has a row for every source.
     """
     day = datetime.now(IST).date() if args.day is None else args.day
-    configured = ctx.config.news.feeds
-    feeds = [Feed(name, url) for name, url in configured.items()]
+    feeds = _feeds(ctx)
 
     def kite() -> KiteSession:
         return KiteSession(
@@ -310,31 +270,12 @@ def collect_daily(ctx: Context, args: argparse.Namespace) -> int:
                 browser_transport=_transport(ctx, args, browser_tls=True),
                 kite=kite,
             )
-        _log_collection(result)
+        log.log(
+            logging.INFO if result.succeeded else logging.ERROR,
+            "collect-daily finished",
+            extra=result.summary(),
+        )
     return 0 if result.succeeded else 1
-
-
-def _log_collection(result: CollectResult) -> None:
-    day = result.day
-    log.log(
-        logging.INFO if result.succeeded else logging.ERROR,
-        "collect-daily finished",
-        extra={
-            "day": day.isoformat(),
-            "collection_id": str(result.collection_id),
-            "runs": {
-                r.source: {
-                    "status": r.status,
-                    "rows_seen": r.rows_seen,
-                    "rows_written": r.rows_written,
-                    "seconds": round(r.duration.total_seconds(), 3),
-                }
-                for r in result.runs
-            },
-            "failed_sources": list(result.failed_sources),
-            "failed_feeds": list(result.failed_feeds),
-        },
-    )
 
 
 def universe(ctx: Context, args: argparse.Namespace) -> int:
@@ -358,18 +299,7 @@ def sectors(ctx: Context, args: argparse.Namespace) -> int:
     transport = _transport(ctx, args)
     with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
         result = load_sectors(conn, transport, effective_date=datetime.now(IST).date())
-    log.info(
-        "sectors finished",
-        extra={
-            "effective_date": result.effective_date.isoformat(),
-            "rows_seen": result.rows_seen,
-            "rows_written": result.rows_written,
-            "changes": [
-                {"symbol": c.symbol, "before": c.before, "after": c.after} for c in result.changes
-            ],
-            "anomalies": result.anomalies,
-        },
-    )
+    log.info("sectors finished", extra=result.summary())
     return 0
 
 
@@ -386,7 +316,7 @@ def verify_universe(ctx: Context, args: argparse.Namespace) -> int:
             check = verify_universe_service(
                 conn, transport, ctx.config.universe, month=month, as_of=today
             )
-        sys.stderr.write(check.report())
+        sys.stderr.write(check.text())
         log.info("verify-universe finished", extra={"report": check.summary()})
     return 0
 
