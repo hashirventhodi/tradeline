@@ -24,12 +24,18 @@ class ConfigError(ValueError):
     pass
 
 
+RANK_BY = ("symbol", "instrument")
+
+
 @dataclass(frozen=True)
 class UniverseRule:
     """The Universe Rule's parameters (ADR 0005); see ``tradeline.universe``.
 
     Every field takes part in ``version``, so any change to the rule is a new
-    rule version and the membership it produces is recorded under it.
+    rule version and the membership it produces is recorded under it. The one
+    exception is ``rank_by`` at its original value, ``symbol``: it is left out
+    of the parameters, so the rule as it was before Instruments (ADR 0016)
+    keeps the version its memberships were stored under.
     """
 
     top_n: int = 200
@@ -43,8 +49,13 @@ class UniverseRule:
     series: str = "EQ"
     # ETFs and other fund units trade in series EQ; their ISINs begin with INF.
     excluded_isin_prefix: str = "INF"
+    # What is ranked: each Symbol on its own, or each Instrument across its
+    # Symbols (ADR 0016), so a rename inside the window is not a new listing.
+    rank_by: str = "symbol"
 
     def __post_init__(self) -> None:
+        if self.rank_by not in RANK_BY:
+            raise ConfigError(f"universe.rank_by must be one of {', '.join(RANK_BY)}")
         for name in ("top_n", "lookback_trading_days", "min_listing_trading_days"):
             if getattr(self, name) < 1:
                 raise ConfigError(f"universe.{name} must be at least 1")
@@ -53,7 +64,10 @@ class UniverseRule:
 
     @property
     def parameters(self) -> dict[str, Any]:
-        return dataclasses.asdict(self)
+        parameters = dataclasses.asdict(self)
+        if self.rank_by == "symbol":
+            del parameters["rank_by"]
+        return parameters
 
     @property
     def version(self) -> str:
@@ -84,10 +98,17 @@ class Config:
         # exactly at it fails (Phase 1: under 0.1).
         max_discrepancy_pct: float = 0.1
 
+    @dataclass(frozen=True)
+    class Instruments:
+        # The checked-in file of manual Instrument Links (``tradeline.manual_links``),
+        # relative to the working directory.
+        manual_links: str = "manual_links.csv"
+
     logging: Logging = field(default_factory=Logging)
     universe: UniverseRule = field(default_factory=UniverseRule)
     reconcile: Reconcile = field(default_factory=Reconcile)
     news: News = field(default_factory=News)
+    instruments: Instruments = field(default_factory=Instruments)
 
 
 def default_config_path() -> Path:

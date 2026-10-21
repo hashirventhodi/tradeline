@@ -12,7 +12,8 @@ The evidence:
 - NSE's symbol-change records, as published;
 - the Corporate Actions, of which the splits and bonuses (a consolidation is a
   split with a factor above one) can explain an ISIN change;
-- NSE's listing dates, each for a (Symbol, ISIN) of the equity master.
+- NSE's listing dates, each for a (Symbol, ISIN) of the equity master;
+- the manual links, each citing an official source.
 
 A **stretch** is every span of one Symbol under one ISIN: the same Symbol with
 the same ISIN is one Instrument whatever the gap between its spans, and an
@@ -28,13 +29,29 @@ Instrument Link with a date and a source:
   IRCON 2020-04-03), or the day before (1; AHCL 2026-04-24). The nearest
   action that does not explain a change is months away;
 - ``symbol_change``: an NSE record (old Symbol, new Symbol, effective date)
-  joins the old Symbol's stretch that ended before the effective date to the
-  new Symbol's stretch that started on or after it. Chains follow, since each
+  joins the old Symbol's latest stretch that started before the effective date
+  to the new Symbol's earliest stretch live on or after it. Chains follow, since each
   record is one link. A record with no stretch on either side (a rename before
-  the Raw Series starts) joins nothing.
+  the Raw Series starts) joins nothing;
+- ``manual``: a reviewed row of the checked-in manual-links file
+  (``tradeline.manual_links``), for a rename NSE's list omits (RUCHI to
+  PATANJALI). It joins by the same rule as an NSE record, and its source
+  carries the row's citation.
 
 Anything else splits the history. An ISIN change under one Symbol with no
 split or bonus to explain it is never joined and is recorded as an anomaly.
+
+A proposed link, from any source, is refused when it would give one
+Instrument two live Symbols on a day (a span of one overlapping a span of the
+other); the refusal is recorded as a ``conflicting_link`` anomaly. So a rename
+record whose old Symbol keeps trading after its effective date joins nothing,
+and a merger never joins: the absorbed and the surviving company traded side
+by side, whether the absorbed company's ISIN ends (MINDTREE into LTI) or the
+surviving company carries on (HDFC into HDFCBANK).
+
+A new Symbol that takes up an ISIN an earlier Symbol ended under, with no
+NSE record or manual link for the pair, is not joined either: it is a **link candidate**, for the
+Operator to cite in a manual link or leave split (ADR 0016).
 
 An Instrument's key is ``SYMBOL@YYYY-MM-DD``: its first Symbol and the earliest
 NSE listing date of any of its (Symbol, ISIN) pairs, or its first Raw Series
@@ -43,9 +60,9 @@ Instrument of the same Symbol (an unexplained ISIN change splits a history,
 and NSE's master lists the original listing date under today's ISIN). Which
 date was used is recorded.
 
-Extending the builder (later rules, refusals, manual links, candidates) means
-adding to the evidence, adding a rule that proposes links (``_propose``), or
-refusing a proposal before it is joined (``_join``).
+Extending the builder (later rules and refusals) means adding to
+the evidence, adding a rule that proposes links (``_propose``), or refusing a
+proposal before it is joined (``_join``).
 """
 
 from __future__ import annotations
@@ -59,9 +76,9 @@ from typing import Literal
 from tradeline.adjust import ADJUSTED_KINDS, CorporateAction
 from tradeline.sources.nse import SymbolChange
 
-LinkKind = Literal["corporate_action", "symbol_change"]
+LinkKind = Literal["corporate_action", "symbol_change", "manual"]
 KeyFrom = Literal["listing_date", "first_row"]
-AnomalyKind = Literal["unexplained_isin_change"]
+AnomalyKind = Literal["unexplained_isin_change", "conflicting_link"]
 
 # How far a split's or bonus's Ex-Date may fall outside the change from the old
 # ISIN's last row to the new one's first and still explain it. NSE's files switch
@@ -91,11 +108,24 @@ class Listing:
 
 
 @dataclass(frozen=True)
+class ManualLink:
+    """A reviewed rename NSE's symbol-change list omits: from ``effective_date`` the old
+    Symbol trades under the new one, as the official source ``citation`` says."""
+
+    old_symbol: str
+    new_symbol: str
+    effective_date: date
+    # An official URL or circular number.
+    citation: str
+
+
+@dataclass(frozen=True)
 class Evidence:
     spans: Sequence[Span]
     symbol_changes: Sequence[SymbolChange] = ()
     corporate_actions: Sequence[CorporateAction] = ()
     listings: Sequence[Listing] = ()
+    manual_links: Sequence[ManualLink] = ()
 
 
 @dataclass(frozen=True)
@@ -143,20 +173,41 @@ class Anomaly:
 
 
 @dataclass(frozen=True)
+class LinkCandidate:
+    """A new Symbol under an ISIN an earlier Symbol had, with no record joining them:
+    a rename NSE's list may omit, for the Operator to cite in a manual link or leave."""
+
+    old_symbol: str
+    new_symbol: str
+    isin: str
+    # The old Symbol's last day under the ISIN and the new Symbol's first.
+    old_last: date
+    new_first: date
+
+
+@dataclass(frozen=True)
 class InstrumentBuild:
     instruments: tuple[Instrument, ...]
     anomalies: tuple[Anomaly, ...]
+    candidates: tuple[LinkCandidate, ...]
 
 
 def build_instruments(evidence: Evidence) -> InstrumentBuild:
     stretches = _stretches(evidence.spans)
     anomalies: list[Anomaly] = []
     proposals = _propose(stretches, evidence, anomalies)
-    groups = _join(stretches, proposals)
+    groups = _join(stretches, proposals, anomalies)
     instruments = _keyed(groups, evidence.listings)
+    recorded = {(r.old_symbol, r.new_symbol) for r in evidence.symbol_changes} | {
+        (m.old_symbol, m.new_symbol) for m in evidence.manual_links
+    }
+    candidates = _candidates(stretches, groups, recorded)
     return InstrumentBuild(
         instruments=tuple(sorted(instruments, key=lambda i: i.key)),
         anomalies=tuple(sorted(anomalies, key=lambda a: (a.on, a.symbol, a.kind, a.detail))),
+        candidates=tuple(
+            sorted(candidates, key=lambda c: (c.new_first, c.new_symbol, c.old_symbol, c.isin))
+        ),
     )
 
 
@@ -215,6 +266,7 @@ def _propose(
     proposals = [
         *_isin_changes(stretches, evidence.corporate_actions, anomalies),
         *_symbol_changes(stretches, evidence.symbol_changes),
+        *_manual_links(stretches, evidence.manual_links),
     ]
     return sorted(proposals, key=lambda p: (p.link.on, p.link.kind, p.joins[0].id, p.joins[1].id))
 
@@ -274,33 +326,83 @@ def _symbol_changes(stretches: list[_Stretch], records: Sequence[SymbolChange]) 
     by_symbol = _by_symbol(stretches)
     proposals: list[_Proposal] = []
     for record in sorted(set(records), key=_record_order):
-        if record.old_symbol == record.new_symbol:
-            continue
         effective = record.effective_date
-        before = [s for s in by_symbol.get(record.old_symbol, []) if s.last < effective]
-        after = [s for s in by_symbol.get(record.new_symbol, []) if s.first >= effective]
-        if not before or not after:
-            continue
-        old = max(before, key=lambda s: (s.last, s.id))
-        new = min(after, key=lambda s: (s.first, s.id))
-        link = Link(
+        proposal = _rename(
+            by_symbol,
+            record.old_symbol,
+            record.new_symbol,
+            effective,
             kind="symbol_change",
-            on=effective,
-            from_symbol=old.symbol,
-            from_isin=old.isin,
-            to_symbol=new.symbol,
-            to_isin=new.isin,
             source=(
                 f"NSE symbol change {record.old_symbol} to {record.new_symbol}"
                 f" effective {effective.isoformat()}"
             ),
         )
-        proposals.append(_Proposal(link, (old, new)))
+        if proposal is not None:
+            proposals.append(proposal)
     return proposals
+
+
+def _manual_links(stretches: list[_Stretch], rows: Sequence[ManualLink]) -> list[_Proposal]:
+    """A manual link joins as an NSE record does; its source is its citation."""
+    by_symbol = _by_symbol(stretches)
+    proposals: list[_Proposal] = []
+    for row in sorted(set(rows), key=_manual_order):
+        effective = row.effective_date
+        proposal = _rename(
+            by_symbol,
+            row.old_symbol,
+            row.new_symbol,
+            effective,
+            kind="manual",
+            source=(
+                f"manual link {row.old_symbol} to {row.new_symbol}"
+                f" effective {effective.isoformat()}: {row.citation}"
+            ),
+        )
+        if proposal is not None:
+            proposals.append(proposal)
+    return proposals
+
+
+def _rename(
+    by_symbol: dict[str, list[_Stretch]],
+    old_symbol: str,
+    new_symbol: str,
+    effective: date,
+    *,
+    kind: LinkKind,
+    source: str,
+) -> _Proposal | None:
+    """The old Symbol's history from before ``effective`` joined to the new one's live on or
+    after it; whether the two may be joined (neither live beside the other) is ``_join``'s
+    to decide."""
+    if old_symbol == new_symbol:
+        return None
+    before = [s for s in by_symbol.get(old_symbol, []) if s.first < effective]
+    after = [s for s in by_symbol.get(new_symbol, []) if s.last >= effective]
+    if not before or not after:
+        return None
+    old = max(before, key=lambda s: (s.last, s.id))
+    new = min(after, key=lambda s: (s.first, s.id))
+    link = Link(
+        kind=kind,
+        on=effective,
+        from_symbol=old.symbol,
+        from_isin=old.isin,
+        to_symbol=new.symbol,
+        to_isin=new.isin,
+        source=source,
+    )
+    return _Proposal(link, (old, new))
 
 
 def _record_order(record: SymbolChange) -> tuple[date, str, str, str]:
     return (record.effective_date, record.old_symbol, record.new_symbol, record.company_name or "")
+
+
+def _manual_order(row: ManualLink) -> tuple[date, str, str, str]:
+    return (row.effective_date, row.old_symbol, row.new_symbol, row.citation)
 
 
 def _by_symbol(stretches: list[_Stretch]) -> dict[str, list[_Stretch]]:
@@ -319,9 +421,18 @@ class _Group:
     links: list[Link] = field(default_factory=list)
 
 
-def _join(stretches: list[_Stretch], proposals: list[_Proposal]) -> list[_Group]:
-    """The stretches joined by each proposed link in turn."""
+def _join(
+    stretches: list[_Stretch], proposals: list[_Proposal], anomalies: list[Anomaly]
+) -> list[_Group]:
+    """The stretches joined by each proposed link in turn, earliest first.
+
+    A link that would give the joined Instrument two live Symbols on a day,
+    whatever its source, is refused and recorded as a conflict: a Symbol's
+    history and another's that overlap are two companies, or a record that is
+    wrong, and either way not one Instrument.
+    """
     parent = {s.id: s.id for s in stretches}
+    spans: dict[tuple[str, str], list[Span]] = {s.id: list(s.spans) for s in stretches}
 
     def root(node: tuple[str, str]) -> tuple[str, str]:
         while parent[node] != node:
@@ -333,7 +444,13 @@ def _join(stretches: list[_Stretch], proposals: list[_Proposal]) -> list[_Group]
     for proposal in proposals:
         a, b = (root(s.id) for s in proposal.joins)
         if a != b:
-            parent[max(a, b)] = min(a, b)
+            clash = _two_live_symbols(spans[a], spans[b])
+            if clash is not None:
+                anomalies.append(_conflict(proposal.link, *clash))
+                continue
+            kept, gone = min(a, b), max(a, b)
+            parent[gone] = kept
+            spans[kept].extend(spans.pop(gone))
         accepted.append(proposal)
     groups: dict[tuple[str, str], _Group] = {}
     for s in stretches:
@@ -341,6 +458,66 @@ def _join(stretches: list[_Stretch], proposals: list[_Proposal]) -> list[_Group]
     for proposal in accepted:
         groups[root(proposal.joins[0].id)].links.append(proposal.link)
     return list(groups.values())
+
+
+def _two_live_symbols(ours: list[Span], theirs: list[Span]) -> tuple[Span, Span] | None:
+    """The earliest pair of spans, one from each side, of two Symbols live on one day."""
+    clashes = [
+        (max(x.first, y.first), _span_order(x), _span_order(y), x, y)
+        for x in ours
+        for y in theirs
+        if x.symbol != y.symbol and x.first <= y.last and y.first <= x.last
+    ]
+    if not clashes:
+        return None
+    *_, x, y = min(clashes)
+    return (x, y) if (x.first, x.symbol) <= (y.first, y.symbol) else (y, x)
+
+
+def _conflict(link: Link, earlier: Span, later: Span) -> Anomaly:
+    return Anomaly(
+        kind="conflicting_link",
+        symbol=link.from_symbol,
+        on=link.on,
+        detail=(
+            f"refused {link.source}: {earlier.symbol}"
+            f" ({earlier.first.isoformat()} to {earlier.last.isoformat()}) and {later.symbol}"
+            f" ({later.first.isoformat()} to {later.last.isoformat()})"
+            f" would both be live on {later.first.isoformat()}"
+        ),
+    )
+
+
+# --- Candidates -------------------------------------------------------------
+
+
+def _candidates(
+    stretches: list[_Stretch], groups: list[_Group], recorded: set[tuple[str, str]]
+) -> list[LinkCandidate]:
+    """Each Symbol's stretch that takes up an ISIN an earlier Symbol's ended under, unjoined.
+
+    The earlier Symbol is the last one under the ISIN before the new Symbol's
+    first row. A pair named by an NSE record or a manual link (``recorded``, as
+    old and new Symbol) is never a candidate: the link joined them, or was
+    refused and reported as a conflict.
+    """
+    group_of = {s.id: n for n, g in enumerate(groups) for s in g.stretches}
+    found: list[LinkCandidate] = []
+    for new in stretches:
+        if new.isin is None:
+            continue
+        earlier = [
+            s
+            for s in stretches
+            if s.isin == new.isin and s.symbol != new.symbol and s.last < new.first
+        ]
+        if not earlier:
+            continue
+        old = max(earlier, key=lambda s: (s.last, s.id))
+        if group_of[old.id] == group_of[new.id] or (old.symbol, new.symbol) in recorded:
+            continue
+        found.append(LinkCandidate(old.symbol, new.symbol, new.isin, old.last, new.first))
+    return found
 
 
 # --- Instruments ------------------------------------------------------------

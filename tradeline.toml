@@ -13,6 +13,9 @@ min_listing_trading_days = 126  # trading days since listing
 min_presence_percent = 90       # rows required on this share of the window's days
 series = "EQ"                   # excludes SME (SM, ST) and trade-for-trade (BE, BZ)
 excluded_isin_prefix = "INF"    # ETFs and other fund units trade in EQ with INF ISINs
+# rank_by = "symbol" (the default, left out of the version) ranks each Symbol;
+# "instrument" ranks each Instrument across its renames (ADR 0016), a new
+# version that needs `rebuild-instruments` over the window first.
 
 [reconcile]
 # A close mismatch: further than this fraction of the price (plus half a
@@ -29,3 +32,8 @@ et_markets = "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.c
 et_stocks = "https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms"
 livemint_markets = "https://www.livemint.com/rss/markets"
 moneycontrol_latest = "https://www.moneycontrol.com/rss/latestnews.xml"
+
+[instruments]
+# The checked-in manual Instrument Links: renames NSE's symbol-change list
+# omits, each citing an official source (see the file's header).
+manual_links = "manual_links.csv"

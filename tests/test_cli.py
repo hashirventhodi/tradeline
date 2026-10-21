@@ -557,3 +557,24 @@ def test_ingest_symbol_changes_then_rebuild_instruments_log_their_runs(
     assert (finished["source"], finished["symbol_changes"]) == ("instrument_links", 11)
     assert rebuilt[-1]["msg"] == "rebuild-instruments finished"
     assert rebuilt[-1]["instruments"] == 0
+
+
+def test_rebuild_instruments_with_a_manual_link_lacking_a_citation_fails_naming_the_row(
+    fresh_database_url: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    links = tmp_path / "manual_links.csv"
+    links.write_text("old_symbol,new_symbol,effective_date,citation\nRUCHI,PATANJALI,2022-07-13,\n")
+    config = tmp_path / "tradeline.toml"
+    config.write_text(f"[instruments]\nmanual_links = {str(links)!r}\n")
+    monkeypatch.setenv("TRADELINE_CONFIG", str(config))
+    monkeypatch.setenv("DATABASE_URL", fresh_database_url)
+
+    code = main(["rebuild-instruments"])
+
+    assert code == 1
+    failure = json_lines(capsys.readouterr().out)[-1]
+    assert failure["level"] == "ERROR"
+    assert "manual_links.csv line 2: RUCHI to PATANJALI" in str(failure["msg"])
