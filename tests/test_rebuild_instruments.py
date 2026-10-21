@@ -12,7 +12,7 @@ candles, the Corporate Actions, and sectors) are loaded from their own
 recorded fixtures to show that a rebuild leaves every stored row as it was.
 """
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from datetime import date
 from pathlib import Path
 
@@ -135,20 +135,38 @@ def test_rebuilding_again_replaces_the_instruments_with_identical_ones(
     assert queries.instrument_history(conn, ETERNAL) == before
 
 
-STORED = ("eod_bhavcopy", "candles_daily", "corporate_actions", "sectors", "symbol_changes")
+EVER, TODAY = date(2000, 1, 1), date(2026, 10, 21)
 
 
-def stored_rows(conn: psycopg.Connection) -> dict[str, tuple[int, str]]:
-    """Each evidence table's row count and a digest of every row's text."""
-    found = {}
-    for table in STORED:
-        row = conn.execute(
-            f"SELECT count(*), coalesce(md5(string_agg(t::text, E'\\n' ORDER BY t::text)), '')"
-            f" FROM {table} t"
-        ).fetchone()
-        assert row is not None
-        found[table] = (int(row[0]), str(row[1]))
-    return found
+def stored_rows(conn: psycopg.Connection) -> dict[str, bytes]:
+    """Every stored row of the evidence, as the public reads return it, serialised.
+
+    The end-of-day, candle, and Corporate Action reads are asked of every
+    Symbol and pooled: a rebuild may change which Symbols' rows a read returns
+    together, never the rows. Each row carries the Symbol it was stored under.
+    """
+    names = sorted(
+        {s.symbol for s in queries.symbols(conn)}
+        | {n for c in queries.symbol_changes(conn) for n in (c.old_symbol, c.new_symbol)}
+    )
+
+    def pooled(rows: Iterable[object]) -> bytes:
+        return "\n".join(sorted({repr(row) for row in rows})).encode()
+
+    return {
+        "end_of_day": pooled(
+            r for n in names for r in queries.end_of_day(conn, n, start=EVER, end=TODAY)
+        ),
+        "daily_candles": pooled(
+            c for n in names for c in queries.daily_candles(conn, n, start=EVER, end=TODAY)
+        ),
+        "corporate_actions": pooled(
+            a for n in names for a in queries.corporate_actions(conn, n, as_of=TODAY)
+        ),
+        "sectors": repr(queries.sectors(conn, as_of=TODAY)).encode(),
+        "symbol_changes": repr(queries.symbol_changes(conn)).encode(),
+        "symbols": repr(queries.symbols(conn)).encode(),
+    }
 
 
 def test_stored_rows_are_byte_identical_before_and_after_a_build(
@@ -174,7 +192,7 @@ def test_stored_rows_are_byte_identical_before_and_after_a_build(
         load_sectors(conn, PlaybackTransport(FIXTURES_DIR / "sectors"), effective_date=august)
         ingest_symbol_changes(conn, PlaybackTransport(FIXTURES))
         before = stored_rows(conn)
-        assert all(count > 0 for count, _ in before.values()), before
+        assert all(b"(" in rows for rows in before.values()), before
 
         rebuild_instruments(conn)
         queries.instrument_history(conn, queries.resolve_symbol(conn, "RELIANCE", as_of=END).key)
