@@ -198,7 +198,7 @@ def _udiff_row(record: dict[str, str]) -> EndOfDayRow:
 
 def _legacy_row(record: dict[str, str]) -> EndOfDayRow:
     return EndOfDayRow(
-        trade_date=_nse_date(record["TIMESTAMP"]),
+        trade_date=_legacy_timestamp(record["TIMESTAMP"]),
         symbol=record["SYMBOL"].strip(),
         series=record["SERIES"].strip(),
         isin=_text(record.get("ISIN")),  # absent before mid-2011
@@ -464,6 +464,14 @@ def _unzip_single(body: bytes) -> str:
 def _nse_date(text: str) -> date:
     """NSE's ``04-JAN-2019`` form."""
     return datetime.strptime(text.strip(), "%d-%b-%Y").date()
+
+
+def _legacy_timestamp(text: str) -> date:
+    """A legacy end-of-day file's ``04-JAN-2019``, or ``13-Jul-20`` as some 2020 files write it."""
+    try:
+        return _nse_date(text)
+    except ValueError:
+        return datetime.strptime(text.strip(), "%d-%b-%y").date()
 
 
 def _optional_nse_date(value: Any) -> date | None:

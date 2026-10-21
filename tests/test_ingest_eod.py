@@ -6,6 +6,8 @@ legacy-to-UDiFF file format change on 2024-07-08, two exchange holidays, and
 the weekends in between (all 404s from NSE).
 """
 
+import io
+import zipfile
 from collections.abc import Iterator
 from datetime import date
 from decimal import Decimal
@@ -17,6 +19,7 @@ import pytest
 from tradeline import queries
 from tradeline.db import app_connection
 from tradeline.ingest.eod import EodIngestResult, ingest_eod
+from tradeline.sources.nse import parse_bhavcopy
 from tradeline.transport import PlaybackTransport
 
 FIXTURES = Path(__file__).parent / "fixtures" / "ingest_eod"
@@ -225,3 +228,25 @@ def test_an_interrupted_run_is_recorded_as_an_error_not_a_success(
 
     assert interrupted.error == "KeyboardInterrupt: "
     assert interrupted.rows_written == 0
+
+
+def test_a_legacy_file_dated_with_a_two_digit_year_reads_the_same_way() -> None:
+    """NSE's legacy file for 13 July 2020 writes its TIMESTAMP as ``13-Jul-20``."""
+    text = (
+        "SYMBOL,SERIES,OPEN,HIGH,LOW,CLOSE,LAST,PREVCLOSE,TOTTRDQTY,TOTTRDVAL,TIMESTAMP,"
+        "TOTALTRADES,ISIN\n"
+        "20MICRONS,EQ,32.85,33.85,31.85,33.45,33.85,32.3,187303,6187285.7,13-Jul-20,1382,"
+        "INE144J01027\n"
+    )
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as z:
+        z.writestr("cm13JUL2020bhav.csv", text)
+
+    (row,) = parse_bhavcopy(archive.getvalue(), date(2020, 7, 13))
+
+    assert (row.trade_date, row.symbol, row.close, row.traded_qty) == (
+        date(2020, 7, 13),
+        "20MICRONS",
+        Decimal("33.45"),
+        187_303,
+    )
