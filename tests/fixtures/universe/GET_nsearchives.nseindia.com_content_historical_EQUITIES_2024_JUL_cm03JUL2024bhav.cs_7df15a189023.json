@@ -1,0 +1,71 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://nsearchives.nseindia.com/content/historical/EQUITIES/2024/JUL/cm03JUL2024bhav.csv.zip",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "x-frame-options",
+        "DENY"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "accept-ranges",
+        "bytes"
+      ],
+      [
+        "etag",
+        "W/\"109391-1720008115000\""
+      ],
+      [
+        "last-modified",
+        "Wed, 03 Jul 2024 12:01:55 GMT"
+      ],
+      [
+        "content-type",
+        "application/zip"
+      ],
+      [
+        "content-length",
+        "573"
+      ],
+      [
+        "date",
+        "Wed, 21 Oct 2026 08:47:09 GMT"
+      ],
+      [
+        "connection",
+        "keep-alive"
+      ],
+      [
+        "akamai-grn",
+        "0.142a336a.1792572429.c8d3e14"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "content-security-policy",
+        "default-src 'self'; script-src 'strict-dynamic' 'nonce-MC4yMDg2Mzc3MzEw' 'unsafe-inline' http: https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.nse.co.in https://*.nseindia.com; font-src 'self'; frame-src 'self'; base-uri 'self'; frame-ancestors 'self'; connect-src 'self' https://*.nseindia.com https://c.go-mpulse.net https://stats.g.doubleclick.net https://*.akstat.io/ https://*.akamaihd.net"
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000 ; includeSubDomains ; preload"
+      ]
+    ],
+    "body": "UEsDBBQAAAAIAEFyVV2FhxXWtQEAACkDAAATAAAAY20wM0pVTDIwMjRiaGF2LmNzdnVRy5LjMAi8+1uIChDocZQTZeOsY2dizUxl//9DFjlzyVbtBQSSuulme97GdYatPqa6wXqvC1ymXxeY1284zutWYS5bg/ujfr3Ktrb2OH2058/pq8zQplvdWrnde6/M7VFOBjZt0wJDGU8z1A/w7MH77PzPSVy2qC4reIpWkHjhFBUkeo+kquwY0B+un/OBkQWIswaBaal29wcJOcIwlvNS7hcYK6TofPh/9AaXNdohoHf6js3acVNMU8fljnst10P5bGufPksU+6zS580+iQvWY3bSU967guS4q0nECB6RyRuUPdU3KsGQsLNlip2NEIZpOT87DwVDoGDjUsAeOBqFpez2CyaHCpFDzoZKFFNGNDPFxXcS0qhKnQUxl66JYFimc3uO1XZjVIbhfAKOtCerSK1CZ+vpSV5NtApNeUTQEFA1S3DevysismFNA6P8Hkkm8+9R56ksx7rvnjx3FzxpNyap016guLTn3F+g87Z7ZUlmCAlK7kYx/2sfJZMmL2XclVGCoR13TYLmvIXgCHzuJGbTvpQckl3Q7mZiopzMRU5BUTRY843BVmiyjUFCHLt3GYa/UEsBAhQDFAAAAAgAQXJVXYWHFda1AQAAKQMAABMAAAAAAAAAAAAAAIABAAAAAGNtMDNKVUwyMDI0Ymhhdi5jc3ZQSwUGAAAAAAEAAQBBAAAA5gEAAAAA",
+    "body_encoding": "base64"
+  }
+}

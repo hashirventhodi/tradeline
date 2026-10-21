@@ -12,7 +12,7 @@ import logging
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -23,9 +23,11 @@ from tradeline.ingest.announcements import ingest_announcements
 from tradeline.ingest.candles import ingest_candles
 from tradeline.ingest.corporate_actions import ingest_corporate_actions
 from tradeline.ingest.eod import ingest_eod
+from tradeline.ingest.news import Feed, ingest_news
 from tradeline.logging import configure_logging
 from tradeline.login import login as login_service
 from tradeline.migrations import apply_migrations
+from tradeline.reconcile import reconcile as reconcile_service
 from tradeline.secrets import (
     DATABASE_URL,
     KITE_ACCESS_TOKEN,
@@ -41,6 +43,7 @@ from tradeline.transport import (
     Transport,
     transport_for,
 )
+from tradeline.universe import compute_universe
 
 log = logging.getLogger(__name__)
 
@@ -94,6 +97,8 @@ def login(ctx: Context, args: argparse.Namespace) -> int:
 
 
 def ingest(ctx: Context, args: argparse.Namespace) -> int:
+    if args.source == "news":
+        return _ingest_news(ctx, args)
     end = args.start if args.end is None else args.end
     if args.source == "eod":
         return _ingest_eod(ctx, args, end)
@@ -182,6 +187,48 @@ def _ingest_announcements(ctx: Context, args: argparse.Namespace, end: date) -> 
     return 0
 
 
+def _ingest_news(ctx: Context, args: argparse.Namespace) -> int:
+    """Every configured feed, or the ones named; exits 1 if any feed failed."""
+    configured = ctx.config.news.feeds
+    names = list(configured) if args.feeds is None else args.feeds
+    unknown = [name for name in names if name not in configured]
+    if unknown:
+        raise ValueError(f"news feeds not configured in [news.feeds]: {', '.join(unknown)}")
+    feeds = [Feed(name, configured[name]) for name in names]
+    transport = _transport(ctx, args)
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = ingest_news(conn, transport, feeds=feeds)
+    log.log(
+        logging.ERROR if result.failed_feeds else logging.INFO,
+        "ingest news finished",
+        extra={
+            "rows_seen": result.rows_seen,
+            "rows_written": result.rows_written,
+            "failed_feeds": list(result.failed_feeds),
+        },
+    )
+    return 1 if result.failed_feeds else 0
+
+
+def reconcile(ctx: Context, args: argparse.Namespace) -> int:
+    """Compare candles with end-of-day rows; fail above the configured threshold.
+
+    The summary is the last JSON line on stdout; the table goes to stderr.
+    """
+    end = args.start if args.end is None else args.end
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        report = reconcile_service(
+            conn, ctx.config.reconcile, start=args.start, end=end, symbols=args.symbols
+        )
+    sys.stderr.write(report.table())
+    log.log(
+        logging.INFO if report.passed else logging.ERROR,
+        "reconcile finished",
+        extra={"report": report.summary()},
+    )
+    return 0 if report.passed else 1
+
+
 def _transport(ctx: Context, args: argparse.Namespace, *, browser_tls: bool = False) -> Transport:
     """Live by default (refused under test); fixtures can be played back or recorded."""
     if args.play_fixtures is not None:
@@ -192,12 +239,32 @@ def _transport(ctx: Context, args: argparse.Namespace, *, browser_tls: bool = Fa
     return transport
 
 
+def universe(ctx: Context, args: argparse.Namespace) -> int:
+    """The Universe for each month from ``--month`` to ``--to`` under the configured rule."""
+    end = args.month if args.to is None else args.to
+    if end < args.month:
+        raise ValueError(f"month {end:%Y-%m} is before {args.month:%Y-%m}")
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        month = args.month
+        while month <= end:
+            compute_universe(conn, ctx.config.universe, month=month)
+            month = (month.replace(day=28) + timedelta(days=4)).replace(day=1)
+    return 0
+
+
+def _month(text: str) -> date:
+    """A month as YYYY-MM, as its first day."""
+    return datetime.strptime(text, "%Y-%m").date()
+
+
 Command = Callable[[Context, argparse.Namespace], int]
 
 COMMANDS: dict[str, Command] = {
     "migrate": migrate,
     "login": login,
     "ingest": ingest,
+    "universe": universe,
+    "reconcile": reconcile,
 }
 
 
@@ -289,6 +356,45 @@ def build_parser() -> argparse.ArgumentParser:
         "announcements",
         parents=[fixtures, date_range],
         help="NSE and BSE corporate announcements for each day in the range, matched to symbols",
+    )
+    news = sources.add_parser(
+        "news",
+        parents=[fixtures],
+        help="the stories the configured RSS feeds carry now, de-duplicated and matched",
+    )
+    news.add_argument(
+        "--feed",
+        dest="feeds",
+        metavar="NAME",
+        action="append",
+        help="a feed named in [news.feeds] to load; repeatable; defaults to every feed",
+    )
+
+    universe_parser = subparsers.add_parser(
+        "universe",
+        help="compute and record the Universe for months from loaded end-of-day files",
+    )
+    universe_parser.add_argument(
+        "--month", metavar="YYYY-MM", type=_month, required=True, help="the first month"
+    )
+    universe_parser.add_argument(
+        "--to",
+        metavar="YYYY-MM",
+        type=_month,
+        help="the last month; defaults to --month",
+    )
+
+    reconcile_parser = subparsers.add_parser(
+        "reconcile",
+        parents=[date_range],
+        help="compare daily candles with NSE end-of-day files; exit 1 above the threshold",
+    )
+    reconcile_parser.add_argument(
+        "--symbol",
+        dest="symbols",
+        metavar="SYMBOL",
+        action="append",
+        help="an NSE symbol to compare; repeatable; defaults to every symbol with candles",
     )
     return parser
 

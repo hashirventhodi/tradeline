@@ -281,3 +281,120 @@ def announcements(
         {"symbol": symbol, "after": after, "before": before, "as_of": as_of},
     ).fetchall()
     return [Announcement(*row) for row in rows]
+
+
+@dataclass(frozen=True)
+class UniverseMember:
+    month: date
+    rule_version: str
+    rank: int
+    symbol: str
+    series: str
+    traded_value: Decimal
+
+
+@dataclass(frozen=True)
+class UniverseRuleVersion:
+    version: str
+    parameters: dict[str, Any]
+    recorded_at: datetime
+
+
+def universe_membership(
+    conn: psycopg.Connection,
+    month: date,
+    *,
+    as_of: date,
+    rule_version: str | None = None,
+) -> list[UniverseMember]:
+    """The Universe for the month starting ``month`` (a first day), best rank first.
+
+    ``rule_version`` is a Universe Rule's parameter hash
+    (``tradeline.config.UniverseRule.version``); without one, the membership
+    is the one stored under the most recently recorded rule version that has
+    any for the month. A month never computed under the version is empty.
+
+    Point in time. The Universe for a month is computed only from end-of-day
+    rows dated before its first trading day, so it is known from that day on.
+    An ``as_of`` before the month's first calendar day is refused.
+    """
+    if month.day != 1:
+        raise ValueError(f"a Universe month is given by its first day, not {month}")
+    if as_of < month:
+        raise ValueError(
+            f"the Universe for {month:%Y-%m} is not known on {as_of}, before the month starts"
+        )
+    if rule_version is None:
+        latest = conn.execute(
+            "SELECT v.version FROM universe_rule_versions v"
+            " WHERE EXISTS (SELECT 1 FROM universe_membership m"
+            "  WHERE m.month = %s AND m.rule_version = v.version)"
+            " ORDER BY v.recorded_at DESC, v.version LIMIT 1",
+            (month,),
+        ).fetchone()
+        if latest is None:
+            return []
+        rule_version = latest[0]
+    rows = conn.execute(
+        "SELECT month, rule_version, rank, symbol, series, traded_value"
+        " FROM universe_membership WHERE month = %s AND rule_version = %s ORDER BY rank",
+        (month, rule_version),
+    ).fetchall()
+    return [UniverseMember(*row) for row in rows]
+
+
+def universe_rule_versions(conn: psycopg.Connection) -> list[UniverseRuleVersion]:
+    """Every Universe Rule version recorded, oldest first."""
+    rows = conn.execute(
+        "SELECT version, parameters, recorded_at FROM universe_rule_versions"
+        " ORDER BY recorded_at, version"
+    ).fetchall()
+    return [UniverseRuleVersion(*row) for row in rows]
+
+
+@dataclass(frozen=True)
+class NewsItem:
+    feed: str
+    title: str
+    link: str
+    summary: str | None
+    published_at: datetime | None
+    fetched_at: datetime
+    symbols: tuple[str, ...]
+
+
+def news(
+    conn: psycopg.Connection,
+    symbol: str | None,
+    *,
+    start: datetime,
+    end: datetime,
+    as_of: datetime,
+) -> list[NewsItem]:
+    """RSS news items dated from ``start`` to ``end`` inclusive that were knowable at ``as_of``.
+
+    With a symbol, only items matched to it; with ``None``, every item. An
+    item is dated by its feed's publication timestamp, or, when the feed gave
+    none, by when this collector first saw it; it is returned only if that
+    date is on or before ``as_of``, so a decision replayed at ``as_of`` sees
+    no later story. Oldest first. All three times must carry a zone.
+
+    What this does not model: an item backfilled from a feed after the fact
+    is dated by its publication timestamp, not by when it was collected.
+    """
+    for name, value in (("start", start), ("end", end), ("as_of", as_of)):
+        if value.tzinfo is None:
+            raise ValueError(f"{name} {value} has no time zone")
+    rows = conn.execute(
+        "SELECT feed, title, link, summary, published_at, fetched_at, symbols"
+        " FROM news_items"
+        " WHERE coalesce(published_at, fetched_at) BETWEEN %s AND %s"
+        " AND coalesce(published_at, fetched_at) <= %s"
+        " AND (%s::text IS NULL OR %s = ANY(symbols))"
+        " ORDER BY coalesce(published_at, fetched_at), content_hash",
+        (start, end, as_of, symbol, symbol),
+    ).fetchall()
+    return [
+        NewsItem(feed, title, link, summary, published, fetched, tuple(symbols))
+        for feed, title, link, summary, published, fetched, symbols in rows
+    ]

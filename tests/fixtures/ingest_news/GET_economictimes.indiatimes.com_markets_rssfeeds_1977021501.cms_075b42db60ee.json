@@ -1,0 +1,95 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "content-type",
+        "text/xml;charset=UTF-8"
+      ],
+      [
+        "content-length",
+        "11000"
+      ],
+      [
+        "last-modified",
+        "Wed, 21 Oct 2026 08:27:57 GMT"
+      ],
+      [
+        "content-msg",
+        "DATA_SERVED_FROM_CACHE"
+      ],
+      [
+        "etag",
+        "\"0b10bb8dc379aba0a15b59467d56f6899-gzip\""
+      ],
+      [
+        "content-language",
+        "en"
+      ],
+      [
+        "content-encoding",
+        "gzip"
+      ],
+      [
+        "cache-control",
+        "public, must-revalidate, max-age=329"
+      ],
+      [
+        "expires",
+        "Wed, 21 Oct 2026 08:54:05 GMT"
+      ],
+      [
+        "date",
+        "Wed, 21 Oct 2026 08:48:36 GMT"
+      ],
+      [
+        "connection",
+        "keep-alive"
+      ],
+      [
+        "vary",
+        "Accept-Encoding"
+      ],
+      [
+        "alt-svc",
+        "h3=\":443\"; ma=259200"
+      ],
+      [
+        "strict-transport-security",
+        "max-age=63072000 ; includeSubDomains"
+      ],
+      [
+        "content-security-policy",
+        "frame-ancestors 'self' https://*.timesinternet.in/ https://m.economictimes.com/ https://m.timesofiindia.com/ https://timesofindia.indiatimes.com/ https://navbharattimes.indiatimes.com/ http://www.google.com/ https://www.google.com/ https://m-economictimes-com.cdn.ampproject.org/ https://etmarketswebpre.indiatimes.com/ https://etmarketswappre.economictimes.com/ https://studio-dev.sli.ke/ https://studio.sli.ke/ https://buy.indiatimes.com/ https://dev-buy.indiatimes.com/ https://timeshealthplus.com/ https://ai.economictimes.com/ https://etawardsforcorporateexcellence.com/ https://safeframe.googlesyndication.com/ https://centralised-panel.economictimes.com/ https://centralised-panel-stg.economictimes.com/"
+      ],
+      [
+        "x-content-header",
+        "gzip"
+      ],
+      [
+        "permissions-policy",
+        "ch-ua=(self \"https://ase.clmbtech.com\" \"https://ade.clmbtech.com\"), ch-ua-model=(self \"https://ase.clmbtech.com\" \"https://ade.clmbtech.com\"), ch-ua-mobile=(self \"https://ase.clmbtech.com\" \"https://ade.clmbtech.com\"), ch-ua-platform=(self \"https://ase.clmbtech.com\" \"https://ade.clmbtech.com\"), ch-ua-platform-version=(self \"https://ase.clmbtech.com\" \"https://ade.clmbtech.com\")"
+      ],
+      [
+        "accept-ch",
+        "Sec-CH-UA, Sec-CH-UA-Mobile, Sec-CH-UA-Model, Sec-CH-UA-Platform, Sec-CH-UA-Platform-Version"
+      ],
+      [
+        "x-content-header",
+        "gzip"
+      ],
+      [
+        "akamai-grn",
+        "0.1f2a336a.1792572516.f2ae107"
+      ]
+    ],
+    "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><rss xmlns:atom=\"http://www.w3.org/2005/Atom\" version=\"2.0\"><channel><title>Markets-Economic Times</title><link>https://economictimes.indiatimes.com/markets</link><description><![CDATA[Share Market Today | Share Market Live updates: Get all the Latest Share Market News and Updates on The Economic Times. Share Market Live Charts, News, Analysis, IPO News and more.]]> </description><language>en-gb</language><lastBuildDate>Wed, 21 Oct 2026 14:01:50 +0530</lastBuildDate><atom:link type=\"application/rss+xml\" rel=\"self\" href=\"https://economictimes.indiatimes.com/rssfeeds/1977021501.cms\"/><copyright>Copyright:(C) 2026 Bennett Coleman and Co. Ltd, http://info.indiatimes.com/terms/tou.html</copyright><docs>http://syndication.indiatimes.com/</docs><image><title>Economic Times</title><url>https://img.etimg.com/thumb/msid-76939477,width-600,height-60/economictimes.jpg</url><link>https://economictimes.indiatimes.com/markets</link></image><item><title><![CDATA[Jio IPO: Nithin Kamath explains how Jio played an important role in making what Zerodha is today]]> </title><description><![CDATA[Zerodha CEO Nithin Kamath has credited Reliance Jio and Airtel with helping build India’s digital ecosystem and expand capital markets. Reflecting on Jio’s decade-long journey, Kamath said affordable data, along with Aadhaar and UPI, enabled online-first businesses like Zerodha to grow and helped drive a surge in retail investing.]]> </description><link>https://economictimes.indiatimes.com/markets/ipos/fpos/jio-ipo-nithin-kamath-explains-how-jio-played-an-important-role-in-making-what-zerodha-is-today/articleshow/135086123.cms</link><enclosure type=\"image/jpeg\" url=\"https://img.etimg.com/photo/msid-135086123,imgsize-2190131.cms\" length=\"0\"/><guid>https://economictimes.indiatimes.com/markets/ipos/fpos/jio-ipo-nithin-kamath-explains-how-jio-played-an-important-role-in-making-what-zerodha-is-today/articleshow/135086123.cms</guid><pubDate>Wed, 21 Oct 2026 13:35:07 +0530</pubDate></item><item><title><![CDATA[Carlsberg said to near public filing for $700 million India IPO]]> </title><description><![CDATA[Carlsberg is preparing to publicly file for a potential $700 million IPO of its Indian business, with investor roadshows expected next week and a possible December launch. The proposed offering would involve a secondary share sale, as India’s IPO market gains momentum. Carlsberg India holds approximately 22% market share.]]> </description><link>https://economictimes.indiatimes.com/markets/ipos/fpos/carlsberg-said-to-near-public-filing-for-700-million-india-ipo/articleshow/135086210.cms</link><enclosure type=\"image/jpeg\" url=\"https://img.etimg.com/photo/msid-135086210,imgsize-113294.cms\" length=\"0\"/><guid>https://economictimes.indiatimes.com/markets/ipos/fpos/carlsberg-said-to-near-public-filing-for-700-million-india-ipo/articleshow/135086210.cms</guid><pubDate>Wed, 21 Oct 2026 13:32:27 +0530</pubDate></item><item><title><![CDATA[Reliance Industries shares jump 3% as Jio’s Rs 30,213 crore IPO gets fully subscribed on Day 1. What lies ahead?]]> </title><description><![CDATA[Reliance Industries shares rose on Wednesday as Jio Platforms’ Rs 30,213 crore IPO was fully subscribed within an hour of opening. was fully subscribed within an hour of opening. With strong investor demand for the issue, attention is turning to Jio’s valuation, RIL’s diverse business portfolio and the potential value-unlocking opportunities for investors following the much-awaited listing.]]> </description><link>https://economictimes.indiatimes.com/markets/stocks/news/reliance-industries-shares-jump-3-as-jios-rs-30213-crore-ipo-gets-fully-subscribed-on-day-1-what-lies-ahead/articleshow/135085466.cms</link><enclosure type=\"image/jpeg\" url=\"https://img.etimg.com/photo/msid-135085466,imgsize-2114035.cms\" length=\"0\"/><guid>https://economictimes.indiatimes.com/markets/stocks/news/reliance-industries-shares-jump-3-as-jios-rs-30213-crore-ipo-gets-fully-subscribed-on-day-1-what-lies-ahead/articleshow/135085466.cms</guid><pubDate>Wed, 21 Oct 2026 12:58:48 +0530</pubDate></item><item><title><![CDATA[Missed reversal in IT stocks? Jefferies gives 3 ideas with up to 50% re-rating potential]]> </title><description><![CDATA[Jefferies sees further valuation upside in Indian IT stocks despite a muted sector growth outlook. Infosys and TCS offer over 20% rerating potential, while Sagility could deliver more than 50% in a best-case scenario. The brokerage raised target prices for Infosys and TCS, citing scope for growth expectations to stabilise.]]> </description><link>https://economictimes.indiatimes.com/markets/stocks/news/missed-reversal-in-it-stocks-jefferies-gives-3-ideas-with-up-to-50-re-rating-potential/articleshow/135083074.cms</link><enclosure type=\"image/jpeg\" url=\"https://img.etimg.com/photo/msid-135083074,imgsize-2051594.cms\" length=\"0\"/><guid>https://economictimes.indiatimes.com/markets/stocks/news/missed-reversal-in-it-stocks-jefferies-gives-3-ideas-with-up-to-50-re-rating-potential/articleshow/135083074.cms</guid><pubDate>Wed, 21 Oct 2026 11:00:02 +0530</pubDate></item><item><title><![CDATA[Bajaj Finance shares fall 3% after Q2 results. What Jefferies, Nomura, other brokerages now expect?]]> </title><description><![CDATA[Bajaj Finance shares dropped on Wednesday after the NBFC reported a 29% year-on-year rise in Q2FY27 net profit to Rs 6,367 crore. Nomura and Jefferies retained Buy ratings, with Jefferies cutting its target price, while 360 One WAM upgraded the stock to Buy, citing improving risk-reward and strong growth.]]> </description><link>https://economictimes.indiatimes.com/markets/stocks/news/bajaj-finance-shares-fall-3-after-q2-results-what-jefferies-nomura-other-brokerages-now-expect/articleshow/135082829.cms</link><enclosure type=\"image/jpeg\" url=\"https://img.etimg.com/photo/msid-135082829,imgsize-1934502.cms\" length=\"0\"/><guid>https://economictimes.indiatimes.com/markets/stocks/news/bajaj-finance-shares-fall-3-after-q2-results-what-jefferies-nomura-other-brokerages-now-expect/articleshow/135082829.cms</guid><pubDate>Wed, 21 Oct 2026 10:47:04 +0530</pubDate></item></channel></rss>",
+    "body_encoding": "utf-8"
+  }
+}

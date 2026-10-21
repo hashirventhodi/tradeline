@@ -83,6 +83,16 @@ def test_the_application_role_cannot_update_or_delete_daily_candles(database_url
         conn.rollback()
 
 
+def test_the_application_role_cannot_update_or_delete_news_items(database_url: str) -> None:
+    with app_connection(database_url) as conn:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("UPDATE news_items SET symbols = '{}'")
+        conn.rollback()
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("DELETE FROM news_items")
+        conn.rollback()
+
+
 def test_the_application_role_cannot_update_or_delete_corporate_actions(
     database_url: str,
 ) -> None:
@@ -133,3 +143,17 @@ def test_the_application_role_cannot_update_or_delete_announcements(
                 " VALUES ('mcx', 'ROLE', '2024-07-23 18:00+05:30', 'ROLE', 'Updates')"
             )
         conn.rollback()
+
+
+def test_the_application_role_cannot_update_or_delete_universe_tables(database_url: str) -> None:
+    statements = (
+        "UPDATE universe_rule_versions SET recorded_at = now()",
+        "DELETE FROM universe_rule_versions",
+        "UPDATE universe_membership SET rank = rank + 1",
+        "DELETE FROM universe_membership",
+    )
+    with app_connection(database_url) as conn:
+        for statement in statements:
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                conn.execute(statement)
+            conn.rollback()

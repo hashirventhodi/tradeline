@@ -79,8 +79,24 @@ def database_url(request: pytest.FixtureRequest, migrated_template: str) -> Iter
 
 
 @pytest.fixture
+def fresh_database_url(request: pytest.FixtureRequest, migrated_template: str) -> Iterator[str]:
+    """A migrated, otherwise empty database for this test alone, when tests load different data."""
+    name = _database_name(f"fresh_{request.node.name}")
+    yield _create_database(name, template=migrated_template)
+    _drop_database(name)
+
+
+@pytest.fixture
 def empty_database_url(request: pytest.FixtureRequest) -> Iterator[str]:
     """A database with no schema at all, for tests of ``migrate`` itself. Per test."""
     name = _database_name(f"empty_{request.node.name}")
     yield _create_database(name)
+    _drop_database(name)
+
+
+@pytest.fixture
+def another_database_url(request: pytest.FixtureRequest, migrated_template: str) -> Iterator[str]:
+    """A second migrated, empty database, per test, for comparing independent runs."""
+    name = _database_name(f"another_{request.node.name}")
+    yield _create_database(name, template=migrated_template)
     _drop_database(name)

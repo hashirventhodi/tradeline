@@ -3,3 +3,28 @@
 
 [logging]
 level = "INFO"
+
+# The Universe Rule (ADR 0005). Every key is part of the rule version recorded
+# with each membership table, so changing one starts a new version.
+[universe]
+top_n = 200
+lookback_trading_days = 126     # the trailing window before the month's first trading day
+min_listing_trading_days = 126  # trading days since listing
+min_presence_percent = 90       # rows required on this share of the window's days
+series = "EQ"                   # excludes SME (SM, ST) and trade-for-trade (BE, BZ)
+excluded_isin_prefix = "INF"    # ETFs and other fund units trade in EQ with INF ISINs
+
+[reconcile]
+# A close mismatch: further than this fraction of the price (plus half a
+# 5 paisa tick) from the end-of-day close, after Kite's own adjustment.
+close_tolerance = 0.001
+# The command fails above this percentage of discrepant rows.
+max_discrepancy_pct = 0.1
+
+# RSS feeds for `ingest news`: a name for each feed and its URL. Items carried
+# by more than one feed are stored once, under the first feed listed.
+[news.feeds]
+et_markets = "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms"
+et_stocks = "https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms"
+livemint_markets = "https://www.livemint.com/rss/markets"
+moneycontrol_latest = "https://www.moneycontrol.com/rss/latestnews.xml"
