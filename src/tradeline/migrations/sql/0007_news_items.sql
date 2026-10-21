@@ -5,7 +5,7 @@
 -- ``published_at`` is the feed's pubDate (NULL when the feed gave none or an
 -- unreadable one); ``fetched_at`` is when this collector first saw the story.
 -- ``symbols`` are the NSE symbols matched deterministically when the row was
--- written (tradeline.matching); empty means unmatched. Append-only: the
+-- written (tradeline.text_matching); empty means unmatched. Append-only: the
 -- application role cannot update or delete a row.
 CREATE TABLE news_items (
     content_hash text PRIMARY KEY,

@@ -1,23 +1,23 @@
-"""The deterministic symbol matcher shared by announcements and news.
+"""Finding exact symbol and company-name mentions in free text (news items).
 
 The listings are a small hand-made instrument master; real feed text is
 exercised in ``test_ingest_news``.
 """
 
-from tradeline.matching import Listing, SymbolMatcher
+from tradeline.text_matching import TextMatcher
 
-MATCHER = SymbolMatcher(
+MATCHER = TextMatcher(
     [
-        Listing("TCS", "Tata Consultancy Services Limited"),
-        Listing("BAJAJ-AUTO", "Bajaj Auto Limited"),
-        Listing("M&M", "Mahindra & Mahindra Limited"),
-        Listing("RELIANCE", "Reliance Industries Limited"),
-        Listing("RELIANCE", "Reliance Industries Limited"),  # a second series row
-        Listing("TMPV", "Tata Motors Passenger Vehicles Limited"),
-        Listing("TATAMOTORS", "Tata Motors Ltd."),
-        Listing("ABC", "Twin Holdings Limited"),
-        Listing("XYZ", "Twin Holdings Ltd"),
-        Listing("NONAME", None),
+        ("TCS", "Tata Consultancy Services Limited"),
+        ("BAJAJ-AUTO", "Bajaj Auto Limited"),
+        ("M&M", "Mahindra & Mahindra Limited"),
+        ("RELIANCE", "Reliance Industries Limited"),
+        ("RELIANCE", "Reliance Industries Limited"),  # a second series row
+        ("TMPV", "Tata Motors Passenger Vehicles Limited"),
+        ("TATAMOTORS", "Tata Motors Ltd."),
+        ("ABC", "Twin Holdings Limited"),
+        ("XYZ", "Twin Holdings Ltd"),
+        ("NONAME", None),
     ]
 )
 
@@ -42,6 +42,10 @@ def test_a_vague_or_partial_name_does_not_match() -> None:
 
 def test_a_name_shared_by_two_symbols_is_ambiguous_and_matches_neither() -> None:
     assert MATCHER.match("Twin Holdings announces a dividend") == ()
+
+
+def test_and_and_ampersand_are_one_spelling() -> None:
+    assert MATCHER.match("Mahindra and Mahindra sales") == ("M&M",)
 
 
 def test_a_name_inside_a_longer_matched_name_does_not_count() -> None:

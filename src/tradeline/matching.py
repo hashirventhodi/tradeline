@@ -1,89 +1,69 @@
-"""Deterministic symbol matching for announcements and news.
+"""Deterministic symbol matching against the instrument master.
 
-A text is matched to an NSE symbol only on an exact mention:
+An exchange filing or a news item names a company by an exchange symbol, a
+company name, or both. It is matched to an NSE symbol only when that is
+certain:
 
-- the symbol itself, as a whole token, case-sensitively as NSE writes it
-  (``TCS``, ``BAJAJ-AUTO``, ``M&M``); a token boundary is any character other
-  than a letter, a digit, ``&`` or ``-``;
-- the company name from the instrument master, as a whole phrase,
-  case-insensitively, after both are normalised (NFKC, lower case, every run
-  of characters other than letters, digits and ``&`` collapsed to a space) and
-  a trailing ``Limited`` or ``Ltd`` dropped from the name. "Reliance
-  Industries" matches Reliance Industries Limited; "Reliance" alone does not.
+1. a symbol that is exactly a symbol in the master matches it;
+2. otherwise a company name whose normalised form is exactly the normalised
+   name of one symbol in the master matches that symbol;
+3. anything else, including a name shared by two or more symbols (as Jain
+   Irrigation's ordinary and DVR shares are), is unmatched.
 
-A symbol or normalised name that belongs to more than one distinct symbol is
-ambiguous and never matches. Names are found left to right, the longest name
-first at each position, without overlap, so a short name inside a longer
-matched one does not count. Anything else is left unmatched: no fuzzy
-matching and no model calls.
+Normalising a name removes only differences of spelling, never of identity:
+case, punctuation, ``&`` against ``and``, runs of spaces, and a trailing
+``Ltd`` against ``Limited`` ("INFOSYS LTD." is "Infosys Limited"). There is no
+fuzzy or partial matching and no model call (Phase 1 spec).
+
+The master is read once into a ``SymbolMatcher``; matching is then pure, so a
+run matches every item against the same master.
 """
 
 from __future__ import annotations
 
 import re
-import unicodedata
 from collections import defaultdict
 from collections.abc import Iterable
-from dataclasses import dataclass
 
 import psycopg
 
 from tradeline import queries
 
-_SYMBOL_TOKEN = re.compile(r"[A-Za-z0-9&-]+")
-_NOT_NAME_CHAR = re.compile(r"[^a-z0-9&]+")
-_LEGAL_SUFFIXES = ("limited", "ltd")
-_MIN_NAME_LENGTH = 2
+_NOT_WORD = re.compile(r"[^0-9a-z]+")
+_LTD = re.compile(r"\bltd$")
 
 
-@dataclass(frozen=True)
-class Listing:
-    symbol: str
-    name: str | None
+def name_key(name: str) -> str:
+    """The form of a company name that two spellings of one name share."""
+    text = name.casefold().replace("&", " and ")
+    text = " ".join(_NOT_WORD.sub(" ", text).split())
+    return _LTD.sub("limited", text)
 
 
 class SymbolMatcher:
-    def __init__(self, listings: Iterable[Listing]) -> None:
-        owners: dict[str, set[str]] = defaultdict(set)
-        symbols: set[str] = set()
-        for listing in listings:
-            symbols.add(listing.symbol)
-            if listing.name is not None:
-                name = _normalise_name(listing.name)
-                if len(name) >= _MIN_NAME_LENGTH:
-                    owners[name].add(listing.symbol)
-        self._symbols = frozenset(symbols)
-        self._names = {name: next(iter(s)) for name, s in owners.items() if len(s) == 1}
-        alternatives = sorted(self._names, key=lambda n: (-len(n), n))
-        self._name_pattern = (
-            re.compile(
-                r"(?<![a-z0-9&])(?:" + "|".join(map(re.escape, alternatives)) + r")(?![a-z0-9&])"
-            )
-            if alternatives
-            else None
-        )
+    """Matches a filing's symbol or company name to one NSE symbol, or to none."""
 
-    def match(self, text: str) -> tuple[str, ...]:
-        """The symbols ``text`` mentions exactly, sorted; empty when it names none."""
-        text = unicodedata.normalize("NFKC", text)
-        found = {token for token in _SYMBOL_TOKEN.findall(text) if token in self._symbols}
-        if self._name_pattern is not None:
-            normalised = _normalise_text(text)
-            found.update(self._names[m.group(0)] for m in self._name_pattern.finditer(normalised))
-        return tuple(sorted(found))
+    def __init__(self, listings: Iterable[tuple[str, str | None]]) -> None:
+        """``listings`` is (symbol, company name) pairs; a symbol may repeat (one per series)."""
+        self._symbols: set[str] = set()
+        by_name: defaultdict[str, set[str]] = defaultdict(set)
+        for symbol, name in listings:
+            self._symbols.add(symbol)
+            if name:
+                by_name[name_key(name)].add(symbol)
+        self._by_name = dict(by_name)
 
+    @classmethod
+    def load(cls, conn: psycopg.Connection) -> SymbolMatcher:
+        """A matcher over the instrument master as it stands now."""
+        return cls((s.symbol, s.name) for s in queries.symbols(conn))
 
-def matcher_from_master(conn: psycopg.Connection) -> SymbolMatcher:
-    """A matcher over the instrument master, one listing per (symbol, series) row."""
-    return SymbolMatcher(Listing(row.symbol, row.name) for row in queries.symbols(conn))
-
-
-def _normalise_text(text: str) -> str:
-    return _NOT_NAME_CHAR.sub(" ", unicodedata.normalize("NFKC", text).lower()).strip()
-
-
-def _normalise_name(name: str) -> str:
-    words = _normalise_text(name).split()
-    if words and words[-1] in _LEGAL_SUFFIXES:
-        words.pop()
-    return " ".join(words)
+    def match(self, *, symbol: str | None = None, name: str | None = None) -> str | None:
+        """The one NSE symbol meant, or None when there is none or more than one."""
+        if symbol is not None and symbol.strip() in self._symbols:
+            return symbol.strip()
+        if name is not None:
+            candidates = self._by_name.get(name_key(name), set())
+            if len(candidates) == 1:
+                return next(iter(candidates))
+        return None

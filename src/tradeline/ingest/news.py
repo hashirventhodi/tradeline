@@ -29,8 +29,8 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import psycopg
 
 from tradeline.ingest import IngestRunCounters, record_ingest_run
-from tradeline.matching import SymbolMatcher, matcher_from_master
 from tradeline.sources import rss
+from tradeline.text_matching import TextMatcher
 from tradeline.transport import Transport
 
 log = logging.getLogger(__name__)
@@ -85,7 +85,7 @@ def _load(
     failed: list[str] = []
     run.details = {"feeds": per_feed, "failed_feeds": failed}
     fetched_at = datetime.now(UTC)
-    matcher = matcher_from_master(conn)
+    matcher = TextMatcher.load(conn)
     for feed in feeds:
         try:
             items = rss.fetch_feed(transport, feed.url)
@@ -106,7 +106,7 @@ def _load(
         )
 
 
-def _row(feed: Feed, item: rss.FeedItem, matcher: SymbolMatcher) -> _Row:
+def _row(feed: Feed, item: rss.FeedItem, matcher: TextMatcher) -> _Row:
     text = item.title if item.summary is None else f"{item.title}\n{item.summary}"
     return _Row(content_hash(item.title, item.link), feed.name, item, matcher.match(text))
 
