@@ -161,10 +161,12 @@ def _volume(volume: int, factor: Fraction) -> int:
 # "Bonus 1:1", "Bonus- 1:2", "Bonus 1: 25". Not "Bonus Ncrps 1:1" nor "Bonus - 1 Debenture".
 _BONUS = re.compile(r"\bbonus\s*-?\s*(\d+)\s*:\s*(\d+)", re.IGNORECASE)
 # "Face Value Split (Sub-Division) - From Rs 10/- Per Share To Re 1/- Per Share",
-# "Face Value Split From Rs 2 To Re 1", "Consolidation Of Equity Shares From Re 1 ... To Rs 10".
+# "Face Value Split From Rs 2 To Re 1", "Consolidation Of Equity Shares From Re 1 ... To Rs 10",
+# and, for a face value split only, "Face Value Split Rs 10 To Rs 1" without the "From".
 _SPLIT = re.compile(
-    r"(?:face\s*value\s*split|sub-?division|consolidation)[^0-9]*?"
-    r"\bfrom\s*r[se]\.?\s*(\d+(?:\.\d+)?)[^0-9]*?\bto\s*r[se]\.?\s*(\d+(?:\.\d+)?)",
+    r"(?:(?:face\s*value\s*split|sub-?division|consolidation)[^0-9]*?\bfrom"
+    r"|face\s*value\s*split)"
+    r"\s*r[se]\.?\s*(\d+(?:\.\d+)?)[^0-9]*?\bto\s*r[se]\.?\s*(\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
 _RIGHTS = re.compile(r"\brights?\b", re.IGNORECASE)

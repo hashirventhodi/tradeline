@@ -17,6 +17,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from tradeline.collect import collect_daily as collect_daily_service
+from tradeline.compare_adjusted import compare_adjusted as compare_adjusted_service
 from tradeline.config import Config, default_config_path, load_config
 from tradeline.dates import IST, month_end, month_of, next_month, parse_month
 from tradeline.db import app_connection, connect
@@ -219,6 +220,27 @@ def reconcile(ctx: Context, args: argparse.Namespace) -> int:
     return 0 if report.passed else 1
 
 
+def compare_adjusted(ctx: Context, args: argparse.Namespace) -> int:
+    """Our adjusted series against Kite's stored candles; exit 1 unless every bar is equal.
+
+    The table goes to stderr; the summary is the last JSON line on stdout.
+    """
+    as_of = datetime.now(IST).date() if args.as_of is None else args.as_of
+    end = as_of if args.end is None else args.end
+    with _scope(args.start, end, args.symbols):
+        with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+            report = compare_adjusted_service(
+                conn, symbols=args.symbols, start=args.start, end=end, as_of=as_of
+            )
+        sys.stderr.write(report.text())
+        log.log(
+            logging.INFO if report.passed else logging.ERROR,
+            "compare-adjusted finished",
+            extra={"report": report.summary()},
+        )
+    return 0 if report.passed else 1
+
+
 @contextmanager
 def _scope(start: date, end: date, symbols: Sequence[str] | None = None) -> Iterator[None]:
     """Every line the command logs inside carries its range, and its symbols when named.
@@ -329,6 +351,7 @@ COMMANDS: dict[str, Command] = {
     "ingest": ingest,
     "universe": universe,
     "reconcile": reconcile,
+    "compare-adjusted": compare_adjusted,
     "sectors": sectors,
     "verify-universe": verify_universe,
     "collect-daily": collect_daily,
@@ -488,6 +511,31 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="SYMBOL",
         action="append",
         help="an NSE symbol to compare; repeatable; defaults to every symbol with candles",
+    )
+    compare_parser = subparsers.add_parser(
+        "compare-adjusted",
+        help="compare our adjusted series with Kite's stored candles bar by bar;"
+        " exit 1 unless every bar is equal",
+    )
+    compare_parser.add_argument(
+        "--from", dest="start", metavar="DATE", type=date.fromisoformat, required=True
+    )
+    compare_parser.add_argument(
+        "--to", dest="end", metavar="DATE", type=date.fromisoformat, help="defaults to --as-of"
+    )
+    compare_parser.add_argument(
+        "--as-of",
+        metavar="DATE",
+        type=date.fromisoformat,
+        help="the adjustment date, normally the day the candles were fetched; defaults to today",
+    )
+    compare_parser.add_argument(
+        "--symbol",
+        dest="symbols",
+        metavar="SYMBOL",
+        action="append",
+        required=True,
+        help="an NSE symbol to compare; repeatable",
     )
     collect_parser = subparsers.add_parser(
         "collect-daily",
