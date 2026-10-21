@@ -48,7 +48,9 @@ def _drop_database(name: str) -> None:
 
 
 def _database_name(label: str) -> str:
-    return f"tradeline_test_{label}_{secrets.token_hex(4)}"[:63].lower()
+    # The random part comes first so truncating a long label to Postgres's 63
+    # characters cannot drop it and make concurrent runs collide.
+    return f"tradeline_test_{secrets.token_hex(4)}_{label}"[:63].lower()
 
 
 @pytest.fixture(autouse=True)

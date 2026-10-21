@@ -332,3 +332,57 @@ def test_universe_reports_a_month_it_cannot_compute_as_a_json_error(
     failure = json_lines(capsys.readouterr().out)[-1]
     assert failure["level"] == "ERROR"
     assert "trading days of end-of-day files" in str(failure["msg"])
+
+
+SECTOR_FIXTURES = REPO_ROOT / "tests" / "fixtures" / "sectors"
+
+
+def test_sectors_then_verify_universe_print_the_report_and_log_its_summary(
+    database_url: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = tmp_path / "tradeline.toml"
+    config.write_text(
+        "[universe]\ntop_n = 6\nlookback_trading_days = 20\nmin_listing_trading_days = 21\n"
+    )
+    monkeypatch.setenv("TRADELINE_CONFIG", str(config))
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    eod = ["--from", "2024-07-01", "--to", "2024-07-31", "--play-fixtures", str(UNIVERSE_FIXTURES)]
+    assert main(["ingest", "eod", *eod]) == 0
+    assert main(["universe", "--month", "2024-08"]) == 0
+    capsys.readouterr()
+
+    assert main(["sectors", "--play-fixtures", str(SECTOR_FIXTURES)]) == 0
+    loaded = json_lines(capsys.readouterr().out)
+    code = main(["verify-universe", "--month", "2024-08", "--play-fixtures", str(SECTOR_FIXTURES)])
+    captured = capsys.readouterr()
+
+    assert all(line["command"] == "sectors" for line in loaded)
+    assert loaded[-1]["msg"] == "sectors finished"
+    assert loaded[-1]["effective_date"] == datetime.now(IST).date().isoformat()
+    assert (loaded[-1]["rows_seen"], loaded[-1]["rows_written"]) == (7, 7)
+    assert code == 0
+    assert "Overlap: 4 of 5 NIFTY 200 constituents (80.00%)\n" in captured.err
+    assert "In NIFTY 200, not in the Universe: 1\n" in captured.err
+    assert captured.err.endswith("Universe members without a sector: 0\n")
+    summary = json_lines(captured.out)[-1]
+    assert summary["msg"] == "verify-universe finished"
+    assert summary["report"]["universe_only"] == ["ABDL"]  # type: ignore[index]
+    assert summary["report"]["index_only"] == ["HDFCBANK"]  # type: ignore[index]
+
+
+def test_verify_universe_for_a_month_not_computed_fails_with_a_json_error(
+    database_url: str,
+    repo_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", database_url)
+
+    code = main(["verify-universe", "--month", "2010-01", "--play-fixtures", str(SECTOR_FIXTURES)])
+
+    assert code == 1
+    failure = json_lines(capsys.readouterr().out)[-1]
+    assert "tradeline universe --month 2010-01" in str(failure["msg"])

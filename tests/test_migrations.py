@@ -124,3 +124,11 @@ def test_the_application_role_cannot_update_or_delete_universe_tables(database_u
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 conn.execute(statement)
             conn.rollback()
+
+
+def test_the_application_role_cannot_update_or_delete_sectors(database_url: str) -> None:
+    with app_connection(database_url) as conn:
+        for statement in ("UPDATE sectors SET sector = 'Other'", "DELETE FROM sectors"):
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                conn.execute(statement)
+            conn.rollback()

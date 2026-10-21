@@ -76,23 +76,19 @@ def compute_universe(
 ) -> UniverseResult:
     if month.day != 1:
         raise ValueError(f"a Universe month is given by its first day, not {month}")
-    window = _window(conn, rule, month)
-    window_start, window_end = window[0], window[-1]
-    candidates = _candidates(conn, rule, month, window_start)
-    eligible = sorted(
-        (c for c in candidates if _eligible(rule, c)),
-        key=lambda c: (-c.traded_value, c.symbol),
-    )[: rule.top_n]
+    window_start, window_end, ranked = _rank(conn, rule, month)
+    eligible = [s for s in ranked if s.rank is not None]
     members = tuple(
         queries.UniverseMember(
             month=month,
             rule_version=rule.version,
-            rank=rank,
-            symbol=c.symbol,
+            rank=s.rank,
+            symbol=s.symbol,
             series=rule.series,
-            traded_value=c.traded_value,
+            traded_value=s.traded_value,
         )
-        for rank, c in enumerate(eligible, start=1)
+        for s in eligible
+        if s.rank is not None and s.rank <= rule.top_n
     )
     _record_rule_version(conn, rule)
     stored = queries.universe_membership(conn, month, rule_version=rule.version, as_of=month)
@@ -127,6 +123,50 @@ def compute_universe(
         rows_written=rows_written,
         anomaly=anomaly,
     )
+
+
+@dataclass(frozen=True)
+class Standing:
+    """Where the rule places one symbol with a row in its series in the window."""
+
+    symbol: str
+    # The rank among every eligible symbol, beyond ``top_n`` too; None if not eligible.
+    rank: int | None
+    # Traded value in the rule's series over the window.
+    traded_value: Decimal
+    # Why the symbol is not eligible; None if it is.
+    excluded: str | None
+
+
+def standings(conn: psycopg.Connection, rule: UniverseRule, *, month: date) -> list[Standing]:
+    """Every symbol with a row in the rule's series in the month's window, ranked as the rule does.
+
+    Eligible symbols come first, best rank first, then the ineligible ones by
+    symbol. The Universe is the eligible symbols ranked ``top_n`` or better.
+    """
+    if month.day != 1:
+        raise ValueError(f"a Universe month is given by its first day, not {month}")
+    return _rank(conn, rule, month)[2]
+
+
+def _rank(
+    conn: psycopg.Connection, rule: UniverseRule, month: date
+) -> tuple[date, date, list[Standing]]:
+    window = _window(conn, rule, month)
+    candidates = _candidates(conn, rule, month, window[0])
+    excluded = {c.symbol: _excluded(rule, c) for c in candidates}
+    eligible = sorted(
+        (c for c in candidates if excluded[c.symbol] is None),
+        key=lambda c: (-c.traded_value, c.symbol),
+    )
+    ranked = [
+        Standing(c.symbol, rank, c.traded_value, None) for rank, c in enumerate(eligible, start=1)
+    ] + [
+        Standing(c.symbol, None, c.traded_value, excluded[c.symbol])
+        for c in candidates
+        if excluded[c.symbol] is not None
+    ]
+    return window[0], window[-1], ranked
 
 
 def _window(conn: psycopg.Connection, rule: UniverseRule, month: date) -> list[date]:
@@ -184,13 +224,23 @@ def _candidates(
     return [_Candidate(*row) for row in rows]
 
 
-def _eligible(rule: UniverseRule, candidate: _Candidate) -> bool:
-    return (
-        candidate.latest_series == rule.series
-        and not (candidate.isin or "").startswith(rule.excluded_isin_prefix)
-        and candidate.listing_trading_days >= rule.min_listing_trading_days
-        and candidate.days * 100 >= rule.min_presence_percent * rule.lookback_trading_days
-    )
+def _excluded(rule: UniverseRule, candidate: _Candidate) -> str | None:
+    """Why ``candidate`` is not eligible under ``rule``, or None if it is."""
+    if candidate.latest_series != rule.series:
+        return f"last traded in series {candidate.latest_series} in the window"
+    if (candidate.isin or "").startswith(rule.excluded_isin_prefix):
+        return f"ISIN {candidate.isin} is a fund unit (ETF)"
+    if candidate.listing_trading_days < rule.min_listing_trading_days:
+        return (
+            f"listed {candidate.listing_trading_days} trading days,"
+            f" fewer than {rule.min_listing_trading_days}"
+        )
+    if candidate.days * 100 < rule.min_presence_percent * rule.lookback_trading_days:
+        return (
+            f"rows on {candidate.days} of {rule.lookback_trading_days} window days,"
+            f" under {rule.min_presence_percent}%"
+        )
+    return None
 
 
 def _record_rule_version(conn: psycopg.Connection, rule: UniverseRule) -> None:

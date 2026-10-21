@@ -1,10 +1,13 @@
-"""NSE: end-of-day files, the equity master, and corporate actions.
+"""NSE: end-of-day files, the equity master, index constituents, and corporate actions.
 
 NSE's site refuses requests that do not look like a browser and rate-limits
 aggressively. ``NseSession`` owns that: it sends browser headers on every
 request, keeps the session cookies the site sets, warms the session up before
 calling the JSON API on ``www.nseindia.com``, and backs off on throttling.
 Adapters call ``session.get`` and never touch headers themselves.
+
+Index constituent lists are CSV files on the archives host, one row per
+constituent with NSE's sector in a column headed ``Industry``.
 
 Corporate actions come from the site's JSON API, filtered by ex-date range and
 optionally by symbol. Each record is a free-text ``subject`` ("Bonus 1:1",
@@ -251,6 +254,59 @@ def parse_equity_master(body: bytes) -> list[ListedSymbol]:
                 name=record["NAME OF COMPANY"],
                 isin=record["ISIN NUMBER"],
                 listing_date=_nse_date(record["DATE OF LISTING"]),
+            )
+        )
+    return rows
+
+
+# --- Index constituents -----------------------------------------------------
+
+# The NIFTY Total Market list (about 750 symbols: the NIFTY 500 and the
+# Microcap 250) is the widest list NSE publishes with a sector per symbol.
+TOTAL_MARKET_LIST = "ind_niftytotalmarket_list"
+NIFTY_200_LIST = "ind_nifty200list"
+
+
+@dataclass(frozen=True)
+class IndexConstituent:
+    symbol: str
+    series: str
+    name: str
+    isin: str
+    # NSE's sector classification; the file heads this column "Industry".
+    sector: str
+
+
+def index_constituents_url(index_list: str) -> str:
+    return f"{ARCHIVES_HOST}/content/indices/{index_list}.csv"
+
+
+def fetch_index_constituents(session: NseSession, index_list: str) -> list[IndexConstituent]:
+    url = index_constituents_url(index_list)
+    response = session.get(url)
+    if response.status != 200:
+        raise NseError(f"HTTP {response.status} fetching {url}")
+    return parse_index_constituents(response.body)
+
+
+def parse_index_constituents(body: bytes) -> list[IndexConstituent]:
+    reader = csv.DictReader(io.StringIO(body.decode("utf-8-sig")))
+    header = [name.strip() for name in reader.fieldnames or ()]
+    expected = {"Company Name", "Industry", "Symbol", "Series", "ISIN Code"}
+    if not expected <= set(header):
+        raise NseError(f"unrecognised index constituent list: header {header}")
+    rows: list[IndexConstituent] = []
+    for raw in reader:
+        record = {(k or "").strip(): (v or "").strip() for k, v in raw.items()}
+        if not record["Symbol"]:
+            continue
+        rows.append(
+            IndexConstituent(
+                symbol=record["Symbol"],
+                series=record["Series"],
+                name=record["Company Name"],
+                isin=record["ISIN Code"],
+                sector=record["Industry"],
             )
         )
     return rows
