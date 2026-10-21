@@ -162,16 +162,17 @@ def _volume(volume: int, factor: Fraction) -> int:
 _BONUS = re.compile(r"\bbonus\s*-?\s*(\d+)\s*:\s*(\d+)", re.IGNORECASE)
 # "Face Value Split (Sub-Division) - From Rs 10/- Per Share To Re 1/- Per Share",
 # "Face Value Split From Rs 2 To Re 1", "Consolidation Of Equity Shares From Re 1 ... To Rs 10",
-# and, for a face value split only, "Face Value Split Rs 10 To Rs 1" without the "From".
+# and, for a face value split only, "Face Value Split Rs 10 To Rs 1" without the "From"
+# and the 2016 to 2018 short form "Fv Splt Frm Rs 10 To Re 1".
 _SPLIT = re.compile(
     r"(?:(?:face\s*value\s*split|sub-?division|consolidation)[^0-9]*?\bfrom"
-    r"|face\s*value\s*split)"
+    r"|face\s*value\s*split|\bfv\s*splt\s*frm)"
     r"\s*r[se]\.?\s*(\d+(?:\.\d+)?)[^0-9]*?\bto\s*r[se]\.?\s*(\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
 _RIGHTS = re.compile(r"\brights?\b", re.IGNORECASE)
 _DIVIDEND = re.compile(r"\bdiv(?:idend)?\b|\bdistribution\b", re.IGNORECASE)
-_ADJUSTING_WORDS = re.compile(r"bonus|split|sub-?division|consolidation", re.IGNORECASE)
+_ADJUSTING_WORDS = re.compile(r"bonus|spli?t|sub-?division|consolidation", re.IGNORECASE)
 # A bonus of debentures or preference shares, or a split of something else, is not an equity action.
 _NOT_EQUITY = re.compile(r"ncrps|debenture|preference|warrant", re.IGNORECASE)
 

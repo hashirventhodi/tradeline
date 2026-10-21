@@ -259,6 +259,9 @@ def test_an_adjusting_action_without_a_factor_is_refused() -> None:
         ("Face Value Split From Rs 2 To Re 1", "split", Fraction(1, 2)),
         # GRANULES, ex 2015-03-23: NSE's subject has no "From".
         ("Face Value Split Rs 10 To Rs 1", "split", Fraction(1, 10)),
+        # JSWSTEEL, ex 2017-01-04, and KARURVYSYA, ex 2016-11-17: NSE's 2016 to 2018 short form.
+        ("Fv Splt Frm Rs 10 To Re 1", "split", Fraction(1, 10)),
+        ("Fv Splt Frm Rs 10 To Rs 2", "split", Fraction(1, 5)),
         (
             "Interim Div - Rs 2/- Per Share + Face Value Split (Sub-Division)"
             " - From Rs 10/- Per Share To Re 1/- Per Share",

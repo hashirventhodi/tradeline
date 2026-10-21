@@ -189,3 +189,31 @@ def test_the_application_role_cannot_update_or_delete_symbol_changes(database_ur
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 conn.execute(statement)
             conn.rollback()
+
+
+def test_a_short_form_split_stored_before_the_parser_read_it_is_rederived_by_its_migration(
+    empty_database_url: str,
+) -> None:
+    with connect(empty_database_url) as conn:
+        apply_migrations(conn)
+        # As the #13 database held it: JSWSTEEL's split stored as "other", before 0019.
+        conn.execute("DELETE FROM schema_migrations WHERE version = '0019_fv_splt_subjects'")
+        conn.execute(
+            "INSERT INTO corporate_actions (symbol, series, ex_date, subject, kind)"
+            " VALUES ('JSWSTEEL', 'EQ', '2017-01-04', 'Fv Splt Frm Rs 10 To Re 1', 'other'),"
+            " ('KARURVYSYA', 'EQ', '2016-11-17', 'Fv Splt Frm Rs 10 To Rs 2', 'other'),"
+            " ('ROLE', 'EQ', '2017-01-04', 'Buy Back', 'other')"
+        )
+        conn.commit()
+
+        assert apply_migrations(conn) == ["0019_fv_splt_subjects"]
+        rows = conn.execute(
+            "SELECT symbol, kind, factor_numerator, factor_denominator FROM corporate_actions"
+            " ORDER BY symbol"
+        ).fetchall()
+
+    assert rows == [
+        ("JSWSTEEL", "split", 1, 10),
+        ("KARURVYSYA", "split", 1, 5),
+        ("ROLE", "other", None, None),
+    ]
