@@ -304,3 +304,114 @@ def test_a_listing_date_another_instrument_of_the_symbol_already_keys_is_not_use
         ("ALANKIT@2015-06-30", "first_row"),
         ("ALANKIT@2016-12-16", "first_row"),
     ]
+
+
+def test_a_rename_record_whose_old_symbol_keeps_trading_is_refused_as_a_conflict() -> None:
+    # As if NSE's record were right about ETERNAL but ZOMATO went on trading:
+    # joining them would give one Instrument two live Symbols on 9 April to 8 May.
+    evidence = Evidence(
+        spans=[
+            span("ZOMATO", ZOMATO_ISIN, date(2021, 7, 23), date(2025, 5, 8)),
+            span("ETERNAL", ZOMATO_ISIN, date(2025, 4, 9), date(2026, 10, 19)),
+        ],
+        symbol_changes=[rename("ZOMATO", "ETERNAL", date(2025, 4, 9))],
+    )
+
+    built = build_instruments(evidence)
+
+    zomato = named(built.instruments, "ZOMATO", date(2025, 5, 8))
+    eternal = named(built.instruments, "ETERNAL", date(2025, 4, 9))
+    assert zomato != eternal
+    assert (zomato.links, eternal.links) == ((), ())
+    (anomaly,) = built.anomalies
+    assert (anomaly.kind, anomaly.symbol, anomaly.on) == (
+        "conflicting_link",
+        "ZOMATO",
+        date(2025, 4, 9),
+    )
+    assert anomaly.detail == (
+        "refused NSE symbol change ZOMATO to ETERNAL effective 2025-04-09:"
+        " ZOMATO (2021-07-23 to 2025-05-08) and ETERNAL (2025-04-09 to 2026-10-19)"
+        " would both be live on 2025-04-09"
+    )
+
+
+HDFC_ISIN, MINDTREE_ISIN = "INE001A01036", "INE018I01017"
+
+
+def test_a_merger_into_a_company_that_carries_on_stays_two_instruments() -> None:
+    # HDFC merged into HDFCBANK: HDFC's last row is 12 July 2023, and HDFCBANK
+    # trades on. Even a record naming the pair cannot join them, since HDFCBANK
+    # was live beside HDFC for years.
+    evidence = Evidence(
+        spans=[
+            span("HDFC", HDFC_ISIN, date(2015, 1, 1), date(2023, 7, 12)),
+            span("HDFCBANK", HDFCBANK_NEW, date(2019, 9, 20), date(2026, 10, 19)),
+        ],
+        symbol_changes=[rename("HDFC", "HDFCBANK", date(2023, 7, 13))],
+    )
+
+    built = build_instruments(evidence)
+
+    assert [(i.key, i.links) for i in built.instruments] == [
+        ("HDFC@2015-01-01", ()),
+        ("HDFCBANK@2019-09-20", ()),
+    ]
+    assert [(a.kind, a.symbol, a.on) for a in built.anomalies] == [
+        ("conflicting_link", "HDFC", date(2023, 7, 13))
+    ]
+
+
+def test_a_merger_whose_absorbed_isin_ends_at_a_rename_stays_two_instruments() -> None:
+    # MINDTREE merged into LTI, which was renamed LTIM on 5 December 2022:
+    # MINDTREE's ISIN ends days before LTIM's first row. LTI and LTIM are one
+    # Instrument; MINDTREE, live beside LTI until it ended, is not joined to it.
+    evidence = Evidence(
+        spans=[
+            span("MINDTREE", MINDTREE_ISIN, date(2015, 1, 1), date(2022, 11, 23)),
+            span("LTI", LTI_ISIN, date(2016, 7, 21), date(2022, 12, 2)),
+            span("LTIM", LTI_ISIN, date(2022, 12, 5), date(2026, 10, 19)),
+        ],
+        symbol_changes=[
+            rename("LTI", "LTIM", date(2022, 12, 5)),
+            rename("MINDTREE", "LTIM", date(2022, 12, 5)),
+        ],
+    )
+
+    built = build_instruments(evidence)
+
+    lti = named(built.instruments, "LTIM", date(2022, 12, 5))
+    mindtree = named(built.instruments, "MINDTREE", date(2022, 11, 23))
+    assert [v.symbol for v in lti.intervals] == ["LTI", "LTIM"]
+    assert [v.symbol for v in mindtree.intervals] == ["MINDTREE"]
+    assert mindtree.links == ()
+    assert [(a.kind, a.symbol) for a in built.anomalies] == [("conflicting_link", "MINDTREE")]
+
+
+def test_a_new_symbol_under_an_existing_isin_with_no_record_is_a_link_candidate() -> None:
+    # As if NSE's list omitted the LTIM to LTM rename: LTM is a candidate for a
+    # cited manual link, never a link.
+    evidence = Evidence(
+        spans=[
+            span("LTI", LTI_ISIN, date(2016, 7, 21), date(2022, 12, 2)),
+            span("LTIM", LTI_ISIN, date(2022, 12, 5), date(2026, 2, 26)),
+            span("LTM", LTI_ISIN, date(2026, 2, 27), date(2026, 10, 19)),
+        ],
+        symbol_changes=[rename("LTI", "LTIM", date(2022, 12, 5))],
+    )
+
+    built = build_instruments(evidence)
+
+    assert [[v.symbol for v in i.intervals] for i in built.instruments] == [
+        ["LTI", "LTIM"],
+        ["LTM"],
+    ]
+    (candidate,) = built.candidates
+    assert (
+        candidate.old_symbol,
+        candidate.new_symbol,
+        candidate.isin,
+        candidate.old_last,
+        candidate.new_first,
+    ) == ("LTIM", "LTM", LTI_ISIN, date(2026, 2, 26), date(2026, 2, 27))
+    assert built.anomalies == ()

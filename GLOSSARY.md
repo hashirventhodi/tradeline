@@ -18,6 +18,10 @@ _Avoid_: Ticker, trading symbol (Kite's term for its own name of an instrument)
 The dated, sourced evidence that joins two stretches of history into one Instrument: an NSE symbol-change record, an ISIN change on the Ex-Date of a split, bonus, or consolidation, or a reviewed manual link citing an official source. Never inferred from a name or a price.
 _Avoid_: Mapping, alias, merge
 
+**Link Candidate**:
+A new Symbol trading under an ISIN an earlier Symbol had, with no NSE record joining them. Never a link: the Operator reviews it and cites a manual link, or leaves the history split.
+_Avoid_: Candidate (a Strategy's Candidate), suggested link
+
 ### Universe and selection
 
 **Universe**:

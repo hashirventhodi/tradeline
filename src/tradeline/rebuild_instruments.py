@@ -3,7 +3,8 @@
 The evidence is read from the stored sources (ADR 0016), handed to the pure
 builder (``tradeline.instruments.build_instruments``), and its output replaces
 the derived tables (``instruments``, ``instrument_intervals``,
-``instrument_links``, ``instrument_anomalies``) in one transaction, so a
+``instrument_links``, ``instrument_anomalies``, ``instrument_link_candidates``)
+in one transaction, so a
 reader sees the old Instruments or the new ones, never a mixture. Nothing
 else is written: the end-of-day rows, Kite's candles, the Corporate Actions,
 the symbol master, sectors, and the symbol-change records are read only.
@@ -14,7 +15,8 @@ settlement (T0), and debt and fund series are left out: they trade beside a
 Symbol's EQ rows or carry their own ISINs, and would read as ISIN changes.
 
 Each rebuild is recorded in the run history (command ``instruments``, source
-``instrument_links``) with its counts.
+``instrument_links``) with its counts: Instruments, links by source,
+anomalies by kind, and link candidates.
 """
 
 from __future__ import annotations
@@ -52,6 +54,7 @@ class InstrumentRebuildResult:
     instruments: int
     links: int
     anomalies: int
+    candidates: int
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -59,6 +62,7 @@ class InstrumentRebuildResult:
             "instruments": self.instruments,
             "links": self.links,
             "anomalies": self.anomalies,
+            "candidates": self.candidates,
         }
 
 
@@ -78,6 +82,7 @@ def rebuild_instruments(conn: psycopg.Connection) -> InstrumentRebuildResult:
             "links": dict(sorted(links.items())),
             "keys_from": dict(sorted(Counter(i.key_from for i in built.instruments).items())),
             "anomalies": dict(sorted(Counter(a.kind for a in built.anomalies).items())),
+            "candidates": len(built.candidates),
         }
         for anomaly in built.anomalies:
             log.warning(
@@ -89,6 +94,7 @@ def rebuild_instruments(conn: psycopg.Connection) -> InstrumentRebuildResult:
         instruments=len(built.instruments),
         links=sum(links.values()),
         anomalies=len(built.anomalies),
+        candidates=len(built.candidates),
     )
 
 
@@ -150,6 +156,7 @@ def _listings(conn: psycopg.Connection) -> list[Listing]:
 
 def _replace(conn: psycopg.Connection, built: InstrumentBuild) -> None:
     conn.execute("DELETE FROM instrument_anomalies")
+    conn.execute("DELETE FROM instrument_link_candidates")
     conn.execute("DELETE FROM instruments")  # intervals and links go with them
     instruments = built.instruments
     conn.execute(
@@ -203,5 +210,18 @@ def _replace(conn: psycopg.Connection, built: InstrumentBuild) -> None:
             [a.symbol for a in anomalies],
             [a.on for a in anomalies],
             [a.detail for a in anomalies],
+        ),
+    )
+    candidates = built.candidates
+    conn.execute(
+        "INSERT INTO instrument_link_candidates"
+        " (old_symbol, new_symbol, isin, old_last, new_first)"
+        " SELECT * FROM unnest(%s::text[], %s::text[], %s::text[], %s::date[], %s::date[])",
+        (
+            [c.old_symbol for c in candidates],
+            [c.new_symbol for c in candidates],
+            [c.isin for c in candidates],
+            [c.old_last for c in candidates],
+            [c.new_first for c in candidates],
         ),
     )
