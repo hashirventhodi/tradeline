@@ -228,7 +228,7 @@ stand above as they were measured.
 | `ingest delistings` | 328 records, once its Windows encoding was read (below). | under 1 s |
 | `rebuild-instruments`, first | 4,486 Instruments; 811 links (410 corporate action, 400 symbol change, 1 manual); 119 anomalies; 32 Link Candidates. | 29 s |
 | `rebuild-instruments`, last | 4,449 Instruments; 848 links (424 corporate action, 400 symbol change, 24 manual); 104 anomalies, all reviewed (below); 11 Link Candidates, all reviewed. | 29 s |
-| `universe --month 2016-11 --to 2026-10`, twice | Rule version `ded30b1014c4` (`rank_by = "instrument"`): 120 months of 200 members, 544 Symbols, 514 Instruments. The second run recomputed every month and wrote nothing. | 257 s |
+| `universe --month 2016-11 --to 2026-10`, three times | Rule version `ded30b1014c4` (`rank_by = "instrument"`): 120 months of 200 members, 544 Symbols, 514 Instruments. The second run, before the SUBEX link, recomputed every month identically. The third, after it and after the same-Symbol rule was tightened, wrote nothing and chose the same members, ranks and traded values in all 120 months; six (2021-07 to 2021-12) differ only in SUBEXLTD's key (below). | 257 s |
 | `ingest candles --interval day` for the nine renamed ever-members whose current Symbol was never a member | 9 loaded through their current Symbols' tokens (CENTURYTEX as ABREL, HEG as HEGAM, MAJESCO as AURUM, ...). | under 1 min |
 | `reconcile --from 2016-10-21 --to 2026-10-20` | 1,008,280 rows, 45,324 discrepancies (4.50 percent, from 8.88): still **fail** against 0.1 percent. **No rename extras.** | 4 min (7 s by Symbol) |
 
@@ -252,7 +252,11 @@ stand above as they were measured.
   INE528G01027 to INE528G01035. Dealing in the new ISIN began on 2020-03-16
   (NSE circular 17/2020). Split there, the Instrument rule would have counted
   YESBANK, then ranked 4 to 41, as newly listed for about six months. A manual
-  link may now name one Symbol on both sides for such a change (ADR 0016).
+  link may now name one Symbol on both sides for such a change, held to what
+  a split is held to: dated on the new ISIN's first day, with the old ISIN's
+  last row within seven days before it, so it cannot bridge a relisting years
+  later (ADR 0016). A row that joins nothing is reported as an
+  `unmatched_manual_link` anomaly; the last rebuild has none.
 - **SUBEX was readmitted as SUBEXLTD under a new ISIN, with no symbol-change
   record.** An NCLT-approved capital reduction halved the face value
   (NSE/CML/46245, 2020-11-05). Its manual link removed the last 886 rename
@@ -289,13 +293,41 @@ than the new Symbol's first row in NSE's files.
 
 | What remains | Count | Explanation |
 |---|---|---|
-| Fund ISIN changes (INF) | 71 | ETFs whose units were reissued under a new ISIN when the scheme changed hands or was restructured (Reliance to Nippon on 2019-12-20, HDFC, ICICI, UTI, Aditya Birla, Kotak). No Corporate Action, and the Universe excludes INF ISINs. Left split. |
-| SME ISIN changes | 21 | SM and ST Symbols whose price falls four- to ten-fold on the new ISIN: SME bonuses and splits, which NSE's `index=equities` Corporate Action list does not carry. No ever-member. Left split. |
-| Other equity ISIN changes | 12 | Relistings after long suspensions (KSE from 2015, DSKULKARNI from 2018, EASTSILK, BURNPUR, MBECL, SUMEETINDS, KAUSHALYA, SHEKHAWATI), VERTOZ's consolidation 16 days before its relisting, TIDEWATER (2016) and KARDA (2020), whose prices fall about four-fold with no action NSE lists, and CCAVENUE (above). No ever-member except CCAVENUE's Instrument. |
+| Fund ISIN changes (INF) | 71 | ETF units under a new ISIN, in batches on one day per fund house (six Reliance (now Nippon India) ETFs on 2019-12-20; five HDFC on 2023-10-20; four ICICI on 2024-03-01). Explained as a class, not cited row by row. No Corporate Action, and the Universe excludes INF ISINs, so no month depends on them. Left split. |
+| SME ISIN changes | 21 | SM and ST Symbols whose price falls four- to ten-fold on the new ISIN, which reads as SME bonuses and splits NSE's `index=equities` Corporate Action list does not carry. Inferred from the prices, not cited. No ever-member, and the Universe counts only EQ. Left split. |
+| Other equity ISIN changes | 12 | Relistings after long suspensions (KSE from 2015, DSKULKARNI from 2018, EASTSILK, BURNPUR, MBECL, SUMEETINDS, KAUSHALYA, SHEKHAWATI), VERTOZ's consolidation 16 days before its relisting, TIDEWATER (2016) and KARDA (2020), whose prices fall about four-fold with no action NSE lists (unexplained), and CCAVENUE (above). No ever-member except CCAVENUE's Instrument. |
 | Link Candidates | 11 | All end on 2015-01-29: BSE-listed companies that traded on NSE as "permitted to trade" until NSE withdrew the facility from 30 January 2015 (NSE/CML/28574), then listed on NSE directly. NSE dates them from that listing (AVANTIFEED 2015-04-15), so they are new listings, not renames. Left split. |
 
 Before the run, 119 anomalies included the 14 "Fv Splt Frm" splits; CADILAHC's
-2015 ISIN change is now joined, so ZYDUSLIFE's history runs from 2015.
+2015 ISIN change is now joined, so ZYDUSLIFE's history runs from 2015. No
+manual link is unmatched.
+
+### Unresolved
+
+- **CCAVENUE's consolidation** (10 to 1, new ISIN from 2026-10-19) is not in
+  NSE's Corporate Action list. Its history is split, INFIBEAM's Instrument
+  shows as ended, and November 2026's Universe window will see CCAVENUE as
+  newly listed unless the action is listed and ingested first.
+- **Listing dates later than an Instrument's first row**: SUBEX (2020-11-05),
+  NESTLEIND (2023-08-01), FORCEMOT, CAMS and SHAKTIPUMP among ever-members.
+  No month changes here, but listing age from such a date understates a long
+  history.
+- **Explained by inference, not citation**: the 21 SME and 71 fund ISIN
+  changes (as classes), and TIDEWATER's and KARDA's four-fold changes (not
+  explained). None touches an ever-member or an EQ Universe month.
+- **MAZDOCK's 8 candles from 2017 and 2018**, before its 2020 listing: an
+  earlier instrument under a reused Kite token is likely but unconfirmed.
+- **A stored member's key can be renamed under it.** The SUBEX link renamed
+  the Instrument `SUBEXLTD@2020-11-05` to `SUBEX@2020-11-05` (its first Symbol
+  is now SUBEX). SUBEXLTD's six stored member-months under `ded30b1014c4`
+  (2021-07 to 2021-12) keep the old key, which no longer names an
+  Instrument, and recomputing them reports a difference in that key alone.
+  The stale check counts a new key over the same grouping as no change (#27),
+  so it did not report them. Which of the two should give way is a decision
+  for a follow-up.
+- **Reconcile still fails** at 4.50 percent against 0.1. The rest is series
+  moves (for #17), Kite's additive adjustment and coarse rounding, the
+  muhurat sessions and BAFNAPH, as in #13.
 
 ### Universe under the Instrument rule
 
@@ -344,16 +376,91 @@ rally after the rescue.
 
 ### Ever-members by end reason
 
-Of the 90 ever-member Symbols with no Kite token, 35 are renamed Instruments
-with candles through their current Symbol. The other 55 are 54 Instruments
-with none, each listed by the `instruments` report with its reason:
+#13 found 90 ever-member Symbols with no Kite token and counted 38 of them
+renamed: those NSE's symbol-change list names as an old Symbol. Recounted
+on the same 90:
+
+| Population | Symbols | With Kite candles |
+|---|---|---|
+| Renamed by NSE's list (#13's 38) | 38 | 33, through the current Symbol's token |
+| Renamed by a manual link only (PHILIPCARB, RUCHI) | 2 | 2 |
+| Not renamed | 50 | 0 |
+| **Total** | **90** | **35** |
+
+The five of #13's 38 without candles are Instruments with no token today,
+not renames left unjoined: GATI (ended as ACLGATI), IBVENTURES (ended as
+DHANI), TATASPONGE (ended as TATASTLLP), STRTECH (moved to BE as STLTECH),
+and INFIBEAM (cut by CCAVENUE's consolidation, below). They and the 50 make
+55 Symbols in 54 Instruments (IBVENTURES and DHANI are one). Each is below as
+`tradeline instruments` reported it on 2026-10-21, with the evidence the
+reason rests on (#26's rule). "Merged" is given only for a scheme of
+amalgamation in NSE's Corporate Actions, and none of the 54 has one; where
+an official source outside that list says more, it is noted beside the
+reason, not in place of it.
 
 | Reason | Instruments |
 |---|---|
-| delisted (NSE's list) | 1: HEXAWARE, Voluntary Delisting 2020-11-09 |
-| series moved | 8: ABAN, HDIL, HFCL, MEP, RAJESHEXPO, RCOM, RELINFRA, STLTECH |
-| ended, reason not stated | 45, among them the mergers NSE records no scheme for (HDFC, MINDTREE, GRUH, the PSU banks, JBCHEPHARM into Torrent Pharma on 2026-07-17 by NSE/CML/75178) and CCAVENUE's history before its consolidation |
+| delisted | 1 |
+| series moved | 8 |
+| ended, reason not stated | 45 |
 | merged | 0 |
+
+| Instrument | Symbols (ever-members in bold) | Last day | Reason | Evidence |
+|---|---|---|---|---|
+| HEXAWARE@2015-01-01 | **HEXAWARE** | 2020-10-30 | delisted | NSE delisted list: Voluntary Delisting on 2020-11-09 |
+| ABIRLANUVO@2015-01-01 | **ABIRLANUVO** | 2017-07-04 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| ALBK@2015-01-01 | **ALBK** | 2020-03-19 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| ANDHRABANK@2015-01-01 | **ANDHRABANK** | 2020-03-19 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| BHUSANSTL@2015-01-01 | BHUSANSTL, **TATASTLBSL** | 2021-11-12 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| CAIRN@2015-01-01 | **CAIRN** | 2017-04-25 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| CAPF@2015-01-01 | **CAPF** | 2018-12-27 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| DALMIABHA@2015-01-01 | **DALMIABHA** | 2018-11-28 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| DHFL@2015-01-01 | **DHFL** | 2021-06-11 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| DISHMAN@2015-01-01 | **DISHMAN** | 2017-05-29 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| EQUITAS@2016-04-21 | **EQUITAS** | 2023-02-02 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| EROSMEDIA@2015-01-01 | **EROSMEDIA** | 2025-06-30 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| FCEL@2015-01-01 | FCEL, **FCONSUMER** | 2026-08-31 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| FRETAIL@2016-08-29 | **FRETAIL** | 2024-08-01 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| GATI@2015-01-01 | **GATI**, ACLGATI (renamed, #13's 38) | 2025-11-11 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| GRUH@2015-01-01 | **GRUH** | 2019-10-15 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| GSKCONS@2015-01-01 | **GSKCONS** | 2020-04-15 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| HDFC@2015-01-01 | **HDFC** | 2023-07-12 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| IBSEC@2015-01-01 | IBSEC, **IBVENTURES**, **DHANI** (renamed, #13's 38) | 2025-10-27 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| IDFC@2015-01-01 | **IDFC** | 2024-10-09 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| INFIBEAM@2016-04-04 | **INFIBEAM**, CCAVENUE (renamed, #13's 38) | 2026-10-12 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions. Unresolved: cut by CCAVENUE's 10-to-1 consolidation (NSE/CML/76916), which NSE's Corporate Action list does not carry yet; trades on as CCAVENUE |
+| ISEC@2018-04-04 | **ISEC** | 2025-03-21 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| JBCHEPHARM@2015-01-01 | **JBCHEPHARM** | 2026-07-16 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions. Amalgamated into Torrent Pharmaceuticals, record date 2026-07-17 (NSE/CML/75178); NSE's Corporate Action list has no scheme for it |
+| JETAIRWAYS@2015-01-01 | **JETAIRWAYS** | 2024-11-07 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| JPASSOCIAT@2015-01-01 | **JPASSOCIAT** | 2026-03-17 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| MEGH@2015-01-01 | **MEGH** | 2021-05-17 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| MINDTREE@2015-01-01 | **MINDTREE** | 2022-11-22 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| MONSANTO@2015-01-01 | **MONSANTO** | 2019-09-26 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| ORIENTBANK@2015-01-01 | **ORIENTBANK** | 2020-03-20 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| PEL@2015-01-01 | **PEL** | 2025-09-22 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| PIPAVAVDOC@2015-01-01 | PIPAVAVDOC, RDEL, **RNAVAL** | 2023-07-13 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| RELCAPITAL@2015-01-01 | **RELCAPITAL** | 2024-02-26 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| SINTEX@2015-01-01 | **SINTEX** | 2023-02-10 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| SKSMICRO@2015-01-01 | SKSMICRO, **BHARATFIN** | 2019-07-02 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| SPICEJET@2019-08-19 | **SPICEJET** | 2023-04-28 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| SREINFRA@2015-01-01 | **SREINFRA** | 2023-08-11 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| SUNILHITEC@2015-01-01 | **SUNILHITEC** | 2019-07-16 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| SYNDIBANK@2015-01-01 | **SYNDIBANK** | 2020-03-19 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| TATACOFFEE@2015-01-01 | **TATACOFFEE** | 2024-01-12 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| TATAMETALI@2015-01-01 | **TATAMETALI** | 2024-02-05 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| TATAMTRDVR@2015-01-01 | **TATAMTRDVR** | 2024-08-29 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| TATASPONGE@2015-01-01 | **TATASPONGE**, TATASTLLP (renamed, #13's 38) | 2023-11-16 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| TINPLATE@2015-01-01 | **TINPLATE** | 2024-01-18 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| TV18BRDCST@2015-01-01 | **TV18BRDCST** | 2024-10-15 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| UJJIVAN@2016-05-10 | **UJJIVAN** | 2024-05-02 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| UPERGANGES@2015-01-02 | **UPERGANGES** | 2017-03-22 | ended, reason not stated | no later row; NSE's delisted list names no later delisting of its last Symbol, and no scheme of amalgamation follows in NSE's Corporate Actions |
+| ABAN@1995-03-29 | **ABAN** | 2025-09-04 | series moved | Our rows continue in BE from 2025-09-05; Kite gives a token for EQ only |
+| HDIL@2007-07-24 | **HDIL** | 2019-11-21 | series moved | Our rows continue in BE from 2019-11-22; Kite gives a token for EQ only |
+| HFCL@2011-03-09 | **HFCL** | 2026-09-02 | series moved | Our rows continue in BE from 2026-09-03; Kite gives a token for EQ only |
+| MEP@2015-05-06 | **MEP** | 2024-03-19 | series moved | Our rows continue in BE from 2024-03-20; Kite gives a token for EQ only |
+| RAJESHEXPO@2000-02-09 | **RAJESHEXPO** | 2025-12-24 | series moved | Our rows continue in BZ from 2025-12-26; Kite gives a token for EQ only |
+| RCOM@2006-03-06 | **RCOM** | 2022-05-24 | series moved | Our rows continue in BE from 2022-05-25; Kite gives a token for EQ only |
+| RELINFRA@1995-02-08 | **RELINFRA** | 2025-06-04 | series moved | Our rows continue in BE from 2025-06-05; Kite gives a token for EQ only |
+| STRTECH@2000-12-08 | **STRTECH**, STLTECH (renamed, #13's 38) | 2026-05-13 | series moved | Our rows continue in BE from 2026-05-14; Kite gives a token for EQ only |
 
 ## US-market findings (for reference; not the chosen market)
 
