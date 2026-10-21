@@ -2,7 +2,7 @@
 
 A long-only swing trading platform for NSE cash equities. A deterministic, versioned quant strategy proposes trades; an AI layer may only veto or shrink them; a code-only risk engine has the final word; and live execution stays off until measurable gates pass.
 
-**Status: Phase 1 in progress.** The design is complete (vocabulary, decisions, architecture, phases with acceptance criteria, risk controls, research) and the walking skeleton is in place: package, migrations, transport, secrets, logging, test harness. `ingest eod` loads NSE end-of-day files and the instrument master (NSE symbol, ISIN, series, listing date, Kite instrument token); `login` performs the daily Kite Session Login and `ingest candles --interval day` loads daily candles from Kite at its rate limit, exactly as returned (Kite's bars are already adjusted by Kite's rules; see [docs/research.md](docs/research.md)). `ingest corporate-actions` loads NSE's official corporate-action list with the split and bonus factors we derive from it, and the query layer serves an adjusted daily series computed on read from NSE's end-of-day rows, as of any date, matching Kite's adjusted chart to the paisa across a bonus. Nothing trades.
+**Status: Phase 1 in progress.** The design is complete (vocabulary, decisions, architecture, phases with acceptance criteria, risk controls, research) and the walking skeleton is in place: package, migrations, transport, secrets, logging, test harness. `ingest eod` loads NSE end-of-day files and the instrument master (NSE symbol, ISIN, series, listing date, Kite instrument token); `login` performs the daily Kite Session Login and `ingest candles --interval day` loads daily candles from Kite at its rate limit, exactly as returned (Kite's bars are already adjusted by Kite's rules; see [docs/research.md](docs/research.md)). `ingest corporate-actions` loads NSE's official corporate-action list with the split and bonus factors we derive from it, and the query layer serves an adjusted daily series computed on read from NSE's end-of-day rows, as of any date, matching Kite's adjusted chart to the paisa across a bonus. `ingest announcements` loads each day's NSE and BSE corporate announcements with their official (dissemination) timestamps, matched to NSE symbols only where the match is certain, and the query layer returns them for a symbol as of any moment. Nothing trades.
 
 ## Getting started
 
@@ -16,6 +16,7 @@ uv run tradeline ingest eod --from 2024-07-01 --to 2024-07-31   # NSE end-of-day
 uv run tradeline login                                          # daily: prints the Kite login URL, stores the access token in .env
 uv run tradeline ingest candles --interval day --symbol INFY --from 2024-07-01 --to 2024-07-31
 uv run tradeline ingest corporate-actions --from 2024-07-01 --to 2024-12-31   # NSE's list, with our factors
+uv run tradeline ingest announcements --from 2024-07-23   # NSE and BSE filings, matched to symbols
 make check                      # ruff, mypy, pytest against a throwaway database
 ```
 

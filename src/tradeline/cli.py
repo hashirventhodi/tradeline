@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 from tradeline.config import Config, default_config_path, load_config
 from tradeline.db import app_connection, connect
 from tradeline.environment import Environment
+from tradeline.ingest.announcements import ingest_announcements
 from tradeline.ingest.candles import ingest_candles
 from tradeline.ingest.corporate_actions import ingest_corporate_actions
 from tradeline.ingest.eod import ingest_eod
@@ -98,6 +99,8 @@ def ingest(ctx: Context, args: argparse.Namespace) -> int:
         return _ingest_eod(ctx, args, end)
     if args.source == "corporate-actions":
         return _ingest_corporate_actions(ctx, args, end)
+    if args.source == "announcements":
+        return _ingest_announcements(ctx, args, end)
     return _ingest_candles(ctx, args, end)
 
 
@@ -158,11 +161,32 @@ def _ingest_corporate_actions(ctx: Context, args: argparse.Namespace, end: date)
     return 0
 
 
-def _transport(ctx: Context, args: argparse.Namespace) -> Transport:
+def _ingest_announcements(ctx: Context, args: argparse.Namespace, end: date) -> int:
+    # BSE's API answers only a browser's TLS handshake; NSE accepts it too.
+    transport = _transport(ctx, args, browser_tls=True)
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = ingest_announcements(conn, transport, start=args.start, end=end)
+    log.info(
+        "ingest announcements finished",
+        extra={
+            source: {
+                "rows_seen": r.rows_seen,
+                "rows_written": r.rows_written,
+                "matched": r.matched,
+                "unmatched": r.unmatched,
+                "requests": r.requests,
+            }
+            for source, r in (("nse", result.nse), ("bse", result.bse))
+        },
+    )
+    return 0
+
+
+def _transport(ctx: Context, args: argparse.Namespace, *, browser_tls: bool = False) -> Transport:
     """Live by default (refused under test); fixtures can be played back or recorded."""
     if args.play_fixtures is not None:
         return PlaybackTransport(args.play_fixtures)
-    transport = transport_for(ctx.environment)
+    transport = transport_for(ctx.environment, browser_tls=browser_tls)
     if args.record_fixtures is not None:
         return RecordingTransport(transport, args.record_fixtures)
     return transport
@@ -260,6 +284,11 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="SYMBOL",
         action="append",
         help="an NSE symbol to load; repeatable; defaults to every symbol NSE lists",
+    )
+    sources.add_parser(
+        "announcements",
+        parents=[fixtures, date_range],
+        help="NSE and BSE corporate announcements for each day in the range, matched to symbols",
     )
     return parser
 

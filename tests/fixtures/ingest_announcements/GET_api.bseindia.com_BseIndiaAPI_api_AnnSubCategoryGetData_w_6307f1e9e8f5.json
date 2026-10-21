@@ -1,0 +1,79 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w?pageno=2&strCat=-1&strPrevDate=20240723&strScrip=&strSearch=P&strToDate=20240723&strType=C&subcategory=-1",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "content-type",
+        "application/json; charset=utf-8"
+      ],
+      [
+        "feature-policy",
+        "vibrate 'Self'; usermedia *; sync-xhr 'self'"
+      ],
+      [
+        "referrer-policy",
+        "no-referrer | same-origin | origin | strict-origin | no-origin-when-downgrading"
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000; includeSubDomains; preload"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "x-xss-protection",
+        "1; mode=block"
+      ],
+      [
+        "expect-ct",
+        "max-age=604800"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "access-control-allow-methods",
+        "GET,POST"
+      ],
+      [
+        "content-encoding",
+        "gzip"
+      ],
+      [
+        "cache-control",
+        "private, max-age=60"
+      ],
+      [
+        "expires",
+        "Wed, 21 Oct 2026 08:57:44 GMT"
+      ],
+      [
+        "date",
+        "Wed, 21 Oct 2026 08:56:44 GMT"
+      ],
+      [
+        "vary",
+        "Accept-Encoding"
+      ],
+      [
+        "access-control-allow-origin",
+        "https://www.bseindia.com"
+      ],
+      [
+        "akamai-grn",
+        "0.728cd017.1792573003.11f11e7b"
+      ]
+    ],
+    "body": "{\"Table\": [{\"NEWSID\": \"ca0e7986-df48-4286-97b9-335dd542453b\", \"SCRIP_CD\": 570004, \"XML_NAME\": \"ANN_570004_CA0E7986-DF48-4286-97B9-335DD542453B\", \"NEWSSUB\": \"Jain Irrigation Systems Ltd_DVR - 570004 - Outcome Of Board Meeting Held On 23Rd July, 2024\", \"DT_TM\": \"2024-07-23T16:56:24.34\", \"NEWS_DT\": \"2024-07-23T16:56:24.34\", \"CRITICALNEWS\": \"0\", \"ANNOUNCEMENT_TYPE\": \"A\", \"QUARTER_ID\": null, \"FILESTATUS\": \"N    \", \"ATTACHMENTNAME\": \"8f42a27b-45f2-46b0-97c7-e27094a3771c.pdf\", \"MORE\": \"\", \"HEADLINE\": \"Outcome of Board Meeting held on 23rd July,2024\", \"CATEGORYNAME\": \"Company Update\", \"OLD\": 1, \"RN\": 1, \"PDFFLAG\": 1, \"NSURL\": \"https://www.bseindia.com/stock-share-price/jain-irrigation-systems-ltd_dvr/jisldvreqs/570004/\", \"SLONGNAME\": \"Jain Irrigation Systems Ltd_DVR\", \"AGENDA_ID\": 1, \"News_submission_dt\": \"2024-07-23T16:56:24\", \"DissemDT\": \"2024-07-23T16:56:24.34\", \"TimeDiff\": \"00:00:00\", \"Fld_Attachsize\": 3161091, \"SUBCATNAME\": \"General\", \"BSENewsid\": null, \"Investor_Presentation\": null, \"AUDIO_VIDEO_FILE\": null}, {\"NEWSID\": \"424393f0-681b-4a56-8bce-4b90b1a6b7f4\", \"SCRIP_CD\": 500219, \"XML_NAME\": \"ANN_500219_424393F0-681B-4A56-8BCE-4B90B1A6B7F4\", \"NEWSSUB\": \"Jain Irrigation Systems Ltd - 500219 - Outcome Of Board Meeting Held On 23Rd July, 2024\", \"DT_TM\": \"2024-07-23T16:56:24.307\", \"NEWS_DT\": \"2024-07-23T16:56:24.307\", \"CRITICALNEWS\": \"0\", \"ANNOUNCEMENT_TYPE\": \"A\", \"QUARTER_ID\": null, \"FILESTATUS\": \"N    \", \"ATTACHMENTNAME\": \"8f42a27b-45f2-46b0-97c7-e27094a3771c.pdf\", \"MORE\": \"\", \"HEADLINE\": \"Outcome of Board Meeting held on 23rd July,2024\", \"CATEGORYNAME\": \"Company Update\", \"OLD\": 1, \"RN\": 1, \"PDFFLAG\": 1, \"NSURL\": \"https://www.bseindia.com/stock-share-price/jain-irrigation-systems-ltd/jisljaleqs/500219/\", \"SLONGNAME\": \"Jain Irrigation Systems Ltd\", \"AGENDA_ID\": 1, \"News_submission_dt\": \"2024-07-23T16:56:24\", \"DissemDT\": \"2024-07-23T16:56:24.307\", \"TimeDiff\": \"00:00:00\", \"Fld_Attachsize\": 3161091, \"SUBCATNAME\": \"General\", \"BSENewsid\": null, \"Investor_Presentation\": null, \"AUDIO_VIDEO_FILE\": null}, {\"NEWSID\": \"e899ce54-941c-44c6-915c-193905e8dbed\", \"SCRIP_CD\": 532977, \"XML_NAME\": \"ANN_532977_E899CE54-941C-44C6-915C-193905E8DBED\", \"NEWSSUB\": \"Bajaj Auto Ltd - 532977 - Announcement under Regulation 30 (LODR)-Analyst / Investor Meet - Outcome\", \"DT_TM\": \"2024-07-23T15:07:34.52\", \"NEWS_DT\": \"2024-07-23T15:07:34.52\", \"CRITICALNEWS\": \"0\", \"ANNOUNCEMENT_TYPE\": \"A\", \"QUARTER_ID\": null, \"FILESTATUS\": \"N    \", \"ATTACHMENTNAME\": \"96b0c8a4-114e-4aa8-b033-2c10b5c159a4.pdf\", \"MORE\": \"\", \"HEADLINE\": \"Please find enclosed the transcripts of the conference call held on 16 July 2024 in respect of the Company's Q1-FY25 results.\", \"CATEGORYNAME\": \"Company Update\", \"OLD\": 1, \"RN\": 1, \"PDFFLAG\": 1, \"NSURL\": \"https://www.bseindia.com/stock-share-price/bajaj-auto-ltd/bajaj-auto/532977/\", \"SLONGNAME\": \"Bajaj Auto Ltd\", \"AGENDA_ID\": 80, \"News_submission_dt\": \"2024-07-23T15:07:34\", \"DissemDT\": \"2024-07-23T15:07:34.52\", \"TimeDiff\": \"00:00:00\", \"Fld_Attachsize\": 468053, \"SUBCATNAME\": \"Analyst / Investor Meet\", \"BSENewsid\": \"e899ce54-941c-44c6-915c-193905e8dbed\", \"Investor_Presentation\": \"b1298657-5783-4e39-b16a-4cb7ddf94788.zip\", \"AUDIO_VIDEO_FILE\": \"https://www.bseindia.com/xml-data/corpfiling/Attachlive/b1298657-5783-4e39-b16a-4cb7ddf94788.zip\"}, {\"NEWSID\": \"8ba71cd2-d6ec-4003-860b-e7e976854475\", \"SCRIP_CD\": 132541, \"XML_NAME\": \"ANN_132541_8BA71CD2-D6EC-4003-860B-E7E976854475\", \"NEWSSUB\": \"  - 132541 - Intimation Pursuant To Regulation 31A  Of SEBI (Listing Obligations & Disclosures Requirements) Regulation, 2015\", \"DT_TM\": \"2024-07-23T00:20:42.863\", \"NEWS_DT\": \"2024-07-23T00:20:42.863\", \"CRITICALNEWS\": \"0\", \"ANNOUNCEMENT_TYPE\": \"A\", \"QUARTER_ID\": null, \"FILESTATUS\": \"N    \", \"ATTACHMENTNAME\": \"6232c707-4918-4f5d-b112-e57ae89c90d3.pdf\", \"MORE\": \"\", \"HEADLINE\": \"Intimation pursuant to Regulation 31A of SEBI (Listing Obligations & Disclosures Requirements) Regulation, 2015\", \"CATEGORYNAME\": \"Company Update\", \"OLD\": 1, \"RN\": 1, \"PDFFLAG\": 1, \"NSURL\": \"https://www.bseindia.com/stock-share-price/-/coforge/132541/\", \"SLONGNAME\": \" \", \"AGENDA_ID\": 1, \"News_submission_dt\": \"2024-07-23T00:20:42\", \"DissemDT\": \"2024-07-23T00:20:42.863\", \"TimeDiff\": \"00:00:00\", \"Fld_Attachsize\": 485786, \"SUBCATNAME\": \"General\", \"BSENewsid\": null, \"Investor_Presentation\": null, \"AUDIO_VIDEO_FILE\": null}], \"Table1\": [{\"ROWCNT\": 9}]}",
+    "body_encoding": "utf-8"
+  }
+}

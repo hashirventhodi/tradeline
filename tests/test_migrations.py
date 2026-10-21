@@ -110,3 +110,26 @@ def test_the_application_role_cannot_update_or_delete_corporate_actions(
         conn.rollback()
 
     assert str(factor).startswith("0.8333333")
+
+
+def test_the_application_role_cannot_update_or_delete_announcements(
+    database_url: str,
+) -> None:
+    with app_connection(database_url) as conn:
+        conn.execute(
+            "INSERT INTO announcements (source, source_id, disseminated_at, exchange_code, subject)"
+            " VALUES ('nse', 'ROLE', '2024-07-23 18:00+05:30', 'ROLE', 'Updates')"
+        )
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("UPDATE announcements SET symbol = 'ROLE'")
+        conn.rollback()
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("DELETE FROM announcements")
+        conn.rollback()
+        with pytest.raises(psycopg.errors.CheckViolation):  # only the two exchanges
+            conn.execute(
+                "INSERT INTO announcements"
+                " (source, source_id, disseminated_at, exchange_code, subject)"
+                " VALUES ('mcx', 'ROLE', '2024-07-23 18:00+05:30', 'ROLE', 'Updates')"
+            )
+        conn.rollback()

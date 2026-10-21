@@ -1,0 +1,127 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://www.nseindia.com/api/corporate-announcements?index=equities&from_date=23-07-2024&to_date=23-07-2024",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "server",
+        "Apache"
+      ],
+      [
+        "x-dns-prefetch-control",
+        "off"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "x-download-options",
+        "noopen"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-xss-protection",
+        "1; mode=block"
+      ],
+      [
+        "content-security-policy",
+        "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; script-src 'self' 'nonce-jngPFEp5PjEcX6Yx8QHj5g==' https://www.google-analytics.com https://analytics.google.com https://*.highcharts.com https://*.nse.co.in https://*.nseindia.com https://*.nseindia.in https://*.nseroot.com https://www.googletagmanager.com https://*.nse.in https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://*.nse.co.in https://*.nseindia.com https://*.nseindia.in https://*.nseroot.com https://www.google.co.in https://www.gstatic.com https://*.highcharts.com https://*.nse.in; font-src 'self' https://fonts.gstatic.com https://fonts.googleapis.com https://*.bootstrapcdn.com https://*.nse.co.in https://*.nseindia.com https://*.nseindia.in https://*.nseroot.com https://*.nse.in; img-src 'self' data: blob: https://www.google-analytics.com https://analytics.google.com https://www.googletagmanager.com https://www.google.co.in https://*.nse.co.in https://*.nseindia.com https://*.nseindia.in https://*.nseroot.com https://*.nse.in https://i.ytimg.com https://*.youtube.com; connect-src 'self' https://www.google-analytics.com https://analytics.google.com https://stats.g.doubleclick.net https://*.go-mpulse.net https://*.akstat.io https://*.akamaihd.net https://*.highcharts.com https://*.nse.co.in https://*.nseindia.com https://*.nseindia.in https://*.nseroot.com wss://*.nse.co.in wss://*.nseindia.com wss://*.nseindia.in wss://*.nseroot.com https://www.google.com https://*.nse.in; frame-src 'self' https://www.googletagmanager.com https://td.doubleclick.net https://www.youtube.com https://*.nse.co.in https://*.nseindia.com https://*.nseindia.in https://*.nseroot.com https://www.google.com https://recaptcha.google.com https://www.recaptcha.net https://*.nse.in; media-src 'self' https://*.nse.co.in https://*.nseindia.com https://*.nseindia.in https://*.nseroot.com https://*.nse.in; form-action 'self' https://*.highcharts.com"
+      ],
+      [
+        "referrer-policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "access-control-allow-origin",
+        "beta.nseindia.com"
+      ],
+      [
+        "access-control-allow-origin",
+        "nseindia.com"
+      ],
+      [
+        "access-control-allow-methods",
+        "GET,POST"
+      ],
+      [
+        "access-control-allow-headers",
+        "Content-Type"
+      ],
+      [
+        "content-type",
+        "application/json; charset=utf-8"
+      ],
+      [
+        "cross-origin-embedder-policy",
+        "unsafe-none"
+      ],
+      [
+        "cross-origin-resource-policy",
+        "unsafe-none"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "unsafe-none"
+      ],
+      [
+        "permissions-policy",
+        "camera=(), microphone=(), geolocation=()"
+      ],
+      [
+        "content-encoding",
+        "br"
+      ],
+      [
+        "date",
+        "Wed, 21 Oct 2026 08:56:42 GMT"
+      ],
+      [
+        "server-timing",
+        "cdn-cache; desc=REVALIDATE"
+      ],
+      [
+        "server-timing",
+        "edge; dur=29"
+      ],
+      [
+        "server-timing",
+        "origin; dur=1127"
+      ],
+      [
+        "akamai-grn",
+        "0.052a336a.1792573001.1130096e"
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000 ; includeSubDomains ; preload"
+      ],
+      [
+        "set-cookie",
+        "bm_mi=3A1C90A23C2F674D9445F191D7A44220~YAAQBSozasp3UDqhAQAAI1OtXQEiKJ1Gf4cBp18M83ata+nK4FaiUCufK90axt9in1MH2tRqK9sEaSzqNAa41qyc98UdwO3VuvOgrtyDvY1qKvqi6HYGamNephITLs0Xd3GAlKhTLfX6k6O0Vo2hPaWbkA9v20VxsSlV2Co7mnvPMn06hpQxqIJePThIyCs7rucLKN9wT5w+WtEeTClMl5qSSL1QAhPaAy+h+HrVWlZrooTtBvbopI6Eqbzt2cUGCnrDDpyOScRQJbXl9VdVFw2RgXpg2yOZBKBhI/UJc0uGXCtIqE6ZAYINVPqRCf4=~1; Domain=.nseindia.com; Path=/; Expires=Wed, 21 Oct 2026 08:56:41 GMT; Max-Age=0; Secure"
+      ],
+      [
+        "set-cookie",
+        "bm_sv=22CB5B048CF7F55A480A659CA366434E~YAAQBSozast3UDqhAQAAI1OtXQGiwm3kwv/6dK2aIeG4y9lKjhVUN0cRAmf6Vw0oQFPm7BzdfZvoyST5t/jg4f85JfLcFG2Yequ3vYJSn2qQ9ej2nGOikdZ/kf1Lun9fYTgyPp0U7meD7Hh6g/1KNm6dO3k5FTbYxHQKOaU8iS6Wc0I0voUi1XnOfdeoOpfF2U6rSgLBGx6pnOv3PgtLw2DmcYF5XeBloKxRjDj0oArSsntNTMbG5kWgpHq99FqcPrA=~1; Domain=.nseindia.com; Path=/; Expires=Wed, 21 Oct 2026 10:56:42 GMT; Max-Age=7200; Secure"
+      ],
+      [
+        "set-cookie",
+        "bm_sz=F1CED6659CFA09B7E6378D020D799DDA~YAAQBSozasx3UDqhAQAAI1OtXQHMc9xdZyM+tj++FqIKMqZ8cL4OojxLNITvFg3TPk+/laly8CkQocQLSUqkNVYRbHFdwsqZMbU0DWXj5FhBYyXzQ/LW+9zbizlVzDzHm/rRKgN0GoSuXybQq9O8C5Iij0yCCgumnNL4dbcG1j/LSbrSLYtrIrHR85A6t64Ic3zvUIFt3M+U8dkTIKqyR/HLiN45llvDzpRR1fcW9CHnsyO04H/jc2NsD1IbjmtSa3zgonl79LIQl54TPrLYiKkuBZX+qM7irbM4jwk25dP+UOZYGl9ZIEKgxDaYxXnFNQXt55KnEQH73uhdKihuqH60ztUSjbnN/E7HYP/3lTaAo5tSVLGs/DjxGQ6VZEnLSJ+/3XQxNTeobLcPhUd4ZgW8oxs=~3491139~3686969; Domain=.nseindia.com; Path=/; Expires=Wed, 21 Oct 2026 12:56:41 GMT; Max-Age=14399"
+      ],
+      [
+        "server-timing",
+        "ak_p; desc=\"1792573001346_1781737989_288360814_116116_22471_5_0_255\";dur=1"
+      ]
+    ],
+    "body": "[{\"an_dt\": \"23-Jul-2024 18:36:48\", \"attFileSize\": null, \"attchmntFile\": \"https://nsearchives.nseindia.com/corporate/INFY_23072024183648_ExchangeletterJuly232024.pdf\", \"attchmntText\": \"Infosys Limited has informed the Exchange about Acquisition\", \"bflag\": null, \"csvName\": null, \"desc\": \"Acquisition\", \"difference\": \"00:00:01\", \"dt\": \"23072024183648\", \"exchdisstime\": \"23-Jul-2024 18:36:49\", \"fileSize\": \"-\", \"hasXbrl\": false, \"old_new\": null, \"orgid\": null, \"seq_id\": \"105923264\", \"smIndustry\": \"Computers - Software\", \"sm_isin\": \"INE009A01021\", \"sm_name\": \"Infosys Limited\", \"sort_date\": \"2024-07-23 18:36:48\", \"symbol\": \"INFY\"}, {\"an_dt\": \"23-Jul-2024 18:24:08\", \"attFileSize\": null, \"attchmntFile\": \"https://nsearchives.nseindia.com/corporate/INFY_23072024182408_SEfiling_Earningscalltranscript3.pdf\", \"attchmntText\": \"Infosys Limited has informed the Exchange regarding 'Earnings Call Transcript'.\", \"bflag\": null, \"csvName\": null, \"desc\": \"Updates\", \"difference\": \"00:00:01\", \"dt\": \"23072024182408\", \"exchdisstime\": \"23-Jul-2024 18:24:09\", \"fileSize\": \"-\", \"hasXbrl\": false, \"old_new\": null, \"orgid\": null, \"seq_id\": \"105923238\", \"smIndustry\": \"Computers - Software\", \"sm_isin\": \"INE009A01021\", \"sm_name\": \"Infosys Limited\", \"sort_date\": \"2024-07-23 18:24:08\", \"symbol\": \"INFY\"}, {\"an_dt\": \"23-Jul-2024 17:57:37\", \"attFileSize\": null, \"attchmntFile\": \"https://nsearchives.nseindia.com/corporate/AJRINFRA_23072024175737_AJRITL_TIDCL_DIVESTMENT.pdf\", \"attchmntText\": \"AJR INFRA AND TOLLING LIMITED has informed the Exchange about Diversification/Disinvestment\", \"bflag\": null, \"csvName\": null, \"desc\": \"Diversification/Disinvestment\", \"difference\": \"00:00:01\", \"dt\": \"23072024175737\", \"exchdisstime\": \"23-Jul-2024 17:57:38\", \"fileSize\": \"-\", \"hasXbrl\": false, \"old_new\": null, \"orgid\": null, \"seq_id\": \"105923178\", \"smIndustry\": null, \"sm_isin\": \"INE181G01025\", \"sm_name\": \"AJR INFRA AND TOLLING LIMITED\", \"sort_date\": \"2024-07-23 17:57:37\", \"symbol\": \"AJRINFRA\"}, {\"an_dt\": \"23-Jul-2024 17:16:00\", \"attFileSize\": null, \"attchmntFile\": \"https://nsearchives.nseindia.com/corporate/RELIANCE_23072024171600_LossOfCert22072024.pdf\", \"attchmntText\": \"Pursuant to Regulation 39(3) of the Securities and Exchange Board of India (ListingObligations and Disclosure Requirements) Regulations, 2015, we enclose the informationregarding loss of share certificate(s) for 10,593 (Ten Thousand Five Hundred and NinetyThree) shares received from the shareholder(s) of the Company on July 22, 2024. Asrequired under SEBI Circular No. SEBI / HO / MIRSD / MIRSD_RTAMB / P /CIR /2022/8dated January 25, 2022, the Company shall issue  Letter of Confirmation  to theshareholders after compliance of required formalities.\", \"bflag\": null, \"csvName\": null, \"desc\": \"Loss of Share Certificates\", \"difference\": \"00:00:01\", \"dt\": \"23072024171600\", \"exchdisstime\": \"23-Jul-2024 17:16:01\", \"fileSize\": \"-\", \"hasXbrl\": false, \"old_new\": null, \"orgid\": null, \"seq_id\": \"105923068\", \"smIndustry\": \"Refineries\", \"sm_isin\": \"INE002A01018\", \"sm_name\": \"Reliance Industries Limited\", \"sort_date\": \"2024-07-23 17:16:00\", \"symbol\": \"RELIANCE\"}, {\"an_dt\": \"23-Jul-2024 17:11:19\", \"attFileSize\": null, \"attchmntFile\": \"https://nsearchives.nseindia.com/corporate/RELIANCE_23072024171119_IssuanceOfCert22072024.pdf\", \"attchmntText\": \"Pursuant to Regulation 39(3) of the Securities and Exchange Board of India (ListingObligations and Disclosure Requirements) Regulations, 2015 and in terms of SEBICircular No. SEBI / HO / MIRSD / MIRSD_RTAMB / P / CIR / 2022 / 8 dated January 25,2022, we enclose the details of  Letter(s) of Confirmation  issued by the Company to itsshareholders, in lieu of share certificate(s) reported as lost by them.\", \"bflag\": null, \"csvName\": null, \"desc\": \"Loss of Share Certificates\", \"difference\": \"00:00:01\", \"dt\": \"23072024171119\", \"exchdisstime\": \"23-Jul-2024 17:11:20\", \"fileSize\": \"-\", \"hasXbrl\": false, \"old_new\": null, \"orgid\": null, \"seq_id\": \"105923059\", \"smIndustry\": \"Refineries\", \"sm_isin\": \"INE002A01018\", \"sm_name\": \"Reliance Industries Limited\", \"sort_date\": \"2024-07-23 17:11:19\", \"symbol\": \"RELIANCE\"}, {\"an_dt\": \"23-Jul-2024 17:02:01\", \"attFileSize\": null, \"attchmntFile\": \"https://nsearchives.nseindia.com/corporate/JISLDVREQS_23072024170201_Outcome_BM_23_07_2024_.pdf\", \"attchmntText\": \"Jain Irrigation Systems Limited has informed the Exchange regarding Outcome of Board Meeting held on July 23, 2024.\", \"bflag\": null, \"csvName\": null, \"desc\": \"Outcome of Board Meeting\", \"difference\": \"00:00:02\", \"dt\": \"23072024170201\", \"exchdisstime\": \"23-Jul-2024 17:02:03\", \"fileSize\": \"-\", \"hasXbrl\": false, \"old_new\": null, \"orgid\": null, \"seq_id\": \"105923042\", \"smIndustry\": \"-\", \"sm_isin\": \"IN9175A01010\", \"sm_name\": \"Jain Irrigation Systems Limited\", \"sort_date\": \"2024-07-23 17:02:01\", \"symbol\": \"JISLDVREQS\"}, {\"an_dt\": \"23-Jul-2024 17:00:07\", \"attFileSize\": null, \"attchmntFile\": \"https://nsearchives.nseindia.com/corporate/JISLJALEQS_23072024170007_Outcome_BM_23_07_2024_.pdf\", \"attchmntText\": \"Jain Irrigation Systems Limited has informed the Exchange regarding Outcome of Board Meeting held on July 23, 2024.\", \"bflag\": null, \"csvName\": null, \"desc\": \"Outcome of Board Meeting\", \"difference\": \"00:00:01\", \"dt\": \"23072024170007\", \"exchdisstime\": \"23-Jul-2024 17:00:08\", \"fileSize\": \"-\", \"hasXbrl\": false, \"old_new\": null, \"orgid\": null, \"seq_id\": \"105923039\", \"smIndustry\": \"Plastic And Plastic Products\", \"sm_isin\": \"INE175A01020\", \"sm_name\": \"Jain Irrigation Systems Limited\", \"sort_date\": \"2024-07-23 17:00:07\", \"symbol\": \"JISLJALEQS\"}, {\"an_dt\": \"23-Jul-2024 15:09:34\", \"attFileSize\": null, \"attchmntFile\": \"https://nsearchives.nseindia.com/corporate/BAJAJ-AUTO_23072024150934_TranscriptQ1FY25.pdf\", \"attchmntText\": \"Bajaj Auto Limited has informed the Exchange about Transcript\", \"bflag\": null, \"csvName\": null, \"desc\": \"Analysts/Institutional Investor Meet/Con. Call Updates\", \"difference\": \"00:00:00\", \"dt\": \"23072024150934\", \"exchdisstime\": \"23-Jul-2024 15:09:34\", \"fileSize\": \"-\", \"hasXbrl\": false, \"old_new\": null, \"orgid\": null, \"seq_id\": \"105922772\", \"smIndustry\": \"Automobiles - 2 And 3 Wheelers\", \"sm_isin\": \"INE917I01010\", \"sm_name\": \"Bajaj Auto Limited\", \"sort_date\": \"2024-07-23 15:09:34\", \"symbol\": \"BAJAJ-AUTO\"}]",
+    "body_encoding": "utf-8"
+  }
+}
