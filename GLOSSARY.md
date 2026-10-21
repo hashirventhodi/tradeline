@@ -4,17 +4,31 @@ A long-only swing trading platform for NSE cash equities. A deterministic quant 
 
 ## Language
 
+### Instruments
+
+**Instrument**:
+One NSE-listed equity followed across its Symbols, series, and ISINs, from listing to delisting. Two Instruments are never joined because their companies merged.
+_Avoid_: Company (one company can become several, and several one), stock, ticker, security
+
+**Symbol**:
+The name an Instrument trades under on NSE on a given day. An Instrument can have several over its life; a Symbol names at most one Instrument on any day.
+_Avoid_: Ticker, trading symbol (Kite's term for its own name of an instrument)
+
+**Instrument Link**:
+The dated, sourced evidence that joins two stretches of history into one Instrument: an NSE symbol-change record, an ISIN change on the Ex-Date of a split, bonus, or consolidation, or a reviewed manual link citing an official source. Never inferred from a name or a price.
+_Avoid_: Mapping, alias, merge
+
 ### Universe and selection
 
 **Universe**:
-The set of symbols eligible for trading on a given date, chosen by the Universe Rule.
+The set of Instruments eligible for trading on a given date, chosen by the Universe Rule.
 _Avoid_: Watchlist, basket, index
 
 **Universe Rule**:
-The deterministic rule that defines the Universe at a point in time (currently: top 200 NSE stocks by trailing six-month traded value, recomputed monthly).
+The deterministic rule that defines the Universe at a point in time (currently: top 200 NSE Instruments by trailing six-month traded value, recomputed monthly). An Instrument's traded value and listing age count across every Symbol it has had.
 
 **Candidate**:
-A symbol in the Universe that the Strategy's screen surfaced on a given Run.
+An Instrument in the Universe that the Strategy's screen surfaced on a given Run.
 _Avoid_: Signal, pick, idea, opportunity
 
 **Strategy**:
@@ -82,14 +96,14 @@ The explicit, confirmed command to close every open Position at market. Distinct
 ### Execution
 
 **Order**:
-An instruction sent to the Broker Adapter to buy or sell a quantity of a symbol under stated conditions.
+An instruction sent to the Broker Adapter to buy or sell a quantity of an Instrument, under the Symbol it trades under that day, on stated conditions.
 
 **Fill**:
 A confirmed execution of all or part of an Order at a price.
 _Avoid_: Execution, trade
 
 **Position**:
-The net holding in one symbol, with its cost basis, stop, target, and the Plan it came from.
+The net holding in one Instrument, kept as one Position across a change of Symbol, with its cost basis, stop, target, and the Plan it came from.
 _Avoid_: Holding, trade
 
 **Broker Adapter**:
@@ -121,15 +135,15 @@ Average profit per trade after all costs, in rupees or as a fraction of equity.
 ### Price data
 
 **Raw Series**:
-A symbol's daily prices and volumes exactly as NSE's official end-of-day files state them, never adjusted and never modified.
+An Instrument's daily prices and volumes exactly as NSE's official end-of-day files state them, each day under the Symbol it was published under, never adjusted and never modified.
 _Avoid_: Unadjusted prices, raw candles (the broker's candles are the broker's own adjusted view)
 
 **Corporate Action**:
-An event NSE lists for a symbol that takes effect on an Ex-Date: a split, bonus, rights issue, dividend, demerger, or meeting. Splits and bonuses change the Adjusted Series; rights issues and dividends are flagged on it; the rest are recorded only.
+An event NSE lists for a Symbol that takes effect on an Ex-Date, and so for the Instrument that Symbol named that day: a split, bonus, rights issue, dividend, demerger, or meeting. Splits and bonuses change the Adjusted Series; rights issues and dividends are flagged on it; the rest are recorded only.
 _Avoid_: CA, event, announcement (an announcement is a filing, which may or may not describe a Corporate Action)
 
 **Ex-Date**:
-The first trading day on which a symbol trades without the entitlement of a Corporate Action, so the day the market price reflects it.
+The first trading day on which an Instrument trades without the entitlement of a Corporate Action, so the day the market price reflects it.
 _Avoid_: Effective date, action date, record date (the record date is the later date on which holders are fixed)
 
 **Adjustment Factor**:
@@ -137,7 +151,7 @@ The exact ratio by which the prices of every bar before an Ex-Date are multiplie
 _Avoid_: Multiplier, ratio, adjustment
 
 **Adjusted Series**:
-The Raw Series with every Corporate Action known on an As-Of Date applied, computed whenever it is read and never stored. The only price series the engine, the backtester, and the tests read.
+The Raw Series with every Corporate Action known on an As-Of Date applied, whichever of the Instrument's Symbols it was filed under, computed whenever it is read and never stored. The only price series the engine, the backtester, and the tests read.
 _Avoid_: Adjusted candles, continuous prices, clean prices
 
 **As-Of Date**:
