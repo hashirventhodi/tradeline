@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from tradeline.environment import Environment
-from tradeline.login import login, login_url_for
+from tradeline.login import login
 from tradeline.secrets import EnvSecrets, MissingSecret
 from tradeline.sources.kite import KiteError
 from tradeline.transport import PlaybackTransport
@@ -28,10 +28,6 @@ def secrets(tmp_path: Path) -> EnvSecrets:
     env_file = tmp_path / ".env"
     env_file.write_text("KITE_API_KEY=test_api_key\nKITE_API_SECRET=test_api_secret\n")
     return EnvSecrets.for_environment(Environment.DEVELOPMENT, env_file=env_file, environ={})
-
-
-def test_the_login_url_names_the_api_key(secrets: EnvSecrets) -> None:
-    assert login_url_for(secrets) == "https://kite.trade/connect/login?v=3&api_key=test_api_key"
 
 
 def test_a_request_token_is_exchanged_and_the_access_token_stored_for_today(

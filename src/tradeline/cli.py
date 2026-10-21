@@ -19,11 +19,10 @@ from zoneinfo import ZoneInfo
 from tradeline.config import Config, default_config_path, load_config
 from tradeline.db import app_connection, connect
 from tradeline.environment import Environment
-from tradeline.ingest.candles import INTERVAL_DAY, ingest_candles
+from tradeline.ingest.candles import ingest_candles
 from tradeline.ingest.eod import ingest_eod
 from tradeline.logging import configure_logging
 from tradeline.login import login as login_service
-from tradeline.login import login_url_for
 from tradeline.migrations import apply_migrations
 from tradeline.secrets import (
     DATABASE_URL,
@@ -33,7 +32,7 @@ from tradeline.secrets import (
     MissingSecret,
     SecretsProvider,
 )
-from tradeline.sources.kite import KiteError, KiteSession
+from tradeline.sources.kite import INTERVAL_DAY, KiteError, KiteSession, login_url
 from tradeline.transport import (
     PlaybackTransport,
     RecordingTransport,
@@ -64,10 +63,11 @@ def migrate(ctx: Context, args: argparse.Namespace) -> int:
 def login(ctx: Context, args: argparse.Namespace) -> int:
     """Print the Kite login URL, take the request token back, store the day's access token.
 
-    The URL and the prompt go to stderr so stdout stays one JSON line per event.
+    The URL and the prompt go to stderr so stdout stays one JSON line per event;
+    the URL carries the API key, so it is not logged.
     """
-    url = login_url_for(ctx.secrets)
-    log.info("kite login url", extra={"login_url": url})
+    url = login_url(ctx.secrets.require(KITE_API_KEY))
+    log.info("kite login url printed; waiting for the request token")
     sys.stderr.write(f"Open this URL, log in to Kite, and paste back the request_token:\n{url}\n")
     request_token = args.request_token
     if request_token is None:
@@ -76,11 +76,16 @@ def login(ctx: Context, args: argparse.Namespace) -> int:
         request_token = sys.stdin.readline().strip()
     if not request_token:
         raise ValueError("no request token was given")
+    # Playback only: a recording would write the API key and a live request
+    # token into a fixture body, which the transport's rule against recording
+    # credentials exists to prevent.
+    transport = (
+        PlaybackTransport(args.play_fixtures)
+        if args.play_fixtures is not None
+        else transport_for(ctx.environment)
+    )
     result = login_service(
-        ctx.secrets,
-        _transport(ctx, args),
-        request_token=request_token,
-        today=datetime.now(IST).date(),
+        ctx.secrets, transport, request_token=request_token, today=datetime.now(IST).date()
     )
     log.info("login finished", extra={"user_id": result.user_id, "issued_on": result.issued_on})
     return 0
@@ -183,8 +188,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     login_parser = subparsers.add_parser(
         "login",
-        parents=[fixtures],
         help="the daily Kite Session Login: print the login URL, store the access token",
+    )
+    login_parser.add_argument(
+        "--play-fixtures",
+        metavar="DIR",
+        type=Path,
+        help="serve a recorded token exchange from DIR instead of calling Kite",
     )
     login_parser.add_argument(
         "--request-token",
@@ -215,7 +225,8 @@ def build_parser() -> argparse.ArgumentParser:
         dest="symbols",
         metavar="SYMBOL",
         action="append",
-        help="an NSE symbol to load; repeatable; defaults to every symbol with a Kite token",
+        help="an NSE symbol to load under every series it has; repeatable;"
+        " defaults to every EQ series symbol with a Kite token",
     )
     return parser
 

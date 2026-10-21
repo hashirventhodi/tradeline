@@ -149,7 +149,7 @@ def test_login_prints_the_url_exchanges_the_pasted_token_and_stores_it(
     assert "https://kite.trade/connect/login?v=3&api_key=test_api_key" in captured.err
     lines = json_lines(captured.out)
     assert all(line["command"] == "login" for line in lines)
-    assert lines[0]["login_url"] == "https://kite.trade/connect/login?v=3&api_key=test_api_key"
+    assert "test_api_key" not in captured.out  # the API key is for the Operator's eyes only
     assert lines[-1]["user_id"] == "AB1234"
     assert os.environ["KITE_ACCESS_TOKEN"] == "test_access_token"
     assert os.environ["KITE_ACCESS_TOKEN_ISSUED_ON"] == datetime.now(IST).date().isoformat()

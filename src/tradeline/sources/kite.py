@@ -45,22 +45,14 @@ SESSION_TOKEN_URL = f"{API_HOST}/session/token"
 HISTORICAL_URL = f"{API_HOST}/instruments/historical"
 KITE_HEADERS: dict[str, str] = {"X-Kite-Version": "3"}
 
-# The historical API's documented limits.
+# The historical API's documented limits. Only daily candles are loaded so far;
+# minute candles (60 days per request) arrive with their own issue.
 REQUESTS_PER_SECOND = 3.0
-MAX_DAYS_PER_REQUEST: dict[str, int] = {
-    "minute": 60,
-    "3minute": 100,
-    "5minute": 100,
-    "10minute": 100,
-    "15minute": 200,
-    "30minute": 200,
-    "60minute": 400,
-    "day": 2000,
-}
+INTERVAL_DAY = "day"
+MAX_DAYS_PER_REQUEST: dict[str, int] = {INTERVAL_DAY: 2000}
 
 # Exponential backoff on throttling (429) and server errors: the delay before each retry.
 RETRY_DELAYS_SECONDS: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0)
-_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 
 
 class KiteError(RuntimeError):
@@ -153,13 +145,12 @@ class KiteSession:
         access_token: str,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
-        requests_per_second: float = REQUESTS_PER_SECOND,
     ) -> None:
         self._transport = transport
         self._headers = {**KITE_HEADERS, "Authorization": f"token {api_key}:{access_token}"}
         self._clock = clock
         self._sleep = sleep
-        self._min_interval = 1.0 / requests_per_second
+        self._min_interval = 1.0 / REQUESTS_PER_SECOND
         self._last_sent_at: float | None = None
         self.requests_sent = 0
 
@@ -167,7 +158,7 @@ class KiteSession:
         """GET ``url`` and return Kite's JSON envelope; a Kite error is raised by type."""
         response = self._send(url)
         for attempt, delay in enumerate(RETRY_DELAYS_SECONDS, start=1):
-            if response.status not in _RETRY_STATUSES:
+            if not _is_throttled_or_failing(response.status):
                 break
             log.warning(
                 "kite throttled or failing; backing off",
@@ -185,6 +176,10 @@ class KiteSession:
         self._last_sent_at = self._clock()
         self.requests_sent += 1
         return self._transport.send(Request("GET", url, headers=self._headers))
+
+
+def _is_throttled_or_failing(status: int) -> bool:
+    return status == 429 or 500 <= status <= 599
 
 
 def _envelope(response: Response, url: str) -> Any:
@@ -247,8 +242,8 @@ def fetch_daily_candles(
 ) -> list[Candle]:
     """Raw daily candles for one instrument, oldest first, exactly as Kite returned them."""
     candles: list[Candle] = []
-    for chunk_start, chunk_end in candle_ranges(start, end, interval="day"):
-        url = historical_url(instrument_token, "day", chunk_start, chunk_end)
+    for chunk_start, chunk_end in candle_ranges(start, end, interval=INTERVAL_DAY):
+        url = historical_url(instrument_token, INTERVAL_DAY, chunk_start, chunk_end)
         candles.extend(parse_candles(session.get_json(url)))
     return candles
 

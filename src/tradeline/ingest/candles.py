@@ -4,9 +4,13 @@ One ingest run (source ``kite_candles_daily``) covers every requested symbol
 over the range. Each symbol is looked up in the instrument master for its
 Kite instrument token, fetched in chunks the historical API accepts at no
 more than 3 requests per second (``KiteSession``), and committed before the
-next symbol starts, so an interrupted run keeps what it loaded. A symbol in
-the master without a token is skipped and reported; a symbol not in the
-master is refused up front (``ingest eod`` loads the master).
+next symbol starts, so an interrupted run keeps what it loaded. Without a
+symbol list, every ``EQ`` series symbol with a token is loaded: Phase 1 is
+scoped to series ``EQ``. A named symbol is loaded under every series it has
+in the master, so a symbol that moved between series (``EQ`` to ``BE`` and
+back) can be given a continuous history on purpose. A symbol in the master
+without a token is skipped and reported; a symbol not in the master is
+refused up front (``ingest eod`` loads the master).
 
 Bars are stored exactly as Kite returned them. A bar already stored is left
 as it is: Kite can resend a bar, and a resend whose values differ is an
@@ -33,7 +37,7 @@ log = logging.getLogger(__name__)
 
 COMMAND = "ingest"
 SOURCE_DAILY = "kite_candles_daily"
-INTERVAL_DAY = "day"
+EQUITY_SERIES = "EQ"
 # Anomalies are counted in full; this many are recorded in detail per run.
 MAX_RECORDED_ANOMALIES = 100
 
@@ -62,7 +66,7 @@ def ingest_candles(
     end: date,
     symbols: Sequence[str] | None = None,
 ) -> CandleIngestResult:
-    """Load daily candles for ``symbols`` (every symbol with a token when None)."""
+    """Load daily candles for ``symbols`` (every ``EQ`` symbol with a token when None)."""
     if end < start:
         raise ValueError(f"range end {end} is before start {start}")
     instruments = _instruments(conn, symbols)
@@ -82,15 +86,16 @@ def ingest_candles(
 
 
 def _instruments(conn: psycopg.Connection, symbols: Sequence[str] | None) -> list[_Instrument]:
+    wanted = None if symbols is None else list(symbols)
     rows = conn.execute(
         "SELECT symbol, series, kite_instrument_token FROM symbols"
-        " WHERE %s::text[] IS NULL OR symbol = ANY(%s::text[])"
+        " WHERE CASE WHEN %s::text[] IS NULL THEN series = %s ELSE symbol = ANY(%s::text[]) END"
         " ORDER BY symbol, series",
-        (symbols, symbols),
+        (wanted, EQUITY_SERIES, wanted),
     ).fetchall()
     instruments = [_Instrument(symbol, series, token) for symbol, series, token in rows]
-    if symbols is not None:
-        unknown = sorted(set(symbols) - {i.symbol for i in instruments})
+    if wanted is not None:
+        unknown = sorted(set(wanted) - {i.symbol for i in instruments})
         if unknown:
             raise ValueError(
                 f"symbols not in the instrument master: {', '.join(unknown)};"
@@ -112,7 +117,7 @@ def _load_symbols(
     anomaly_bars: list[dict[str, Any]] = []
     without_token: list[str] = []
     run.details = {
-        "interval": INTERVAL_DAY,
+        "interval": kite.INTERVAL_DAY,
         "symbols_requested": len(instruments),
         "symbols_without_token": without_token,
         "anomalies": 0,
@@ -152,7 +157,7 @@ def _load_symbols(
     return loaded
 
 
-_VALUES = ("open", "high", "low", "close", "volume")
+_CANDLE_VALUES = ("open", "high", "low", "close", "volume")  # everything but the key
 
 
 def _insert_candles(
@@ -161,8 +166,8 @@ def _insert_candles(
     """Insert what is new; return the count and an anomaly record per present bar that differs."""
     if not candles:
         return 0, []
-    stored = ", ".join(f"c.{name}" for name in _VALUES)
-    incoming = ", ".join(f"n.{name}" for name in _VALUES)
+    stored = ", ".join(f"c.{name}" for name in _CANDLE_VALUES)
+    incoming = ", ".join(f"n.{name}" for name in _CANDLE_VALUES)
     row = conn.execute(
         "WITH incoming AS ("
         "  SELECT * FROM unnest(%s::date[], %s::numeric[], %s::numeric[], %s::numeric[],"

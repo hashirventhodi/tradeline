@@ -124,18 +124,20 @@ def daily_candles(
     *,
     start: date,
     end: date,
-    series: str = "EQ",
+    series: str | None = None,
 ) -> list[DailyCandle]:
     """Raw daily candles for ``symbol`` from ``start`` to ``end`` inclusive, oldest first.
 
     Exactly as Kite returned them: unadjusted. The adjusted series arrives
-    with corporate actions and is computed on read, never stored.
+    with corporate actions and is computed on read, never stored. All series
+    are returned unless one is named, as for ``end_of_day``.
     """
     rows = conn.execute(
         "SELECT trade_date, symbol, series, open, high, low, close, volume"
         " FROM candles_daily"
-        " WHERE symbol = %s AND series = %s AND trade_date BETWEEN %s AND %s"
-        " ORDER BY trade_date",
-        (symbol, series, start, end),
+        " WHERE symbol = %s AND trade_date BETWEEN %s AND %s"
+        " AND (%s::text IS NULL OR series = %s)"
+        " ORDER BY trade_date, series",
+        (symbol, start, end, series, series),
     ).fetchall()
     return [DailyCandle(*row) for row in rows]

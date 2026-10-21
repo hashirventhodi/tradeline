@@ -33,7 +33,7 @@ FIXTURES = Path(__file__).parent / "fixtures" / "ingest_candles"
 RESEND = Path(__file__).parent / "fixtures" / "ingest_candles_resend"
 START, END = date(2024, 7, 1), date(2024, 8, 30)
 TRADING_DAYS = 43
-SYMBOLS = 5
+SYMBOLS = 4  # the EQ series symbols; BAFNAPH is BE and is loaded only when named
 
 
 class FakeClock:
@@ -58,6 +58,18 @@ class TimedPlayback:
     def send(self, request: Request) -> Response:
         self.calls.append((self._clock.now, request))
         return self._inner.send(request)
+
+
+class ChunkedKite:
+    """Answers any historical request with the same bars; records the requests it sees."""
+
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+        self.calls: list[Request] = []
+
+    def send(self, request: Request) -> Response:
+        self.calls.append(request)
+        return Response(200, (("content-type", "application/json"),), self._body)
 
 
 def kite_session(transport: TimedPlayback, clock: FakeClock) -> KiteSession:
@@ -155,13 +167,52 @@ def test_the_query_layer_returns_raw_daily_candles_for_a_symbol_and_range(
     assert first.volume == 6801771
 
 
-def test_the_range_is_inclusive_and_series_is_part_of_the_key(conn: psycopg.Connection) -> None:
+def test_the_range_is_inclusive_and_a_symbol_outside_the_fixtures_has_no_bars(
+    conn: psycopg.Connection,
+) -> None:
     assert len(queries.daily_candles(conn, "BAJAJ-AUTO", start=START, end=END)) == TRADING_DAYS
     assert queries.daily_candles(conn, "INFY", start=date(2024, 6, 1), end=date(2024, 6, 30)) == []
     assert queries.daily_candles(conn, "KHADIM", start=START, end=END) == []
-    assert queries.daily_candles(conn, "BAFNAPH", start=START, end=END) == []
-    be = queries.daily_candles(conn, "BAFNAPH", start=START, end=END, series="BE")
-    assert len(be) == TRADING_DAYS
+
+
+def test_a_be_series_symbol_is_not_loaded_by_default_but_is_when_named(
+    database_url: str, two_runs: TwoRuns
+) -> None:
+    clock = FakeClock()
+    transport = TimedPlayback(FIXTURES, clock)
+    with app_connection(database_url) as conn:
+        assert queries.daily_candles(conn, "BAFNAPH", start=START, end=END) == []
+        result = ingest_candles(
+            conn, kite_session(transport, clock), start=START, end=END, symbols=["BAFNAPH"]
+        )
+        everything = queries.daily_candles(conn, "BAFNAPH", start=START, end=END)
+        be = queries.daily_candles(conn, "BAFNAPH", start=START, end=END, series="BE")
+        eq = queries.daily_candles(conn, "BAFNAPH", start=START, end=END, series="EQ")
+
+    assert result.rows_written == TRADING_DAYS
+    assert len(everything) == len(be) == TRADING_DAYS
+    assert eq == []
+
+
+def test_a_range_longer_than_kites_limit_is_fetched_in_chunks_of_two_thousand_days(
+    database_url: str, two_runs: TwoRuns
+) -> None:
+    """Kite answers one request with at most 2000 days; the service asks in pieces."""
+    kite = ChunkedKite(b'{"status":"success","data":{"candles":[]}}')
+    clock = FakeClock()
+    session = KiteSession(
+        kite, api_key="key", access_token="tok", clock=clock.time, sleep=clock.sleep
+    )
+    with app_connection(database_url) as conn:
+        result = ingest_candles(
+            conn, session, start=date(2019, 1, 1), end=date(2024, 8, 30), symbols=["INFY"]
+        )
+
+    assert result.requests == 2
+    assert [request.url.split("?")[1] for request in kite.calls] == [
+        "from=2019-01-01&to=2024-06-22",  # 2000 days inclusive
+        "from=2024-06-23&to=2024-08-30",
+    ]
 
 
 def test_a_resent_bar_with_a_changed_close_keeps_the_stored_bar_and_records_an_anomaly(
@@ -228,6 +279,7 @@ def test_a_symbol_without_a_kite_token_is_skipped_and_reported(
     clock = FakeClock()
     transport = TimedPlayback(FIXTURES, clock)
     with app_connection(database_url) as conn:
+        # Setup, not an assertion: the fixtures hold no symbol Kite's dump lacks.
         conn.execute("INSERT INTO symbols (symbol, series) VALUES ('NOTOKEN', 'EQ')")
         conn.commit()
         result = ingest_candles(

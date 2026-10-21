@@ -33,10 +33,6 @@ class LoginResult:
     issued_on: date
 
 
-def login_url_for(secrets: SecretsProvider) -> str:
-    return kite.login_url(secrets.require(KITE_API_KEY))
-
-
 def login(
     secrets: SecretsProvider, transport: Transport, *, request_token: str, today: date
 ) -> LoginResult:

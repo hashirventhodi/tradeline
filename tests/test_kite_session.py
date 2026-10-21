@@ -11,13 +11,7 @@ from itertools import pairwise
 
 import pytest
 
-from tradeline.sources.kite import (
-    KiteError,
-    KiteSession,
-    candle_ranges,
-    fetch_daily_candles,
-    historical_url,
-)
+from tradeline.sources.kite import KiteError, KiteSession, candle_ranges
 from tradeline.transport import Request, Response
 
 URL = "https://api.kite.trade/instruments/historical/408065/day?from=2024-07-01&to=2024-07-05"
@@ -109,7 +103,7 @@ def test_no_wait_is_inserted_when_enough_time_has_already_passed() -> None:
 
 def test_throttling_and_server_errors_back_off_exponentially_then_retry() -> None:
     clock = FakeClock()
-    transport = ScriptedTransport(clock, status(429), status(503), status(500), ok())
+    transport = ScriptedTransport(clock, status(429), status(503), status(520), ok())
 
     data = session(transport, clock).get_json(URL)
 
@@ -150,20 +144,3 @@ def test_daily_ranges_are_chunked_to_at_most_two_thousand_days_each() -> None:
         (date(2019, 1, 1), date(2024, 6, 22)),  # 2000 days inclusive
         (date(2024, 6, 23), date(2024, 8, 30)),
     ]
-
-
-def test_fetching_a_long_daily_range_makes_one_request_per_chunk_in_order() -> None:
-    clock = FakeClock()
-    empty = b'{"status":"success","data":{"candles":[]}}'
-    transport = ScriptedTransport(clock, ok(empty), ok())
-
-    candles = fetch_daily_candles(
-        session(transport, clock), 408065, start=date(2019, 1, 1), end=date(2024, 8, 30)
-    )
-
-    assert [r.url for r in transport.sent] == [
-        historical_url(408065, "day", date(2019, 1, 1), date(2024, 6, 22)),
-        historical_url(408065, "day", date(2024, 6, 23), date(2024, 8, 30)),
-    ]
-    assert [c.trade_date for c in candles] == [date(2024, 7, 1), date(2024, 7, 2)]
-    assert str(candles[0].close) == "1590.8" and candles[0].volume == 6801771
