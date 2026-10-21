@@ -23,8 +23,9 @@ Instrument Link with a date and a source:
 - ``corporate_action``: the same Symbol with a new ISIN where a split or bonus
   of that Symbol (or filed under another Symbol with the old or new ISIN, as
   NSE files past actions under the Symbol of today) has its Ex-Date at the
-  change, from the old ISIN's last row to
-  the new ISIN's first, give or take a week (``EX_DATE_SLACK``). NSE's files
+  change: within a week (``EX_DATE_SLACK``) of both the old ISIN's last row
+  and the new ISIN's first, so an action in a long gap between the two ISINs
+  explains nothing. NSE's files
   do not switch ISIN on the Ex-Date exactly: on the #13 data the new ISIN
   first appears on the Ex-Date (200 changes), the next trading day (176;
   HDFCBANK 2019-09-19, BEL, EICHERMOT, TATASTEEL), two days after (10;
@@ -82,8 +83,8 @@ LinkKind = Literal["corporate_action", "symbol_change", "manual"]
 KeyFrom = Literal["listing_date", "first_row"]
 AnomalyKind = Literal["unexplained_isin_change", "conflicting_link"]
 
-# How far a split's or bonus's Ex-Date may fall outside the change from the old
-# ISIN's last row to the new one's first and still explain it. NSE's files switch
+# How far a split's or bonus's Ex-Date may fall from the old ISIN's last row, and
+# from the new one's first, and still explain the change. NSE's files switch
 # ISIN from two trading days after the Ex-Date to one before it (IRCON 2020,
 # AHCL 2026); a week of calendar days covers that across a weekend and a holiday.
 EX_DATE_SLACK = timedelta(days=7)
@@ -298,11 +299,7 @@ def _isin_changes(
                 *(by_isin.get(isin, set()) for isin in (old.isin, new.isin) if isin is not None)
             )
             explaining = sorted(
-                (
-                    a
-                    for a in filed
-                    if old.last - EX_DATE_SLACK <= a.ex_date <= new.first + EX_DATE_SLACK
-                ),
+                (a for a in filed if _at_change(a.ex_date, old.last, new.first)),
                 key=lambda a: (a.ex_date, a.symbol != symbol, a.symbol, a.series, a.subject),
             )
             if not explaining:
@@ -333,6 +330,13 @@ def _isin_changes(
             )
             proposals.append(_Proposal(link, (old, new)))
     return proposals
+
+
+def _at_change(ex_date: date, old_last: date, new_first: date) -> bool:
+    """Whether an Ex-Date is within ``EX_DATE_SLACK`` of both the old ISIN's last row and the
+    new one's first: the change happens around the Ex-Date, so a long gap between the two
+    ISINs is explained by nothing in it."""
+    return all(abs(ex_date - day) <= EX_DATE_SLACK for day in (old_last, new_first))
 
 
 def _symbol_changes(stretches: list[_Stretch], records: Sequence[SymbolChange]) -> list[_Proposal]:

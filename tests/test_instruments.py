@@ -496,3 +496,31 @@ def test_a_manual_link_joins_a_rename_nse_list_omits_and_carries_its_citation() 
         "PATANJALI",
     )
     assert link.source == f"manual link RUCHI to PATANJALI effective 2022-07-13: {RUCHI_CIRCULAR}"
+
+
+def test_a_bonus_between_two_isins_years_apart_explains_neither_end_of_the_gap() -> None:
+    # The old ISIN's last row is in 2017 and the new one's first in 2020: a
+    # bonus in 2018 is within a week of neither, so the change is not at its
+    # Ex-Date.
+    bonus = CorporateAction(
+        symbol="HDFCBANK",
+        series="EQ",
+        ex_date=date(2018, 5, 2),
+        subject="Bonus 1:1",
+        kind="bonus",
+        factor=Fraction(1, 2),
+    )
+    evidence = Evidence(
+        spans=[
+            span("HDFCBANK", HDFCBANK_OLD, date(2015, 1, 1), date(2017, 6, 30)),
+            span("HDFCBANK", HDFCBANK_NEW, date(2020, 1, 1), date(2026, 10, 19)),
+        ],
+        corporate_actions=[bonus],
+    )
+
+    built = build_instruments(evidence)
+
+    assert len(built.instruments) == 2
+    assert [(a.kind, a.on) for a in built.anomalies] == [
+        ("unexplained_isin_change", date(2020, 1, 1))
+    ]
