@@ -235,7 +235,7 @@ _NAMED = (
 
 def _rows(conn: psycopg.Connection, start: date, end: date, names: list[str] | None) -> list[_Row]:
     # Keyed by (Instrument, series, day): an end-of-day row belongs to the
-    # Instrument its Symbol named that day, like a candle (migration 0013). Of
+    # Instrument its Symbol named that day, like a candle (migration 0014). Of
     # two candles of one Instrument-day, the one under Kite's more recent name.
     found = conn.execute(
         "WITH instruments AS ("
