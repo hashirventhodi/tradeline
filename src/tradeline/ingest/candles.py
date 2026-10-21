@@ -1,4 +1,4 @@
-"""``ingest candles``: raw Kite candles into ``candles_daily`` or ``candles_minute``.
+"""``ingest candles``: Kite's candles into ``candles_daily`` or ``candles_minute``.
 
 One ingest run (source ``kite_candles_daily`` or ``kite_candles_minute``)
 covers every requested symbol over the range. Each symbol is looked up in the

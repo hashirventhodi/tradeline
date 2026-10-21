@@ -391,7 +391,7 @@ def build_parser() -> argparse.ArgumentParser:
     candles = sources.add_parser(
         "candles",
         parents=[fixtures, date_range],
-        help="raw Kite candles for symbols over a date range (needs `login` today)",
+        help="Kite's candles for symbols over a date range (needs `login` today)",
     )
     candles.add_argument(
         "--interval",
