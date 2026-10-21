@@ -55,8 +55,9 @@ def ingest(ctx: Context, args: argparse.Namespace) -> int:
         extra={
             "days_loaded": result.days_loaded,
             "missing_days": [day.isoformat() for day in result.missing_days],
-            "rows_written": result.rows_written,
-            "symbols_written": result.symbols_written,
+            "eod_rows_written": result.eod_rows_written,
+            "anomalies": result.anomalies,
+            "symbol_updates": result.symbol_updates,
         },
     )
     return 0
@@ -98,8 +99,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="record every live response into DIR as a fixture",
     )
-    ingest = subparsers.add_parser("ingest", help="load a source into the database")
-    sources = ingest.add_subparsers(dest="source", required=True)
+    ingest_parser = subparsers.add_parser("ingest", help="load a source into the database")
+    sources = ingest_parser.add_subparsers(dest="source", required=True)
     eod = sources.add_parser(
         "eod",
         parents=[fixtures],

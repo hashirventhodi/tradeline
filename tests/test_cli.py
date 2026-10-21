@@ -86,13 +86,14 @@ def test_ingest_eod_plays_fixtures_end_to_end_and_logs_every_run(
     assert code == 0
     lines = json_lines(capsys.readouterr().out)
     assert all(line["command"] == "ingest" for line in lines)
-    finished = [line for line in lines if line["msg"] == "run finished"]
+    finished = [line for line in lines if line["msg"] == "ingest run finished"]
     assert [line["source"] for line in finished] == [
         "nse_equity_master",
         "nse_eod",
         "kite_instruments",
     ]
-    assert all(line["run_id"] for line in finished)
+    assert all(line["ingest_run_id"] for line in finished)
+    assert (finished[1]["range_start"], finished[1]["range_end"]) == ("2024-07-01", "2024-07-05")
     assert finished[1]["rows_written"] == 25  # five days, five symbols
     assert lines[-1]["msg"] == "ingest eod finished"
     assert lines[-1]["days_loaded"] == 5
