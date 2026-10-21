@@ -202,6 +202,27 @@ def test_a_failing_source_is_recorded_as_failed_and_the_sources_after_it_still_r
     assert runs["rss"].rows_seen == 10
 
 
+def test_sources_a_failed_step_never_reached_are_recorded_as_not_run(
+    conn: psycopg.Connection,
+) -> None:
+    """NSE's archives are down, so the instrument master fails and ends the eod step."""
+    result = collect(conn, FailingHost(sources(), "nsearchives.nseindia.com"))
+
+    runs = {r.source: r for r in queries.ingest_runs(conn, collection_id=result.collection_id)}
+    assert sorted(runs) == sorted(SOURCES)
+    assert runs["nse_equity_master"].error == (
+        "ConnectError: cannot connect to nsearchives.nseindia.com"
+    )
+    for source in ("nse_eod", "kite_instruments"):
+        assert runs[source].status == "failed"
+        assert runs[source].command == "collect-daily"
+        assert runs[source].error == (
+            "NotRun: not run because nse_equity_master failed in the eod step"
+        )
+    assert runs["nse_eod"].range_start == runs["nse_eod"].range_end == DAY
+    assert {"nse_equity_master", "nse_eod", "kite_instruments"} <= set(result.failed_sources)
+
+
 def test_a_source_that_fails_before_its_service_starts_is_still_recorded(
     conn: psycopg.Connection,
 ) -> None:
@@ -254,6 +275,8 @@ def test_the_command_records_every_source_it_could_not_reach_and_exits_non_zero(
     assert last["day"] == "2024-08-01"
     expected = [
         "nse_equity_master",
+        "nse_eod",
+        "kite_instruments",
         "kite_candles_daily",
         "nse_announcements",
         "bse_announcements",

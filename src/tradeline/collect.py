@@ -15,7 +15,9 @@ Every ingest run made inside a collection carries the collection's id, so
 step that fails is recorded and the next step still runs. A step that fails
 before its service records anything (no Kite access token today, a Universe
 that cannot be computed) is recorded here, as a failed run of the source it
-was about to load, so every source has a row whatever happened.
+was about to load. A source its step never reached, because an earlier source
+of the same step failed, is recorded as failed too, with a ``NotRun`` error
+naming that source. So every source has a row whatever happened.
 """
 
 from __future__ import annotations
@@ -48,6 +50,10 @@ from tradeline.universe import compute_universe
 log = logging.getLogger(__name__)
 
 COMMAND = "collect-daily"
+
+
+class NotRun(Exception):
+    """A source was not run because an earlier source of its step failed."""
 
 
 @dataclass(frozen=True)
@@ -119,7 +125,7 @@ def collect_daily(
             except Exception as error:
                 log.exception("collection step failed", extra={"step": step})
                 conn.rollback()
-                _record_unrecorded_failure(conn, collection_id, sources, day, error)
+                _record_unrecorded_sources(conn, collection_id, step, sources, day, error)
         runs = tuple(reversed(queries.ingest_runs(conn, collection_id=collection_id)))
         result = CollectResult(collection_id, day, runs)
         log.log(
@@ -142,21 +148,35 @@ def _current_universe(conn: psycopg.Connection, rule: UniverseRule, day: date) -
     return CurrentUniverse(month=month, rule_version=rule.version)
 
 
-def _record_unrecorded_failure(
+def _record_unrecorded_sources(
     conn: psycopg.Connection,
     collection_id: uuid.UUID,
+    step: str,
     sources: tuple[str, ...],
     day: date,
     error: Exception,
 ) -> None:
-    """Record ``error`` against the step's first source unless the service already recorded it."""
-    recorded = {r.source for r in queries.ingest_runs(conn, collection_id=collection_id)}
-    if recorded & set(sources):
-        return
-    try:
-        with record_ingest_run(
-            conn, command=COMMAND, source=sources[0], range_start=day, range_end=day
-        ):
-            raise error
-    except Exception:
-        pass
+    """Give every source of a failed step that has no run a failed one.
+
+    The first source without a row gets ``error`` when no source of the step
+    recorded anything (the step failed before its service started); every
+    other source without a row was never reached, and says which source failed.
+    """
+    runs = queries.ingest_runs(conn, collection_id=collection_id)
+    recorded = {r.source for r in runs}
+    failed = next((r.source for r in runs if r.source in sources and r.status == "failed"), None)
+    for source in sources:
+        if source in recorded:
+            continue
+        if failed is None:
+            reason: Exception = error
+            failed = source
+        else:
+            reason = NotRun(f"not run because {failed} failed in the {step} step")
+        try:
+            with record_ingest_run(
+                conn, command=COMMAND, source=source, range_start=day, range_end=day
+            ):
+                raise reason
+        except Exception:
+            pass
