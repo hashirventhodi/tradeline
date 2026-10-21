@@ -1,4 +1,4 @@
-"""``sectors``: NSE's sector classification into ``sectors``, versioned by effective date.
+"""``sectors``: NSE's sector classification, each row dated from when it is in force.
 
 The classification comes from NSE's NIFTY Total Market constituent list, the
 widest list NSE publishes with a sector for each symbol (its ``Industry``

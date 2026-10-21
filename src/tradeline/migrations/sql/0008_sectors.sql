@@ -1,4 +1,4 @@
--- NSE's sector classification, versioned by effective date: one row per
+-- NSE's sector classification, each row in force from its date: one row per
 -- symbol per date on which its sector was first seen as stated. A load that
 -- finds a symbol's sector unchanged writes nothing; one that finds it changed
 -- writes a new row from the load's date, and the earlier row stays in force
