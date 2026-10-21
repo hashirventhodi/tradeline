@@ -14,7 +14,7 @@ untrimmed files with SQL over the loaded rows.
 
 from collections.abc import Iterator
 from dataclasses import replace
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -25,6 +25,7 @@ from tradeline import queries
 from tradeline.config import UniverseRule
 from tradeline.db import app_connection
 from tradeline.ingest.eod import ingest_eod
+from tradeline.queries import IST
 from tradeline.transport import PlaybackTransport
 from tradeline.universe import compute_universe
 
@@ -215,20 +216,24 @@ def test_a_month_recomputed_differently_after_a_late_file_is_an_anomaly_and_stor
     assert tuple(stored) == early.members
 
 
-def test_without_a_rule_version_the_latest_recorded_version_for_the_month_is_returned(
+def test_without_a_rule_version_the_latest_version_recorded_by_the_as_of_date_is_returned(
     conn: psycopg.Connection,
 ) -> None:
     compute_universe(conn, RULE, month=AUGUST)
     newest = replace(RULE, top_n=2)
     compute_universe(conn, newest, month=AUGUST)
+    today = datetime.now(IST).date()
 
-    latest = queries.universe_membership(conn, AUGUST, as_of=AUGUST)
+    latest = queries.universe_membership(conn, AUGUST, as_of=today)
 
     assert [(m.rule_version, m.symbol) for m in latest] == [
         (newest.version, "RELIANCE"),
         (newest.version, "INFY"),
     ]
-    assert queries.universe_membership(conn, date(2024, 9, 1), as_of=date(2024, 9, 1)) == []
+    assert queries.universe_membership(conn, date(2024, 9, 1), as_of=today) == []
+    # Both versions were recorded today, long after August 2024: on 1 August
+    # 2024 no rule version was known, so there was no Universe to pick.
+    assert queries.universe_membership(conn, AUGUST, as_of=AUGUST) == []
 
 
 def test_the_universe_for_a_month_is_not_known_before_the_month(conn: psycopg.Connection) -> None:
