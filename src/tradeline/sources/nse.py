@@ -334,7 +334,8 @@ def fetch_delistings(session: NseSession) -> list[Delisting]:
 
 
 def parse_delistings(body: bytes) -> list[Delisting]:
-    reader = csv.reader(io.StringIO(body.decode("utf-8-sig")))
+    # The list is in Windows encoding: some company names hold a 0xA0 non-breaking space.
+    reader = csv.reader(io.StringIO(body.decode("cp1252")))
     expected = ["Symbol", "Company", "Delisted Date", "Type of Delisting"]
     # NSE pads every line with five empty columns.
     header = [name.strip() for name in next(reader, [])]

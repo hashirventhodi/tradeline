@@ -20,10 +20,12 @@ kept rows are as served; only whole rows (or records) were removed.
   `../ingest_corporate_actions/`'s.
 - `GET_nsearchives.nseindia.com_content_equities_delisted.csv_*`: NSE's list
   of delisted securities (`Symbol,Company,Delisted Date,Type of Delisting`
-  and five empty columns), 328 records, trimmed to four: the first
-  (CABOTINDIA), one compulsory delisting (ANIKSHIP), ANGIND (delisted on
-  liquidation on 10 July 2020), and the last (HEXAWARE, 9 November 2020). It
-  is served with CRLF line ends, so the body is stored base64-encoded.
+  and five empty columns), 328 records, trimmed to five: the first
+  (CABOTINDIA), one compulsory delisting (ANIKSHIP), BENTOLCHEM (its company
+  name holds a 0xA0 byte, a non-breaking space in Windows encoding, which is
+  not UTF-8), ANGIND (delisted on liquidation on 10 July 2020), and the last
+  (HEXAWARE, 9 November 2020). It is served with CRLF line ends, so the body
+  is stored base64-encoded.
 
 Bodies served gzip-encoded are stored decoded with the `Content-Encoding`
 header dropped; `Content-Length` was set to each trimmed body's length. NSE's

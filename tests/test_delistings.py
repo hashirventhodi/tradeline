@@ -2,7 +2,8 @@
 
 The fixture (``fixtures/end_reasons/``, see its README) is NSE's
 ``delisted.csv`` recorded on 2026-10-21 through the NSE session, trimmed to
-four of its 328 records: the first, one of each kind of delisting, and the
+five of its 328 records: the first, one of each kind of delisting, one whose
+company name holds the non-breaking space of NSE's Windows encoding, and the
 last (HEXAWARE, 9 November 2020; NSE last changed the file on 11 November 2020).
 """
 
@@ -20,7 +21,7 @@ from tradeline.sources.nse import Delisting
 from tradeline.transport import PlaybackTransport
 
 FIXTURES = Path(__file__).parent / "fixtures" / "end_reasons"
-RECORDS = 4
+RECORDS = 5
 
 
 @pytest.fixture(scope="module")
@@ -59,6 +60,12 @@ def test_every_record_is_stored_as_nse_published_it(
             "ANIKSHIP",
             "Anik Ship Breaking Industries Ltd.",
             date(2004, 7, 26),
+            "Compulsory Delisting",
+        ),
+        Delisting(
+            "BENTOLCHEM",
+            "Chemox\u00a0Laboratories Limited",
+            date(2016, 11, 22),
             "Compulsory Delisting",
         ),
         Delisting("ANGIND", "ANG Industries Limited", date(2020, 7, 10), "Delisting - Liquidation"),
