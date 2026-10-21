@@ -6,6 +6,11 @@ sector classification. A load is dated by the day it was taken; a later load
 in which NSE has reclassified a symbol is made by playing the real recorded
 response back through ``reclassify``, which rewrites one symbol's sector on its
 way to the service, so no fixture file is edited and none is written by hand.
+
+A sector recorded before a rename is made the same way: NSE's current list
+trimmed to ETERNAL (``fixtures/instrument_sectors/``) is played back through
+``served_as``, which serves ETERNAL's line under ZOMATO, as the list read
+before 9 April 2025. The rename itself is ``fixtures/instruments/``.
 """
 
 from collections.abc import Iterator
@@ -18,6 +23,9 @@ import pytest
 from playback import Playback, lines
 from tradeline import queries
 from tradeline.db import app_connection
+from tradeline.ingest.eod import ingest_eod
+from tradeline.ingest.symbol_changes import ingest_symbol_changes
+from tradeline.rebuild_instruments import rebuild_instruments
 from tradeline.sectors import load_sectors
 from tradeline.transport import PlaybackTransport
 
@@ -60,7 +68,10 @@ def test_a_load_records_each_symbols_sector_in_force_from_the_load_date(
     assert sector_of(conn, "ABDL", FIRST_LOAD) == "Fast Moving Consumer Goods"
     found = queries.sector(conn, "HDFCBANK", as_of=FIRST_LOAD)
     assert found == queries.Sector(
-        symbol="HDFCBANK", sector="Financial Services", effective_from=FIRST_LOAD
+        symbol="HDFCBANK",
+        sector="Financial Services",
+        effective_from=FIRST_LOAD,
+        recorded_under="HDFCBANK",
     )
 
 
@@ -82,7 +93,10 @@ def test_a_later_load_with_a_changed_sector_adds_a_dated_row_and_keeps_the_earli
     assert sector_of(conn, "INFY", date(2024, 9, 29)) == "Information Technology"
     # Symbols NSE did not reclassify keep their first row.
     assert queries.sector(conn, "TCS", as_of=SECOND_LOAD) == queries.Sector(
-        symbol="TCS", sector="Information Technology", effective_from=FIRST_LOAD
+        symbol="TCS",
+        sector="Information Technology",
+        effective_from=FIRST_LOAD,
+        recorded_under="TCS",
     )
 
 
@@ -95,7 +109,10 @@ def test_reloading_an_unchanged_classification_writes_nothing(conn: psycopg.Conn
     assert (again.rows_seen, again.rows_written, again.changes) == (7, 0, ())
     assert (same_day.rows_written, same_day.anomalies) == (0, 0)
     assert queries.sector(conn, "INFY", as_of=SECOND_LOAD) == queries.Sector(
-        symbol="INFY", sector="Information Technology", effective_from=FIRST_LOAD
+        symbol="INFY",
+        sector="Information Technology",
+        effective_from=FIRST_LOAD,
+        recorded_under="INFY",
     )
 
 
@@ -130,3 +147,47 @@ def test_each_load_is_recorded_as_an_ingest_run(conn: psycopg.Connection) -> Non
     (run,) = queries.ingest_runs(conn, source="nse_sectors")
     assert (run.command, run.range_start, run.range_end) == ("sectors", FIRST_LOAD, FIRST_LOAD)
     assert (run.rows_seen, run.rows_written, run.error) == (7, 7, None)
+
+
+INSTRUMENT_FIXTURES = Path(__file__).parent / "fixtures" / "instruments"
+RENAMED_SECTORS = Path(__file__).parent / "fixtures" / "instrument_sectors"
+
+
+def served_as(symbol: str, before: str) -> Playback:
+    """NSE's list as recorded (``fixtures/instrument_sectors/``) with ``symbol`` served as
+    ``before``: the list as it read before the rename."""
+
+    def row(line: str) -> str:
+        fields = line.split(",")
+        if len(fields) == 5 and fields[2] == symbol:
+            fields[2] = before
+        return ",".join(fields)
+
+    return Playback(RENAMED_SECTORS, edit=lines(lambda rows: [row(line) for line in rows]))
+
+
+def test_a_sector_recorded_under_an_old_symbol_is_found_under_the_new_one_after_a_rename(
+    conn: psycopg.Connection,
+) -> None:
+    ingest_eod(
+        conn,
+        Playback(INSTRUMENT_FIXTURES, FIXTURES.parent / "ingest_eod"),
+        start=date(2025, 4, 7),
+        end=date(2025, 4, 11),
+    )
+    ingest_symbol_changes(conn, PlaybackTransport(INSTRUMENT_FIXTURES))
+    rebuild_instruments(conn)
+    # Loaded the day before ZOMATO became ETERNAL, so recorded under ZOMATO.
+    load_sectors(conn, served_as("ETERNAL", "ZOMATO"), effective_date=date(2025, 4, 8))
+
+    after = queries.sector(conn, "ETERNAL", as_of=date(2025, 4, 11))
+
+    assert after == queries.Sector(
+        symbol="ETERNAL",
+        sector="Consumer Services",
+        effective_from=date(2025, 4, 8),
+        recorded_under="ZOMATO",
+    )
+    # The old Symbol still reads it; the new Symbol has no sector from before it existed.
+    assert sector_of(conn, "ZOMATO", date(2025, 4, 11)) == "Consumer Services"
+    assert queries.sector(conn, "ETERNAL", as_of=date(2025, 4, 8)) is None

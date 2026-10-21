@@ -507,7 +507,7 @@ def test_sectors_then_verify_universe_print_the_report_and_log_its_summary(
     assert code == 0
     assert "Overlap: 4 of 5 NIFTY 200 constituents (80.00%)\n" in captured.err
     assert "In NIFTY 200, not in the Universe: 1\n" in captured.err
-    assert captured.err.endswith("Universe members without a sector: 0\n")
+    assert "Universe members without a sector: 0\n" in captured.err
     checked = json_lines(captured.out)
     assert all(
         (line["range_start"], line["range_end"]) == ("2024-08-01", "2024-08-31") for line in checked
