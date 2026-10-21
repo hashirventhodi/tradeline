@@ -3,9 +3,9 @@
 The fixture (``fixtures/sectors/``) is NSE's NIFTY Total Market list recorded
 on 2026-10-21, trimmed to seven symbols. Its ``Industry`` column is NSE's
 sector classification. A load is dated by the day it was taken; a later load
-in which NSE has reclassified a symbol is made by passing the real recorded
-response through ``Reclassify``, which rewrites one symbol's sector on its way
-to the service, so no fixture file is edited and none is written by hand.
+in which NSE has reclassified a symbol is made by playing the real recorded
+response back through ``reclassify``, which rewrites one symbol's sector on its
+way to the service, so no fixture file is edited and none is written by hand.
 """
 
 from collections.abc import Iterator
@@ -15,33 +15,27 @@ from pathlib import Path
 import psycopg
 import pytest
 
+from playback import Playback, lines
 from tradeline import queries
 from tradeline.db import app_connection
 from tradeline.sectors import load_sectors
-from tradeline.transport import PlaybackTransport, Request, Response
+from tradeline.transport import PlaybackTransport
 
 FIXTURES = Path(__file__).parent / "fixtures" / "sectors"
 FIRST_LOAD = date(2024, 7, 31)
 SECOND_LOAD = date(2024, 9, 30)
 
 
-class Reclassify:
-    """Plays the recorded lists back with ``symbol``'s Industry column set to ``sector``."""
+def reclassify(symbol: str, sector: str) -> Playback:
+    """The recorded lists played back with ``symbol``'s Industry column set to ``sector``."""
 
-    def __init__(self, symbol: str, sector: str) -> None:
-        self._inner = PlaybackTransport(FIXTURES)
-        self._symbol = symbol
-        self._sector = sector
+    def row(line: str) -> str:
+        fields = line.split(",")
+        if len(fields) == 5 and fields[2] == symbol:
+            fields[1] = sector
+        return ",".join(fields)
 
-    def send(self, request: Request) -> Response:
-        response = self._inner.send(request)
-        lines = response.body.decode().split("\n")
-        for i, line in enumerate(lines):
-            fields = line.split(",")
-            if len(fields) == 5 and fields[2] == self._symbol:
-                fields[1] = self._sector
-                lines[i] = ",".join(fields)
-        return Response(response.status, response.headers, "\n".join(lines).encode())
+    return Playback(FIXTURES, edit=lines(lambda rows: [row(line) for line in rows]))
 
 
 @pytest.fixture
@@ -75,7 +69,7 @@ def test_a_later_load_with_a_changed_sector_adds_a_dated_row_and_keeps_the_earli
 ) -> None:
     load_sectors(conn, PlaybackTransport(FIXTURES), effective_date=FIRST_LOAD)
 
-    result = load_sectors(conn, Reclassify("INFY", "Capital Goods"), effective_date=SECOND_LOAD)
+    result = load_sectors(conn, reclassify("INFY", "Capital Goods"), effective_date=SECOND_LOAD)
 
     assert result.rows_written == 1
     assert [(c.symbol, c.before, c.after) for c in result.changes] == [
@@ -117,7 +111,7 @@ def test_a_same_day_reload_that_disagrees_is_an_anomaly_and_the_stored_row_is_ke
 ) -> None:
     load_sectors(conn, PlaybackTransport(FIXTURES), effective_date=FIRST_LOAD)
 
-    result = load_sectors(conn, Reclassify("INFY", "Capital Goods"), effective_date=FIRST_LOAD)
+    result = load_sectors(conn, reclassify("INFY", "Capital Goods"), effective_date=FIRST_LOAD)
 
     assert (result.rows_written, result.anomalies, result.changes) == (0, 1, ())
     assert sector_of(conn, "INFY", FIRST_LOAD) == "Information Technology"

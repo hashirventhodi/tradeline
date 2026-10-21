@@ -11,8 +11,9 @@ because Kite adjusts candles for corporate actions (see
 carries a further factor of about 0.979 from a 2026 action. The tests
 assert the values as Kite returned them.
 
-`../ingest_candles_resend/` is the real INFY response narrowed to
-2024-07-01 with the close changed by hand from 1557.1 to 1558.1.
+A resend with a changed close is not a fixture: the test plays the INFY
+response back narrowed to 2024-07-01 with the close moved from 1557.1 to
+1558.1 (`tests/playback.py`).
 
 To re-record after `tradeline login`:
 

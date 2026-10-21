@@ -1,25 +1,33 @@
 """``BseSession``: the headers and backoff BSE's API requires.
 
-As for ``NseSession``, the transport is a hand-written fake because fixtures
-never record request headers, and request headers are the behaviour.
+As for ``NseSession``, the transport records what it was sent, because
+fixtures never record request headers, and request headers are the
+behaviour. It answers with BSE's recorded response for 1 August 2024's first
+page (``fixtures/collect_daily/``) under each scripted status in turn.
 """
 
-from tradeline.sources.bse import BseSession
-from tradeline.transport import Request, Response
+from datetime import date
+from pathlib import Path
 
-API = "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w?pageno=1"
+from tradeline.sources.bse import BseSession, announcements_url
+from tradeline.transport import PlaybackTransport, Request, Response
+
+FIXTURES = Path(__file__).parent / "fixtures" / "collect_daily"
+API = announcements_url(date(2024, 8, 1), 1)
 
 
 class ScriptedTransport:
-    """Answers with the scripted statuses in turn; records what it was sent."""
+    """Answers with the recorded response under the scripted statuses in turn."""
 
     def __init__(self, *statuses: int) -> None:
         self._statuses = list(statuses)
+        self._recorded = PlaybackTransport(FIXTURES)
         self.sent: list[Request] = []
 
     def send(self, request: Request) -> Response:
         self.sent.append(request)
-        return Response(self._statuses.pop(0), (), b"{}")
+        recorded = self._recorded.send(request)
+        return Response(self._statuses.pop(0), recorded.headers, recorded.body)
 
 
 def test_every_call_carries_the_site_as_referer_and_origin() -> None:

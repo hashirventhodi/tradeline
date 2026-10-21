@@ -8,8 +8,9 @@ records were removed, and each body was re-serialised as compact JSON.
 - `GET_www.nseindia.com_api_corporate-announcements_*`: NSE listed 1045
   filings that day; kept are the 5 of INFY (2), TCS, RELIANCE, and
   BAJAJ-AUTO, the August 2024 Universe in `tests/test_collect_daily.py`.
-- `GET_www.nseindia.com_<hash>`: the session warm-up, copied from
-  `../ingest_announcements/` (same request; its body was already dropped).
+- NSE's session warm-up (`GET https://www.nseindia.com/`) is not kept
+  here: it is the same request as the one in `../ingest_announcements/`,
+  and the test plays that directory back after this one.
 - `GET_api.bseindia.com_*`: BSE listed 1647 filings over 33 pages of 50. The
   5 filings of Infosys Ltd (2), Tata Consultancy Services Ltd, Reliance
   Industries Ltd, and Bajaj Auto Ltd, found on pages 2, 6, 13, 21, and 33,

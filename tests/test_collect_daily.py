@@ -8,10 +8,11 @@ own real recorded responses back:
   2024, the equity master, and Kite's instrument list, trimmed to eight
   symbols. July is loaded before the collection; 1 August by it.
 - ``fixtures/ingest_candles/``: Kite's daily candles for 1 July to 30 August
-  2024. Kite is asked for the one day; ``OneDayFromRecordedRange`` serves that
-  request from the recorded two-month response, keeping only the day's bar.
+  2024. Kite is asked for the one day; ``kite()`` serves that request from the
+  recorded two-month response, keeping only the day's bar (``playback``).
 - ``fixtures/collect_daily/``: NSE's and BSE's announcements of 1 August 2024,
-  trimmed to the Universe's four companies (see its README).
+  trimmed to the Universe's four companies (see its README); NSE's session
+  warm-up is the one recorded in ``fixtures/ingest_announcements/``.
 - ``fixtures/ingest_news/``: two Economic Times RSS feeds, five items each,
   three of them in both.
 
@@ -28,12 +29,13 @@ from collections.abc import Iterator
 from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import urlsplit
 
 import httpx
 import psycopg
 import pytest
 
+from playback import Playback, in_requested_range, kite_candles, recorded_range
 from tradeline import queries
 from tradeline.cli import main
 from tradeline.collect import CollectResult, collect_daily
@@ -43,7 +45,7 @@ from tradeline.ingest.eod import ingest_eod
 from tradeline.ingest.news import Feed
 from tradeline.secrets import MissingSecret
 from tradeline.sources.kite import KiteSession
-from tradeline.transport import PlaybackTransport, Request, Response, UnrecordedRequest
+from tradeline.transport import PlaybackTransport, Request, Response
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = REPO_ROOT / "tests" / "fixtures"
@@ -67,47 +69,13 @@ SOURCES = {
 }
 
 
-class Fixtures:
-    """Plays back from several recorded directories, the first that has the request."""
-
-    def __init__(self, *dirs: Path) -> None:
-        self._playbacks = [PlaybackTransport(d) for d in dirs]
-
-    def send(self, request: Request) -> Response:
-        for playback in self._playbacks:
-            try:
-                return playback.send(request)
-            except UnrecordedRequest:
-                continue
-        raise UnrecordedRequest(f"no fixture for {request.describe()} in any directory")
-
-
-class OneDayFromRecordedRange:
-    """Serves a Kite candle request for a range inside the recorded one, trimmed to that range."""
-
-    RECORDED = ("2024-07-01", "2024-08-30")
-
-    def __init__(self) -> None:
-        self._inner = PlaybackTransport(FIXTURES / "ingest_candles")
-
-    def send(self, request: Request) -> Response:
-        parts = urlsplit(request.url)
-        query = parse_qs(parts.query)
-        start, end = query["from"][0], query["to"][0]
-        recorded = parts._replace(query=f"from={self.RECORDED[0]}&to={self.RECORDED[1]}")
-        response = self._inner.send(Request(request.method, recorded.geturl(), request.headers))
-        body = json.loads(response.body)
-        body["data"]["candles"] = [c for c in body["data"]["candles"] if start <= c[0][:10] <= end]
-        return Response(response.status, response.headers, json.dumps(body).encode())
-
-
 class FailingHost:
     """Cannot connect to ``host``, as when it is down; passes the rest to ``inner``.
 
     A connection error rather than a 5xx, which the adapters retry with real delays.
     """
 
-    def __init__(self, inner: Fixtures, host: str) -> None:
+    def __init__(self, inner: Playback, host: str) -> None:
         self._inner = inner
         self._host = host
 
@@ -117,17 +85,25 @@ class FailingHost:
         return self._inner.send(request)
 
 
-def sources() -> Fixtures:
-    return Fixtures(FIXTURES / "universe", FIXTURES / "collect_daily", FIXTURES / "ingest_news")
-
-
-def kite() -> KiteSession:
-    return KiteSession(
-        OneDayFromRecordedRange(), api_key="key", access_token="tok", sleep=lambda _: None
+def sources() -> Playback:
+    return Playback(
+        FIXTURES / "universe",
+        FIXTURES / "collect_daily",
+        FIXTURES / "ingest_announcements",
+        FIXTURES / "ingest_news",
     )
 
 
-def collect(conn: psycopg.Connection, transport: Fixtures | FailingHost) -> CollectResult:
+def kite() -> KiteSession:
+    candles = Playback(
+        FIXTURES / "ingest_candles",
+        ask=recorded_range("2024-07-01", "2024-08-30"),
+        edit=kite_candles(in_requested_range),
+    )
+    return KiteSession(candles, api_key="key", access_token="tok", sleep=lambda _: None)
+
+
+def collect(conn: psycopg.Connection, transport: Playback | FailingHost) -> CollectResult:
     return collect_daily(
         conn,
         day=DAY,
