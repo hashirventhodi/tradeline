@@ -1,10 +1,12 @@
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from fractions import Fraction
 
 import psycopg
 import pytest
 
+from tradeline.adjust import interpret
 from tradeline.db import app_connection, connect
 from tradeline.migrations import applied_migrations, apply_migrations
 
@@ -191,29 +193,52 @@ def test_the_application_role_cannot_update_or_delete_symbol_changes(database_ur
             conn.rollback()
 
 
-def test_a_short_form_split_stored_before_the_parser_read_it_is_rederived_by_its_migration(
+# Every short form 0019 re-derives, read as ``interpret`` reads it: the 14 rows
+# of the #13 database are of the first two shapes.
+SHORT_FORMS = [
+    "Fv Splt Frm Rs 10 To Re 1",
+    "Fv Splt Frm Rs 10 To Rs 2",
+    "Fv Splt Frm Rs 10 To Rs 5",
+    "Fv Splt Frm Rs 5 To Re 1",
+    "Fv Splt Frm Rs. 10 To Rs. 5",
+    "Fv Splt Frm Rs 2.50 To Re 1",
+    "FV SPLT FRM Rs10 To Re1",
+    "Fv  Splt  Frm Rs 10/- To Rs 2/-",
+]
+# Left as stored: a short form inside a longer subject (the parser may compound it with
+# another action), one of preference shares, and one without its face values.
+LEFT_AS_STORED = [
+    "Interim Div Rs 2/Fv Splt Frm Rs 10 To Rs 5",
+    "Fv Splt Frm Rs 10 To Rs 2 Ncrps",
+    "Fv Splt Frm",
+    "Buy Back",
+]
+
+
+def test_short_form_splits_stored_before_the_parser_read_them_are_rederived_as_it_reads_them(
     empty_database_url: str,
 ) -> None:
+    subjects = SHORT_FORMS + LEFT_AS_STORED
     with connect(empty_database_url) as conn:
         apply_migrations(conn)
-        # As the #13 database held it: JSWSTEEL's split stored as "other", before 0019.
+        # As the #13 database held them before 0019: every one stored as "other".
         conn.execute("DELETE FROM schema_migrations WHERE version = '0019_fv_splt_subjects'")
-        conn.execute(
-            "INSERT INTO corporate_actions (symbol, series, ex_date, subject, kind)"
-            " VALUES ('JSWSTEEL', 'EQ', '2017-01-04', 'Fv Splt Frm Rs 10 To Re 1', 'other'),"
-            " ('KARURVYSYA', 'EQ', '2016-11-17', 'Fv Splt Frm Rs 10 To Rs 2', 'other'),"
-            " ('ROLE', 'EQ', '2017-01-04', 'Buy Back', 'other')"
-        )
+        for n, subject in enumerate(subjects):
+            conn.execute(
+                "INSERT INTO corporate_actions (symbol, series, ex_date, subject, kind)"
+                " VALUES (%s, 'EQ', '2017-01-04', %s, 'other')",
+                (f"S{n}", subject),
+            )
         conn.commit()
 
         assert apply_migrations(conn) == ["0019_fv_splt_subjects"]
         rows = conn.execute(
-            "SELECT symbol, kind, factor_numerator, factor_denominator FROM corporate_actions"
-            " ORDER BY symbol"
+            "SELECT subject, kind, factor_numerator, factor_denominator FROM corporate_actions"
         ).fetchall()
 
-    assert rows == [
-        ("JSWSTEEL", "split", 1, 10),
-        ("KARURVYSYA", "split", 1, 5),
-        ("ROLE", "other", None, None),
-    ]
+    derived = {
+        subject: (kind, None if num is None else Fraction(num, den))
+        for subject, kind, num, den in rows
+    }
+    assert {s: derived[s] for s in SHORT_FORMS} == {s: interpret(s) for s in SHORT_FORMS}
+    assert {s: derived[s] for s in LEFT_AS_STORED} == {s: ("other", None) for s in LEFT_AS_STORED}
