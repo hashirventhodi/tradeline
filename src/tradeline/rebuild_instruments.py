@@ -157,8 +157,8 @@ def _spans(conn: psycopg.Connection) -> list[Span]:
 
 def _adjusting_actions(conn: psycopg.Connection) -> list[CorporateAction]:
     rows = conn.execute(
-        "SELECT symbol, series, ex_date, subject, kind, factor_numerator, factor_denominator"
-        " FROM corporate_actions WHERE kind IN ('split', 'bonus')"
+        "SELECT symbol, series, ex_date, subject, kind, factor_numerator, factor_denominator,"
+        " isin FROM corporate_actions WHERE kind IN ('split', 'bonus')"
         " ORDER BY symbol, ex_date, series, subject"
     ).fetchall()
     return [
@@ -169,8 +169,9 @@ def _adjusting_actions(conn: psycopg.Connection) -> list[CorporateAction]:
             subject=subject,
             kind=kind,
             factor=Fraction(int(numerator), int(denominator)),
+            isin=isin,
         )
-        for symbol, series, ex_date, subject, kind, numerator, denominator in rows
+        for symbol, series, ex_date, subject, kind, numerator, denominator, isin in rows
     ]
 
 

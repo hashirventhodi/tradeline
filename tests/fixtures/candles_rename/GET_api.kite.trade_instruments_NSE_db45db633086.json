@@ -1,0 +1,99 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://api.kite.trade/instruments/NSE",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "date",
+        "Wed, 21 Oct 2026 14:26:21 GMT"
+      ],
+      [
+        "content-type",
+        "text/csv"
+      ],
+      [
+        "content-length",
+        "191"
+      ],
+      [
+        "connection",
+        "keep-alive"
+      ],
+      [
+        "x-amz-request-id",
+        "GQ6Z00HCDBVKGKCQ"
+      ],
+      [
+        "x-amz-id-2",
+        "QiAADN4rTxB9fAlPF/0h5F301HHZJjB97VGYImdLzq0Pa+x52WkyuvdGzjsXXW4gA0SQRjCZbaa7bCJs6YEz+IUPmUiPJ2uT"
+      ],
+      [
+        "accept-ranges",
+        "bytes"
+      ],
+      [
+        "server",
+        "cloudflare"
+      ],
+      [
+        "last-modified",
+        "Wed, 21 Oct 2026 09:09:09 GMT"
+      ],
+      [
+        "etag",
+        "\"2801dc4f1eef37fe9eee5f5b19dc2421\""
+      ],
+      [
+        "x-amz-version-id",
+        "null"
+      ],
+      [
+        "content-encoding",
+        "gzip"
+      ],
+      [
+        "x-amz-server-side-encryption",
+        "AES256"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-frame-options",
+        "DENY"
+      ],
+      [
+        "cf-cache-status",
+        "DYNAMIC"
+      ],
+      [
+        "set-cookie",
+        "_cfuvid=MfdbnZEs7KvrPtqEmkLdzqakax4cjGajnk9xsdD95mQ-1792592781.2689734-1.0.1.1-XlhmC3R5RclzNdiRz78a93QXeAK3iKlz1PCQ2nSneYA; HttpOnly; SameSite=None; Secure; Path=/; Domain=kite.trade"
+      ],
+      [
+        "vary",
+        "accept-encoding"
+      ],
+      [
+        "strict-transport-security",
+        "max-age=15552000; includeSubDomains"
+      ],
+      [
+        "cf-ray",
+        "a4e0efd2eafbc6ab-MAA"
+      ],
+      [
+        "alt-svc",
+        "h3=\":443\"; ma=86400"
+      ]
+    ],
+    "body": "instrument_token,exchange_token,tradingsymbol,name,last_price,expiry,strike,tick_size,lot_size,instrument_type,segment,exchange\n1304833,5097,ETERNAL,\"ETERNAL - ZOMATO\",0,,0,0.05,1,EQ,NSE,NSE\n",
+    "body_encoding": "utf-8"
+  }
+}

@@ -1,0 +1,83 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://nsearchives.nseindia.com/content/indices/ind_niftytotalmarket_list.csv",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "x-frame-options",
+        "DENY"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "accept-ranges",
+        "bytes"
+      ],
+      [
+        "etag",
+        "W/\"49426-1792580595686\""
+      ],
+      [
+        "last-modified",
+        "Wed, 21 Oct 2026 11:03:15 GMT"
+      ],
+      [
+        "content-type",
+        "text/csv"
+      ],
+      [
+        "vary",
+        "Accept-Encoding"
+      ],
+      [
+        "date",
+        "Wed, 21 Oct 2026 14:25:50 GMT"
+      ],
+      [
+        "content-length",
+        "101"
+      ],
+      [
+        "connection",
+        "keep-alive"
+      ],
+      [
+        "akamai-grn",
+        "0.05d70b17.1792592750.634ce9"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "content-security-policy",
+        "default-src 'self'; script-src 'strict-dynamic' 'nonce-MC4yMDg2Mzc3MzEw' 'unsafe-inline' http: https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.nse.co.in https://*.nseindia.com; font-src 'self'; frame-src 'self'; base-uri 'self'; frame-ancestors 'self'; connect-src 'self' https://*.nseindia.com https://c.go-mpulse.net https://stats.g.doubleclick.net https://*.akstat.io/ https://*.akamaihd.net"
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000 ; includeSubDomains ; preload"
+      ],
+      [
+        "set-cookie",
+        "_abck=1E38D4F1383E84B024FA5A66314B9F9B~-1~YAAQBdcLF4DU912hAQAAr6faXhBabvJ2yk7rt+SOTS5/oljVWkk72sTJ+eYGC+fiY1clrj3y+GRvg5lliGkzb9lDRmodRryV/Xom1d1HesDtq9562H+haI/1L47VlSEXiTiSkbTZfzGa6DKNS8rROzkvymhfLmfVbOtkhYo7G9DnRQSIpLVcyR/1oWar62CBr0r1SSB1820w9IOIDxHwhmtn6IrJCZ3dTLlhZUP4jAYkROW8dTaScOkkXhz1oKS/uFZNijCXCdmxYD+Q8v+vnMXYTX7wVRyWrqJwc6xIDJDAQtv/J/a3yfh7OyB6xBLDpx0fcDDpaFF+hNZ4ACSUfwv0ixYMqyy3f0sWWqY1nxTpFRPHDYo/IL7L+dxcB6ka+22SgCjyxwon7JyC2bHqFyFgj631tM8x7DdBACyee9NNwZTbF28K8964ei5h23lD8YWhnIxMbNtKjg==~-1~-1~-1~-1~-1; Domain=.nseindia.com; Path=/; Expires=Thu, 21 Oct 2027 14:25:50 GMT; Max-Age=31536000; Secure"
+      ],
+      [
+        "set-cookie",
+        "bm_sz=99D568B30304533D5451CCA0073F58FE~YAAQBdcLF4HU912hAQAAr6faXgHEsBqXw5nAoGnwZvBFzQAOsyL48vxvT0Fgz1lPisqat7hozWztHDqJkBSAQUh8xfyfGvtcPw8ZG3/gAgkgUKOe03l8iNomg0kjv7ccRTyZcsTtm+JHSyZRJIsG6f7aD/BAkIlLenC8+iz5ZCuGcK1ET0t29KbND9bd2U1503hRftiG+sKYFyzxvMO2HdmeIvGvEuDc6T2MYWZGwOo7NGspm7PDhjTKx2ZeFjQVCDd0yfxhn2v5EU5O+PRa0QkIMJ+ziDi/b70/uoQhibtlyTXQouH9RpPFv7nbbg0pNVN6XpjQQrm5XQb8SKLoGKA/MO1tdHSN3Fg/g5ruO4423eWPz6aKxBiiHGnqmXMekV3Qje7o~3687220~3425592; Domain=.nseindia.com; Path=/; Expires=Wed, 21 Oct 2026 18:25:50 GMT; Max-Age=14400"
+      ]
+    ],
+    "body": "Company Name,Industry,Symbol,Series,ISIN Code\nEternal Ltd.,Consumer Services,ETERNAL,EQ,INE758T01015\n",
+    "body_encoding": "utf-8"
+  }
+}

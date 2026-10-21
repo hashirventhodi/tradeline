@@ -1,7 +1,15 @@
 """``reconcile``: Kite's daily candles against NSE's end-of-day files.
 
-For every instrument (symbol, series) that has candles stored, each trading
-day in the range is compared on presence and close:
+For every Instrument and series that has candles stored, each trading day in
+the range is compared on presence and close, an end-of-day row and a candle
+each belonging to the Instrument its Symbol named that day (ADR 0016). Kite
+files an Instrument's whole history under its current name, so before a
+rename its candles are under a Symbol NSE had not used yet; they belong to the
+Instrument all the same. Of two candles of one Instrument-day under different
+Kite names, the one under the more recent name is compared
+(``queries.instrument_daily_candles``). A Symbol in no Instrument (none
+rebuilt yet) stands for its own. Series moves are compared as before, per
+series.
 
 - **missing**: NSE has an end-of-day row and there is no candle;
 - **extra**: there is a candle and NSE has no end-of-day row;
@@ -12,7 +20,7 @@ day it is fetched, for splits, bonuses, and large dividends (docs/research.md,
 ADR 0006). Between two Ex-Dates that factor is one constant, so the closes
 are compared after taking it out: the factor of a stretch of days is the
 median of Kite's close over NSE's across it, the stretches being cut at every
-Ex-Date NSE lists for the symbol (any kind, since Kite's rules for which
+Ex-Date NSE lists for any of its Symbols (any kind, since Kite's rules for which
 actions it adjusts are its own). The median is robust to a few bad closes;
 a stretch of one or two days cannot show a bad close at all. A close
 mismatches when it is further from NSE's close times the factor than
@@ -23,7 +31,7 @@ reported as mismatches, which they are.
 
 The run passes when all discrepancies together, close mismatches as well as
 missing and extra rows, are under ``max_discrepancy_pct`` of the rows
-compared, a row being one (symbol, series, day) present on either side; a
+compared, a row being one (Instrument, series, day) present on either side; a
 run exactly at the threshold fails. Nothing is written: reconcile is a read.
 """
 
@@ -167,6 +175,9 @@ class ReconcileReport:
 
 @dataclass(frozen=True)
 class _Row:
+    # The Instrument's key, or the Symbol standing for one where it is in none.
+    instrument: str
+    # NSE's Symbol of the day, or Kite's where NSE has no row.
     symbol: str
     series: str
     trade_date: date
@@ -214,37 +225,61 @@ def reconcile(
     )
 
 
+# The Instruments a name stands for: every one the Symbol has named, or the
+# Symbol itself where it is in no Instrument (``candles_daily_instruments``).
+_NAMED = (
+    "(SELECT instrument_key FROM symbol_instruments WHERE symbol = ANY(%(names)s)"
+    " UNION SELECT unnest(%(names)s::text[]))"
+)
+
+
 def _rows(conn: psycopg.Connection, start: date, end: date, names: list[str] | None) -> list[_Row]:
+    # Keyed by (Instrument, series, day): an end-of-day row belongs to the
+    # Instrument its Symbol named that day, like a candle (migration 0014). Of
+    # two candles of one Instrument-day, the one under Kite's more recent name.
     found = conn.execute(
         "WITH instruments AS ("
-        "  SELECT DISTINCT symbol, series FROM candles_daily"
-        "  WHERE (%(names)s::text[] IS NULL OR symbol = ANY(%(names)s))"
+        "  SELECT DISTINCT instrument, series FROM candles_daily_instruments"
+        f" WHERE (%(names)s::text[] IS NULL OR instrument IN {_NAMED})"
         "), k AS ("
-        "  SELECT symbol, series, trade_date, close FROM candles_daily"
+        "  SELECT DISTINCT ON (instrument, series, trade_date)"
+        "   instrument, symbol, series, trade_date, close"
+        "  FROM candles_daily_instruments"
+        "  JOIN instruments USING (instrument, series)"
         "  WHERE trade_date BETWEEN %(start)s AND %(end)s"
-        "  AND (%(names)s::text[] IS NULL OR symbol = ANY(%(names)s))"
+        "  ORDER BY instrument, series, trade_date, named_until DESC NULLS LAST, symbol"
         "), e AS ("
-        "  SELECT symbol, series, trade_date, close FROM eod_bhavcopy"
-        "  JOIN instruments USING (symbol, series)"
-        "  WHERE trade_date BETWEEN %(start)s AND %(end)s"
+        "  SELECT coalesce(m.instrument_key, b.symbol) AS instrument,"
+        "   b.symbol, b.series, b.trade_date, b.close"
+        "  FROM eod_bhavcopy b"
+        "  LEFT JOIN symbol_instruments m ON m.symbol = b.symbol"
+        "   AND (m.after IS NULL OR b.trade_date > m.after)"
+        "   AND (m.through IS NULL OR b.trade_date <= m.through)"
+        "  JOIN instruments i"
+        "   ON (i.instrument, i.series) = (coalesce(m.instrument_key, b.symbol), b.series)"
+        "  WHERE b.trade_date BETWEEN %(start)s AND %(end)s"
         ")"
-        " SELECT symbol, series, trade_date, k.close, e.close,"
-        "  k.symbol IS NOT NULL, e.symbol IS NOT NULL"
-        " FROM k FULL JOIN e USING (symbol, series, trade_date)"
-        " ORDER BY symbol, series, trade_date",
+        " SELECT instrument, coalesce(e.symbol, k.symbol), series, trade_date, k.close, e.close,"
+        "  k.instrument IS NOT NULL, e.instrument IS NOT NULL"
+        " FROM k FULL JOIN e USING (instrument, series, trade_date)"
+        " ORDER BY instrument, series, trade_date",
         {"names": names, "start": start, "end": end},
     ).fetchall()
     return [_Row(*row) for row in found]
 
 
 def _refuse_symbols_without_candles(conn: psycopg.Connection, names: list[str]) -> None:
-    with_candles = {
+    unknown = [
         row[0]
         for row in conn.execute(
-            "SELECT DISTINCT symbol FROM candles_daily WHERE symbol = ANY(%s)", (names,)
+            "SELECT name FROM unnest(%(names)s::text[]) AS name"
+            " WHERE NOT EXISTS (SELECT FROM candles_daily_instruments c"
+            "  WHERE c.instrument = name OR c.instrument IN"
+            "   (SELECT instrument_key FROM symbol_instruments WHERE symbol = name))"
+            " ORDER BY name",
+            {"names": names},
         ).fetchall()
-    }
-    unknown = [name for name in names if name not in with_candles]
+    ]
     if unknown:
         raise ValueError(f"no candles stored for {', '.join(unknown)}")
 
@@ -253,17 +288,25 @@ def _close_mismatches(
     conn: psycopg.Connection, rows: list[_Row], tolerance: Decimal
 ) -> tuple[Discrepancy, ...]:
     # Rows with both closes, grouped into the stretches between Ex-Dates.
+    # An Instrument's Ex-Dates are those of every Symbol it is compared under.
+    symbols: dict[str, set[str]] = defaultdict(set)
+    for row in rows:
+        symbols[row.instrument].add(row.symbol)
     stretches: dict[tuple[str, str, int], list[_Row]] = defaultdict(list)
     ex_dates: dict[str, list[date]] = {}
     for row in rows:
         if row.candle_close is None or not row.eod_close:  # NSE can state no close
             continue
-        if row.symbol not in ex_dates:
-            ex_dates[row.symbol] = sorted(
-                {action.ex_date for action in queries.corporate_actions(conn, row.symbol)}
+        if row.instrument not in ex_dates:
+            ex_dates[row.instrument] = sorted(
+                {
+                    action.ex_date
+                    for symbol in symbols[row.instrument]
+                    for action in queries.corporate_actions(conn, symbol)
+                }
             )
-        stretch = bisect.bisect_right(ex_dates[row.symbol], row.trade_date)
-        stretches[(row.symbol, row.series, stretch)].append(row)
+        stretch = bisect.bisect_right(ex_dates[row.instrument], row.trade_date)
+        stretches[(row.instrument, row.series, stretch)].append(row)
 
     mismatches: list[Discrepancy] = []
     for stretch_rows in stretches.values():

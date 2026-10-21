@@ -8,7 +8,11 @@ the month's window under the rule: a Universe member its stored rank, a
 constituent outside the Universe the rank the rule gives it below the top,
 or, when the rule cannot rank it, why not. Last, it lists the Universe members
 with no sector in force on the as-of date, since the Risk Engine's sector
-Limit needs one for every member.
+Limit needs one for every member. A member's sector is found through its
+Instrument (``queries.sector``), so a member renamed before or after the month
+keeps the sector NSE recorded under its other Symbol; the report lists those
+members with the Symbol each sector was recorded under, for the Operator to
+see the join.
 
 The Universe compared is the one stored for the month under the rule given
 (the configured rule, from the command); a month not yet computed is refused.
@@ -40,6 +44,14 @@ class ComparedSymbol:
 
 
 @dataclass(frozen=True)
+class SectorUnderAnotherSymbol:
+    rank: int
+    symbol: str
+    sector: str
+    recorded_under: str
+
+
+@dataclass(frozen=True)
 class UniverseCheck:
     month: date
     rule_version: str
@@ -49,6 +61,8 @@ class UniverseCheck:
     universe_only: tuple[ComparedSymbol, ...]
     index_only: tuple[ComparedSymbol, ...]
     without_sector: tuple[queries.UniverseMember, ...]
+    # Members whose sector was recorded under another Symbol of their Instrument, by rank.
+    sectors_under_other_symbols: tuple[SectorUnderAnotherSymbol, ...]
 
     @property
     def overlap_percent(self) -> Decimal:
@@ -72,6 +86,17 @@ class UniverseCheck:
         if self.without_sector:
             lines.append(f"{'rank':>7}  symbol")
             lines.extend(f"{m.rank:>7}  {m.symbol}" for m in self.without_sector)
+        lines += [
+            "",
+            "Universe members with a sector recorded under another Symbol:"
+            f" {len(self.sectors_under_other_symbols)}",
+        ]
+        if self.sectors_under_other_symbols:
+            lines.append(f"{'rank':>7}  {'symbol':<12} {'recorded under':<15} sector")
+            lines.extend(
+                f"{s.rank:>7}  {s.symbol:<12} {s.recorded_under:<15} {s.sector}"
+                for s in self.sectors_under_other_symbols
+            )
         return "\n".join(lines) + "\n"
 
     def summary(self) -> dict[str, object]:
@@ -86,6 +111,9 @@ class UniverseCheck:
             "universe_only": [s.symbol for s in self.universe_only],
             "index_only": [s.symbol for s in self.index_only],
             "without_sector": [m.symbol for m in self.without_sector],
+            "sectors_under_other_symbols": {
+                s.symbol: s.recorded_under for s in self.sectors_under_other_symbols
+            },
         }
 
 
@@ -129,7 +157,7 @@ def verify_universe(
     index_only = tuple(
         _outside(rule, ranked.get(symbol), symbol) for symbol in sorted(in_index - in_universe)
     )
-    with_sector = {s.symbol for s in queries.sectors(conn, as_of=as_of, symbols=list(in_universe))}
+    found = {s.symbol: s for s in queries.sectors(conn, as_of=as_of, symbols=sorted(in_universe))}
     return UniverseCheck(
         month=month,
         rule_version=rule.version,
@@ -138,7 +166,12 @@ def verify_universe(
         overlap=len(in_index & in_universe),
         universe_only=universe_only,
         index_only=tuple(sorted(index_only, key=_rank_order)),
-        without_sector=tuple(m for m in members if m.symbol not in with_sector),
+        without_sector=tuple(m for m in members if m.symbol not in found),
+        sectors_under_other_symbols=tuple(
+            SectorUnderAnotherSymbol(m.rank, m.symbol, s.sector, s.recorded_under)
+            for m in members
+            if (s := found.get(m.symbol)) is not None and s.recorded_under != m.symbol
+        ),
     )
 
 
