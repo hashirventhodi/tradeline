@@ -26,6 +26,7 @@ from tradeline.ingest.candles import ingest_candles
 from tradeline.ingest.corporate_actions import ingest_corporate_actions
 from tradeline.ingest.eod import ingest_eod
 from tradeline.ingest.symbol_changes import ingest_symbol_changes
+from tradeline.instruments import ManualLink
 from tradeline.rebuild_instruments import InstrumentRebuildResult, rebuild_instruments
 from tradeline.sectors import load_sectors
 from tradeline.sources.kite import KiteSession
@@ -113,6 +114,7 @@ def test_a_rebuild_records_its_counts_in_the_run_history(
     assert run.details == {
         "spans": 2,
         "symbol_changes": 11,
+        "manual_links": 0,
         "instruments": 1,
         "links": {"symbol_change": 1},
         "keys_from": {"listing_date": 1},
@@ -177,3 +179,26 @@ def test_stored_rows_are_byte_identical_before_and_after_a_build(
         queries.instrument_history(conn, queries.resolve_symbol(conn, "RELIANCE", as_of=END).key)
 
         assert stored_rows(conn) == before
+
+
+def test_a_manual_link_joins_a_rename_with_no_nse_record_its_citation_stored_as_the_source(
+    fresh_database_url: str,
+) -> None:
+    # Without NSE's symbol-change list, only the manual link joins ZOMATO to ETERNAL.
+    citation = "NSE circular NSE/CML/2025/00 (a test citation)"
+    with app_connection(fresh_database_url) as conn:
+        ingest_eod(conn, Playback(FIXTURES, EOD_FIXTURES), start=START, end=END)
+
+        rebuild_instruments(conn, manual_links=[ManualLink("ZOMATO", "ETERNAL", RENAMED, citation)])
+
+        (link,) = queries.instrument_history(conn, ETERNAL).links
+        (run,) = queries.ingest_runs(conn, source="instrument_links")
+    assert (link.kind, link.on, link.from_symbol, link.to_symbol, link.source) == (
+        "manual",
+        RENAMED,
+        "ZOMATO",
+        "ETERNAL",
+        f"manual link ZOMATO to ETERNAL effective 2025-04-09: {citation}",
+    )
+    assert run.details is not None
+    assert (run.details["manual_links"], run.details["links"]) == (1, {"manual": 1})

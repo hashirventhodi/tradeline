@@ -19,7 +19,7 @@ The dated, sourced evidence that joins two stretches of history into one Instrum
 _Avoid_: Mapping, alias, merge
 
 **Link Candidate**:
-A new Symbol trading under an ISIN an earlier Symbol had, with no NSE record joining them. Never a link: the Operator reviews it and cites a manual link, or leaves the history split.
+A new Symbol trading under an ISIN an earlier Symbol had, with no NSE record or manual link joining them. Never a link: the Operator reviews it and cites a manual link, or leaves the history split.
 _Avoid_: Candidate (a Strategy's Candidate), suggested link
 
 ### Universe and selection

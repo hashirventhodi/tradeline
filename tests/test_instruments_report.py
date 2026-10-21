@@ -113,6 +113,7 @@ def test_the_rebuild_recorded_its_counts_in_the_run_details(conn: psycopg.Connec
     assert run.details == {
         "spans": 7,
         "symbol_changes": 10,
+        "manual_links": 0,
         "instruments": 7,
         "links": {},
         "keys_from": {"first_row": 1, "listing_date": 6},
