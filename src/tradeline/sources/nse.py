@@ -333,9 +333,25 @@ def fetch_delistings(session: NseSession) -> list[Delisting]:
     return parse_delistings(response.body)
 
 
+def _decode_delistings(body: bytes) -> str:
+    """The list's text: UTF-8 (a byte-order mark dropped) or, as NSE serves it today,
+    Windows-1252, whose 0xA0 non-breaking space some company names hold. A byte
+    neither defines fails loudly rather than being read as something else."""
+    try:
+        return body.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        pass
+    try:
+        return body.decode("cp1252")
+    except UnicodeDecodeError as e:
+        raise NseError(
+            f"delisted-securities list is neither UTF-8 nor Windows-1252:"
+            f" byte 0x{body[e.start]:02x} at {e.start}"
+        ) from None
+
+
 def parse_delistings(body: bytes) -> list[Delisting]:
-    # The list is in Windows encoding: some company names hold a 0xA0 non-breaking space.
-    reader = csv.reader(io.StringIO(body.decode("cp1252")))
+    reader = csv.reader(io.StringIO(_decode_delistings(body)))
     expected = ["Symbol", "Company", "Delisted Date", "Type of Delisting"]
     # NSE pads every line with five empty columns.
     header = [name.strip() for name in next(reader, [])]

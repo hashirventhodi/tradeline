@@ -7,18 +7,19 @@ company name holds the non-breaking space of NSE's Windows encoding, and the
 last (HEXAWARE, 9 November 2020; NSE last changed the file on 11 November 2020).
 """
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import date
 from pathlib import Path
 
 import psycopg
 import pytest
 
+from playback import Playback
 from tradeline import queries
 from tradeline.db import app_connection
 from tradeline.ingest.delistings import DelistingIngestResult, ingest_delistings
-from tradeline.sources.nse import Delisting
-from tradeline.transport import PlaybackTransport
+from tradeline.sources.nse import DELISTINGS_URL, Delisting, NseError
+from tradeline.transport import PlaybackTransport, Request
 
 FIXTURES = Path(__file__).parent / "fixtures" / "end_reasons"
 RECORDS = 5
@@ -87,3 +88,45 @@ def test_a_second_ingest_of_the_same_list_adds_nothing(
 
 def test_one_symbols_records_are_found_by_symbol(conn: psycopg.Connection) -> None:
     assert [d.delisted_on for d in queries.delistings(conn, symbol="ANGIND")] == [date(2020, 7, 10)]
+
+
+def _list_body(change: Callable[[bytes], bytes]) -> Callable[[Request, bytes], bytes]:
+    """NSE's recorded list with ``change`` made to its body."""
+
+    def edit(request: Request, body: bytes) -> bytes:
+        return change(body) if request.url == DELISTINGS_URL else body
+
+    return edit
+
+
+def test_a_list_sent_as_utf8_with_a_byte_order_mark_is_read_the_same(
+    fresh_database_url: str,
+) -> None:
+    as_utf8 = _list_body(lambda body: body.decode("cp1252").encode("utf-8-sig"))
+    with app_connection(fresh_database_url) as conn:
+        ingest_delistings(conn, Playback(FIXTURES, edit=as_utf8))
+        stored = queries.delistings(conn)
+
+    assert [d.symbol for d in stored] == [
+        "CABOTINDIA",
+        "ANIKSHIP",
+        "BENTOLCHEM",
+        "ANGIND",
+        "HEXAWARE",
+    ]
+    assert stored[2].company_name == "Chemox\u00a0Laboratories Limited"
+
+
+def test_a_byte_neither_utf8_nor_windows_encoding_defines_fails_the_run_naming_it(
+    fresh_database_url: str,
+) -> None:
+    # 0x81 is undefined in Windows-1252, and alone it is not UTF-8.
+    undefined = _list_body(lambda body: body.replace(b"\xa0", b"\x81"))
+    with app_connection(fresh_database_url) as conn:
+        with pytest.raises(NseError, match="0x81"):
+            ingest_delistings(conn, Playback(FIXTURES, edit=undefined))
+        failed = queries.ingest_runs(conn, source="nse_delistings")[0]
+        stored = queries.delistings(conn)
+
+    assert failed.error is not None and "NseError" in failed.error
+    assert stored == []
