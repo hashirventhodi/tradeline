@@ -336,10 +336,7 @@ def _close_mismatches(
     conn: psycopg.Connection, rows: list[_Row], tolerance: Decimal
 ) -> tuple[Discrepancy, ...]:
     # Rows with both closes, grouped into the stretches between Ex-Dates.
-    # An Instrument's Ex-Dates are those of every Symbol it is compared under.
-    symbols: dict[str, set[str]] = defaultdict(set)
-    for row in rows:
-        symbols[row.instrument].add(row.symbol)
+    # An Instrument's Ex-Dates are those filed under any of its Symbols.
     stretches: dict[tuple[str, str, int], list[_Row]] = defaultdict(list)
     ex_dates: dict[str, list[date]] = {}
     for row in rows:
@@ -347,11 +344,7 @@ def _close_mismatches(
             continue
         if row.instrument not in ex_dates:
             ex_dates[row.instrument] = sorted(
-                {
-                    action.ex_date
-                    for symbol in symbols[row.instrument]
-                    for action in queries.corporate_actions(conn, symbol)
-                }
+                {action.ex_date for action in queries.corporate_actions(conn, row.instrument)}
             )
         stretch = bisect.bisect_right(ex_dates[row.instrument], row.trade_date)
         stretches[(row.instrument, row.series, stretch)].append(row)
