@@ -1,14 +1,22 @@
 """``collect-daily``: one trading day's collection, safe to run from cron after the close.
 
-Four steps, in order, each one the existing ingest service for the day:
+Six steps, in order, each one the existing service for the day:
 
 1. ``eod``: NSE's end-of-day file and the instrument master (``ingest_eod``).
-2. ``candles``: Kite's daily candle for every member of the current Universe,
+2. ``symbol_changes``: NSE's symbol-change list (``ingest_symbol_changes``),
+   so a rename is picked up on its effective date.
+3. ``instruments``: the Instruments rebuilt from the stored evidence and the
+   manual links file (``load_manual_links``, ``rebuild_instruments``). It
+   runs after the end-of-day rows it links, and before the Universe, which
+   ranks Instruments. It runs even when the symbol-change fetch failed, on
+   the records already stored. The collection has no Corporate Actions step;
+   the rebuild reads the Corporate Actions already stored.
+4. ``candles``: Kite's daily candle for every member of the current Universe,
    the day's month under the configured rule (``ingest_candles``). The
    month's membership is computed first if it has not been (``compute_universe``),
    so the first collection of a month needs no separate ``universe`` run.
-3. ``announcements``: NSE's and BSE's filings of the day (``ingest_announcements``).
-4. ``news``: what the configured RSS feeds carry now (``ingest_news``).
+5. ``announcements``: NSE's and BSE's filings of the day (``ingest_announcements``).
+6. ``news``: what the configured RSS feeds carry now (``ingest_news``).
 
 Every ingest run made inside a collection carries the collection's id, so
 ``queries.ingest_runs(collection_id=...)`` shows the day source by source. A
@@ -27,6 +35,7 @@ import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import psycopg
@@ -45,6 +54,11 @@ from tradeline.ingest.eod import (
 )
 from tradeline.ingest.news import SOURCE as SOURCE_RSS
 from tradeline.ingest.news import Feed, ingest_news
+from tradeline.ingest.symbol_changes import SOURCE as SOURCE_SYMBOL_CHANGES
+from tradeline.ingest.symbol_changes import ingest_symbol_changes
+from tradeline.manual_links import load_manual_links
+from tradeline.rebuild_instruments import SOURCE as SOURCE_INSTRUMENT_LINKS
+from tradeline.rebuild_instruments import rebuild_instruments
 from tradeline.sources.kite import KiteSession
 from tradeline.transport import Transport
 from tradeline.universe import compute_universe
@@ -109,12 +123,15 @@ def collect_daily(
     transport: Transport,
     browser_transport: Transport,
     kite: Callable[[], KiteSession],
+    manual_links: Path,
 ) -> CollectResult:
     """Collect every source for ``day``; never raises for a failed source.
 
     ``browser_transport`` is the one BSE needs (a browser's TLS handshake);
     ``kite`` builds the Kite session when the candle step starts, so a missing
-    access token fails that step alone.
+    access token fails that step alone. ``manual_links`` is the manual
+    Instrument Links file, read when the rebuild starts, so a malformed file
+    fails the rebuild alone.
     """
     collection_id = uuid.uuid4()
 
@@ -122,12 +139,21 @@ def collect_daily(
         universe = _current_universe(conn, rule, day)
         ingest_candles(conn, kite(), start=day, end=day, universe=universe)
 
+    def instruments() -> None:
+        rebuild_instruments(conn, manual_links=load_manual_links(manual_links))
+
     steps: list[tuple[str, tuple[str, ...], Callable[[], object]]] = [
         (
             "eod",
             (SOURCE_EQUITY_MASTER, SOURCE_EOD, SOURCE_KITE_INSTRUMENTS),
             lambda: ingest_eod(conn, transport, start=day, end=day),
         ),
+        (
+            "symbol_changes",
+            (SOURCE_SYMBOL_CHANGES,),
+            lambda: ingest_symbol_changes(conn, transport),
+        ),
+        ("instruments", (SOURCE_INSTRUMENT_LINKS,), instruments),
         ("candles", (SOURCE_DAILY,), candles),
         (
             "announcements",
