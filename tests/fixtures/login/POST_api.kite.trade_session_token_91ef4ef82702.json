@@ -1,0 +1,19 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.kite.trade/session/token",
+    "body": "api_key=test_api_key&request_token=test_request_token&checksum=db7982386217016217ea3d380e90d51dc63978441969b4f101ec3302f80bd06d",
+    "body_encoding": "utf-8"
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "body": "{\"status\": \"success\", \"data\": {\"user_type\": \"individual\", \"email\": \"operator@example.test\", \"user_name\": \"Test Operator\", \"user_shortname\": \"Test\", \"broker\": \"ZERODHA\", \"exchanges\": [\"NSE\", \"BSE\"], \"products\": [\"CNC\", \"MIS\"], \"order_types\": [\"MARKET\", \"LIMIT\", \"SL\", \"SL-M\"], \"avatar_url\": \"\", \"user_id\": \"AB1234\", \"api_key\": \"test_api_key\", \"access_token\": \"test_access_token\", \"public_token\": \"test_public_token\", \"refresh_token\": null, \"enctoken\": \"test_enctoken\", \"login_time\": \"2026-10-21 08:35:12\", \"meta\": {\"demat_consent\": \"consent\"}}}",
+    "body_encoding": "utf-8"
+  }
+}

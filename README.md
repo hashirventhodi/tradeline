@@ -2,7 +2,7 @@
 
 A long-only swing trading platform for NSE cash equities. A deterministic, versioned quant strategy proposes trades; an AI layer may only veto or shrink them; a code-only risk engine has the final word; and live execution stays off until measurable gates pass.
 
-**Status: Phase 1 in progress.** The design is complete (vocabulary, decisions, architecture, phases with acceptance criteria, risk controls, research) and the walking skeleton is in place: package, migrations, transport, secrets, logging, test harness. `ingest eod` loads NSE end-of-day files and the instrument master (NSE symbol, ISIN, series, listing date, Kite instrument token). Nothing trades.
+**Status: Phase 1 in progress.** The design is complete (vocabulary, decisions, architecture, phases with acceptance criteria, risk controls, research) and the walking skeleton is in place: package, migrations, transport, secrets, logging, test harness. `ingest eod` loads NSE end-of-day files and the instrument master (NSE symbol, ISIN, series, listing date, Kite instrument token); `login` performs the daily Kite Session Login and `ingest candles --interval day` loads raw daily candles from Kite at its rate limit. Nothing trades.
 
 ## Getting started
 
@@ -13,10 +13,12 @@ cp .env.example .env            # fill in the Kite values; DATABASE_URL already 
 make db                         # docker compose up -d --wait postgres (host port 55432)
 make migrate                    # uv run tradeline migrate
 uv run tradeline ingest eod --from 2024-07-01 --to 2024-07-31   # NSE end-of-day files + instrument master
+uv run tradeline login                                          # daily: prints the Kite login URL, stores the access token in .env
+uv run tradeline ingest candles --interval day --symbol INFY --from 2024-07-01 --to 2024-07-31
 make check                      # ruff, mypy, pytest against a throwaway database
 ```
 
-Settings that are not secret live in `tradeline.toml`. Secrets come from `.env` in development and the process environment in production; see `src/tradeline/secrets.py`. Tests run under `TRADELINE_ENV=test`, where the live transport refuses to be constructed and `pytest-socket` blocks every non-loopback socket; external responses come from fixtures recorded with `RecordingTransport` and served by `PlaybackTransport` (`src/tradeline/transport.py`). Every `ingest` subcommand takes `--record-fixtures DIR` to capture live responses and `--play-fixtures DIR` to replay them; the committed fixtures under `tests/fixtures/` are real responses trimmed to a few symbols. Reads go through `src/tradeline/queries.py`, the only read path for later phases and for tests.
+Settings that are not secret live in `tradeline.toml`. Secrets come from `.env` in development and the process environment in production; see `src/tradeline/secrets.py`. Tests run under `TRADELINE_ENV=test`, where the live transport refuses to be constructed and `pytest-socket` blocks every non-loopback socket; external responses come from fixtures recorded with `RecordingTransport` and served by `PlaybackTransport` (`src/tradeline/transport.py`). `login` and every `ingest` subcommand take `--record-fixtures DIR` to capture live responses and `--play-fixtures DIR` to replay them; the committed fixtures under `tests/fixtures/` are real responses trimmed to a few symbols. Reads go through `src/tradeline/queries.py`, the only read path for later phases and for tests.
 
 ## Read this first
 

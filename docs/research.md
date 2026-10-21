@@ -21,6 +21,35 @@ Every component in the architecture exists in some form today: event-driven back
 - **Pattern-day-trader minimum removal (US, June 2026)** is irrelevant here; Indian intraday has no such rule but is excluded on cost grounds anyway.
 - **Alternative brokers.** Upstox has a sandbox; Dhan charges about ₹499 per month for data; Angel One and Fyers have free APIs. The Broker Adapter interface keeps a switch possible.
 
+## Kite daily history depth and adjustment
+
+**Status on 2026-10-21: not yet verified from real responses.** `login` and
+`ingest candles --interval day` exist (issue #4), but a Kite access token needs
+the Operator's interactive Session Login, so the implementing session could not
+capture a live response. Both answers must be recorded here before Phase 2
+starts; if candles turn out to be adjusted, ADR 0006 is revisited first.
+
+| Question | Answer | Checked on |
+|---|---|---|
+| How far back does Kite daily history go for NSE equities? | pending | |
+| Are Kite candles adjusted for corporate actions? | pending (forum evidence says unadjusted; unconfirmed) | |
+
+Procedure, about ten minutes once the day's login is done:
+
+1. `uv run tradeline login`, open the printed URL, paste the `request_token` back.
+2. Depth: `uv run tradeline ingest candles --interval day --symbol RELIANCE --symbol INFY --from 1995-01-01 --to <today> --record-fixtures tests/fixtures/kite_depth`.
+   The earliest `trade_date` that `queries.daily_candles` returns for each symbol
+   is the depth; record the date and whether the two symbols agree.
+3. Adjustment: RELIANCE issued a 1:1 bonus with ex-date 2024-10-28. Run
+   `uv run tradeline ingest eod --from 2024-10-25` and compare the NSE end-of-day
+   close for 2024-10-25 (`queries.end_of_day`) with Kite's bar for the same day
+   (`queries.daily_candles`, loaded in step 2). Equal closes mean Kite candles are
+   raw; a Kite close of about half the NSE close means Kite adjusts for bonuses and
+   splits, and ADR 0006 must be revised before Phase 2.
+4. Fill in the table above with the date checked, and replace the synthesised
+   fixtures under `tests/fixtures/ingest_candles/` with a real recording (see the
+   README there).
+
 ## US-market findings (for reference; not the chosen market)
 
 Alpaca offers free paper trading with IEX data and ₹99-equivalent full SIP data; Massive (formerly Polygon) runs 29 to 199 dollars a month; SEC EDGAR is free. These made the US the easier engineering choice. The Operator chose Indian equities, which cost more in friction (no sandbox, daily login, static IP) but is the market they trade.

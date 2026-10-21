@@ -104,3 +104,38 @@ def ingest_runs(conn: psycopg.Connection, *, source: str | None = None) -> list[
         (source, source),
     ).fetchall()
     return [IngestRun(*row) for row in rows]
+
+
+@dataclass(frozen=True)
+class DailyCandle:
+    trade_date: date
+    symbol: str
+    series: str
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: int
+
+
+def daily_candles(
+    conn: psycopg.Connection,
+    symbol: str,
+    *,
+    start: date,
+    end: date,
+    series: str = "EQ",
+) -> list[DailyCandle]:
+    """Raw daily candles for ``symbol`` from ``start`` to ``end`` inclusive, oldest first.
+
+    Exactly as Kite returned them: unadjusted. The adjusted series arrives
+    with corporate actions and is computed on read, never stored.
+    """
+    rows = conn.execute(
+        "SELECT trade_date, symbol, series, open, high, low, close, volume"
+        " FROM candles_daily"
+        " WHERE symbol = %s AND series = %s AND trade_date BETWEEN %s AND %s"
+        " ORDER BY trade_date",
+        (symbol, series, start, end),
+    ).fetchall()
+    return [DailyCandle(*row) for row in rows]

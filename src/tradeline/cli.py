@@ -9,18 +9,31 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from tradeline.config import Config, default_config_path, load_config
 from tradeline.db import app_connection, connect
 from tradeline.environment import Environment
+from tradeline.ingest.candles import INTERVAL_DAY, ingest_candles
 from tradeline.ingest.eod import ingest_eod
 from tradeline.logging import configure_logging
+from tradeline.login import login as login_service
+from tradeline.login import login_url_for
 from tradeline.migrations import apply_migrations
-from tradeline.secrets import DATABASE_URL, EnvSecrets, MissingSecret, SecretsProvider
+from tradeline.secrets import (
+    DATABASE_URL,
+    KITE_ACCESS_TOKEN,
+    KITE_API_KEY,
+    EnvSecrets,
+    MissingSecret,
+    SecretsProvider,
+)
+from tradeline.sources.kite import KiteError, KiteSession
 from tradeline.transport import (
     PlaybackTransport,
     RecordingTransport,
@@ -29,6 +42,9 @@ from tradeline.transport import (
 )
 
 log = logging.getLogger(__name__)
+
+# Kite's access tokens are issued and expire on the Indian calendar day.
+IST = ZoneInfo("Asia/Kolkata")
 
 
 @dataclass(frozen=True)
@@ -45,9 +61,40 @@ def migrate(ctx: Context, args: argparse.Namespace) -> int:
     return 0
 
 
+def login(ctx: Context, args: argparse.Namespace) -> int:
+    """Print the Kite login URL, take the request token back, store the day's access token.
+
+    The URL and the prompt go to stderr so stdout stays one JSON line per event.
+    """
+    url = login_url_for(ctx.secrets)
+    log.info("kite login url", extra={"login_url": url})
+    sys.stderr.write(f"Open this URL, log in to Kite, and paste back the request_token:\n{url}\n")
+    request_token = args.request_token
+    if request_token is None:
+        sys.stderr.write("request_token: ")
+        sys.stderr.flush()
+        request_token = sys.stdin.readline().strip()
+    if not request_token:
+        raise ValueError("no request token was given")
+    result = login_service(
+        ctx.secrets,
+        _transport(ctx, args),
+        request_token=request_token,
+        today=datetime.now(IST).date(),
+    )
+    log.info("login finished", extra={"user_id": result.user_id, "issued_on": result.issued_on})
+    return 0
+
+
 def ingest(ctx: Context, args: argparse.Namespace) -> int:
-    transport = _transport(ctx, args)
     end = args.start if args.end is None else args.end
+    if args.source == "eod":
+        return _ingest_eod(ctx, args, end)
+    return _ingest_candles(ctx, args, end)
+
+
+def _ingest_eod(ctx: Context, args: argparse.Namespace, end: date) -> int:
+    transport = _transport(ctx, args)
     with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
         result = ingest_eod(conn, transport, start=args.start, end=end)
     log.info(
@@ -58,6 +105,28 @@ def ingest(ctx: Context, args: argparse.Namespace) -> int:
             "eod_rows_written": result.eod_rows_written,
             "anomalies": result.anomalies,
             "symbol_updates": result.symbol_updates,
+        },
+    )
+    return 0
+
+
+def _ingest_candles(ctx: Context, args: argparse.Namespace, end: date) -> int:
+    session = KiteSession(
+        _transport(ctx, args),
+        api_key=ctx.secrets.require(KITE_API_KEY),
+        access_token=ctx.secrets.require(KITE_ACCESS_TOKEN),
+    )
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = ingest_candles(conn, session, start=args.start, end=end, symbols=args.symbols)
+    log.info(
+        "ingest candles finished",
+        extra={
+            "interval": args.interval,
+            "symbols_loaded": result.symbols_loaded,
+            "symbols_without_token": list(result.symbols_without_token),
+            "rows_written": result.rows_written,
+            "anomalies": result.anomalies,
+            "requests": result.requests,
         },
     )
     return 0
@@ -77,6 +146,7 @@ Command = Callable[[Context, argparse.Namespace], int]
 
 COMMANDS: dict[str, Command] = {
     "migrate": migrate,
+    "login": login,
     "ingest": ingest,
 }
 
@@ -99,20 +169,53 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="record every live response into DIR as a fixture",
     )
-    ingest_parser = subparsers.add_parser("ingest", help="load a source into the database")
-    sources = ingest_parser.add_subparsers(dest="source", required=True)
-    eod = sources.add_parser(
-        "eod",
-        parents=[fixtures],
-        help="NSE end-of-day files for a date range, plus the instrument master",
+    date_range = argparse.ArgumentParser(add_help=False)
+    date_range.add_argument(
+        "--from", dest="start", metavar="DATE", type=date.fromisoformat, required=True
     )
-    eod.add_argument("--from", dest="start", metavar="DATE", type=date.fromisoformat, required=True)
-    eod.add_argument(
+    date_range.add_argument(
         "--to",
         dest="end",
         metavar="DATE",
         type=date.fromisoformat,
         help="inclusive; defaults to --from",
+    )
+
+    login_parser = subparsers.add_parser(
+        "login",
+        parents=[fixtures],
+        help="the daily Kite Session Login: print the login URL, store the access token",
+    )
+    login_parser.add_argument(
+        "--request-token",
+        metavar="TOKEN",
+        help="the request_token from the login redirect; prompted for when omitted",
+    )
+
+    ingest_parser = subparsers.add_parser("ingest", help="load a source into the database")
+    sources = ingest_parser.add_subparsers(dest="source", required=True)
+    sources.add_parser(
+        "eod",
+        parents=[fixtures, date_range],
+        help="NSE end-of-day files for a date range, plus the instrument master",
+    )
+    candles = sources.add_parser(
+        "candles",
+        parents=[fixtures, date_range],
+        help="raw Kite candles for symbols over a date range (needs `login` today)",
+    )
+    candles.add_argument(
+        "--interval",
+        choices=[INTERVAL_DAY],
+        required=True,
+        help="candle interval; minute candles arrive in a later issue",
+    )
+    candles.add_argument(
+        "--symbol",
+        dest="symbols",
+        metavar="SYMBOL",
+        action="append",
+        help="an NSE symbol to load; repeatable; defaults to every symbol with a Kite token",
     )
     return parser
 
@@ -132,7 +235,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             secrets=EnvSecrets.for_environment(environment),
         )
         return COMMANDS[args.command](ctx, args)
-    except (MissingSecret, ValueError) as error:  # ConfigError is a ValueError
+    except (MissingSecret, KiteError, ValueError) as error:  # ConfigError is a ValueError
         log.error(str(error))
         return 1
     except Exception:

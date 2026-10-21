@@ -1,0 +1,19 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.kite.trade/session/token",
+    "body": "api_key=test_api_key&request_token=bad_request_token&checksum=fa076800d3d10351ca9561f82228310d4b5f279a0f2dc9170674de6854cce32c",
+    "body_encoding": "utf-8"
+  },
+  "response": {
+    "status": 403,
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "body": "{\"status\": \"error\", \"message\": \"Token is invalid or has expired.\", \"error_type\": \"TokenException\"}",
+    "body_encoding": "utf-8"
+  }
+}

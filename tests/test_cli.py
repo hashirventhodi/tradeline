@@ -1,11 +1,16 @@
+import io
 import json
+import os
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from tradeline.cli import main
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+IST = ZoneInfo("Asia/Kolkata")
 
 
 def json_lines(text: str) -> list[dict[str, object]]:
@@ -120,3 +125,118 @@ def test_ingest_eod_rejects_a_date_that_is_not_iso(capsys: pytest.CaptureFixture
 
     assert exit_info.value.code == 2
     assert "invalid" in capsys.readouterr().err
+
+
+LOGIN_FIXTURES = REPO_ROOT / "tests" / "fixtures" / "login"
+CANDLE_FIXTURES = REPO_ROOT / "tests" / "fixtures" / "ingest_candles"
+
+
+def test_login_prints_the_url_exchanges_the_pasted_token_and_stores_it(
+    repo_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("KITE_API_KEY", "test_api_key")
+    monkeypatch.setenv("KITE_API_SECRET", "test_api_secret")
+    monkeypatch.setenv("KITE_ACCESS_TOKEN", "stale")
+    monkeypatch.setenv("KITE_ACCESS_TOKEN_ISSUED_ON", "2020-01-01")
+    monkeypatch.setattr("sys.stdin", io.StringIO("test_request_token\n"))
+
+    code = main(["login", "--play-fixtures", str(LOGIN_FIXTURES)])
+
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "https://kite.trade/connect/login?v=3&api_key=test_api_key" in captured.err
+    lines = json_lines(captured.out)
+    assert all(line["command"] == "login" for line in lines)
+    assert lines[0]["login_url"] == "https://kite.trade/connect/login?v=3&api_key=test_api_key"
+    assert lines[-1]["user_id"] == "AB1234"
+    assert os.environ["KITE_ACCESS_TOKEN"] == "test_access_token"
+    assert os.environ["KITE_ACCESS_TOKEN_ISSUED_ON"] == datetime.now(IST).date().isoformat()
+
+
+def test_login_takes_the_request_token_as_an_option_and_reports_a_rejected_one(
+    repo_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("KITE_API_KEY", "test_api_key")
+    monkeypatch.setenv("KITE_API_SECRET", "test_api_secret")
+    monkeypatch.setenv("KITE_ACCESS_TOKEN", "stale")
+
+    code = main(
+        ["login", "--request-token", "bad_request_token", "--play-fixtures", str(LOGIN_FIXTURES)]
+    )
+
+    assert code == 1
+    failure = json_lines(capsys.readouterr().out)[-1]
+    assert failure["level"] == "ERROR"
+    assert "TokenException" in str(failure["msg"])
+    assert os.environ["KITE_ACCESS_TOKEN"] == "stale"
+
+
+def test_ingest_candles_plays_fixtures_end_to_end_and_logs_the_run(
+    database_url: str,
+    repo_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setenv("KITE_API_KEY", "test_api_key")
+    monkeypatch.setenv("KITE_ACCESS_TOKEN", "test_access_token")
+    assert main(["ingest", "eod", "--from", "2024-07-01", "--play-fixtures", str(FIXTURES)]) == 0
+    capsys.readouterr()
+
+    code = main(
+        [
+            "ingest",
+            "candles",
+            "--interval",
+            "day",
+            "--symbol",
+            "INFY",
+            "--from",
+            "2024-07-01",
+            "--to",
+            "2024-08-30",
+            "--play-fixtures",
+            str(CANDLE_FIXTURES),
+        ]
+    )
+
+    assert code == 0
+    lines = json_lines(capsys.readouterr().out)
+    assert all(line["command"] == "ingest" for line in lines)
+    (finished,) = [line for line in lines if line["msg"] == "ingest run finished"]
+    assert finished["source"] == "kite_candles_daily"
+    assert (finished["range_start"], finished["range_end"]) == ("2024-07-01", "2024-08-30")
+    assert finished["rows_written"] == 43
+    assert lines[-1]["msg"] == "ingest candles finished"
+    assert lines[-1]["symbols_loaded"] == 1
+
+
+def test_ingest_candles_without_an_access_token_fails_by_name(
+    database_url: str,
+    repo_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setenv("KITE_API_KEY", "test_api_key")
+    monkeypatch.delenv("KITE_ACCESS_TOKEN", raising=False)
+
+    code = main(["ingest", "candles", "--interval", "day", "--from", "2024-07-01"])
+
+    assert code == 1
+    failure = json_lines(capsys.readouterr().out)[-1]
+    assert "KITE_ACCESS_TOKEN" in str(failure["msg"])
+
+
+def test_ingest_candles_accepts_only_the_day_interval_for_now(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(["ingest", "candles", "--interval", "minute", "--from", "2024-07-01"])
+
+    assert exit_info.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
