@@ -29,6 +29,7 @@ Accept when:
 - The Holdout lock is enforced: a second run of the same Strategy version on the Holdout is refused by the engine and recorded as an attempt.
 - The Backtest Gate is evaluated and reported honestly, pass or fail. A failing result is an acceptable phase outcome and is documented as such.
 - Backtest trades carry the same schema as live trades.
+- Historical Universe reconstruction is designed and built per the ADR 0005 amendment: recorded versus reconstructed mode, rule validity period, and data cutoff are distinct and stored; every backtest records the rule version, data provenance, and mode it used; an unversioned query for a date with no valid version never falls back to today's Universe.
 
 ## Phase 3: Risk Engine, Paper Broker on live data, Ledger, scheduler
 
