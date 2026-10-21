@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 from tradeline.config import Config, default_config_path, load_config
 from tradeline.db import app_connection, connect
 from tradeline.environment import Environment
-from tradeline.ingest.candles import ingest_candles
+from tradeline.ingest.candles import CurrentUniverse, ingest_candles
 from tradeline.ingest.corporate_actions import ingest_corporate_actions
 from tradeline.ingest.eod import ingest_eod
 from tradeline.logging import configure_logging
@@ -34,7 +34,13 @@ from tradeline.secrets import (
     MissingSecret,
     SecretsProvider,
 )
-from tradeline.sources.kite import INTERVAL_DAY, KiteError, KiteSession, login_url
+from tradeline.sources.kite import (
+    INTERVAL_DAY,
+    INTERVAL_MINUTE,
+    KiteError,
+    KiteSession,
+    login_url,
+)
 from tradeline.transport import (
     PlaybackTransport,
     RecordingTransport,
@@ -126,8 +132,23 @@ def _ingest_candles(ctx: Context, args: argparse.Namespace, end: date) -> int:
         api_key=ctx.secrets.require(KITE_API_KEY),
         access_token=ctx.secrets.require(KITE_ACCESS_TOKEN),
     )
+    universe = None
+    if args.interval == INTERVAL_MINUTE and args.symbols is None:
+        # Minute history is kept for the current Universe under the configured rule.
+        month = args.universe_month or datetime.now(IST).date().replace(day=1)
+        universe = CurrentUniverse(month=month, rule_version=ctx.config.universe.version)
+    elif args.universe_month is not None:
+        raise ValueError("--universe-month applies to minute candles without --symbol")
     with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
-        result = ingest_candles(conn, session, start=args.start, end=end, symbols=args.symbols)
+        result = ingest_candles(
+            conn,
+            session,
+            start=args.start,
+            end=end,
+            interval=args.interval,
+            symbols=args.symbols,
+            universe=universe,
+        )
     log.info(
         "ingest candles finished",
         extra={
@@ -278,9 +299,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     candles.add_argument(
         "--interval",
-        choices=[INTERVAL_DAY],
+        choices=[INTERVAL_DAY, INTERVAL_MINUTE],
         required=True,
-        help="candle interval; minute candles arrive in a later issue",
+        help="candle interval",
     )
     candles.add_argument(
         "--symbol",
@@ -288,7 +309,15 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="SYMBOL",
         action="append",
         help="an NSE symbol to load under every series it has; repeatable;"
-        " defaults to every EQ series symbol with a Kite token",
+        " defaults to every EQ series symbol with a Kite token for day candles,"
+        " and to the current Universe for minute candles",
+    )
+    candles.add_argument(
+        "--universe-month",
+        metavar="YYYY-MM",
+        type=_month,
+        help="minute candles: the Universe month whose members are loaded, under the"
+        " configured rule; defaults to the current month in India",
     )
     actions = sources.add_parser(
         "corporate-actions",

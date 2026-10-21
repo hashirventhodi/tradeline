@@ -16,7 +16,8 @@ Everything else needs the day's access token (see ``login_url`` and
 token header, the historical API's limit of 3 requests per second, and
 exponential backoff on 429 and 5xx. The historical API also caps the span of
 one request by interval (``MAX_DAYS_PER_REQUEST``); ``candle_ranges`` chunks a
-range to fit and ``fetch_daily_candles`` walks the chunks.
+range to fit and ``fetch_candles`` walks the chunks. A bar is stamped with the
+time it starts in Indian time: midnight for a daily bar.
 """
 
 from __future__ import annotations
@@ -45,11 +46,14 @@ SESSION_TOKEN_URL = f"{API_HOST}/session/token"
 HISTORICAL_URL = f"{API_HOST}/instruments/historical"
 KITE_HEADERS: dict[str, str] = {"X-Kite-Version": "3"}
 
-# The historical API's documented limits. Only daily candles are loaded so far;
-# minute candles (60 days per request) arrive with their own issue.
+# The historical API's limits, a span counted in days inclusive of both ends.
+# For minute bars Kite answered 1 July to 30 August 2024 (61 days inclusive)
+# and refused 1 July to 31 August ("interval exceeds max limit: 60 days");
+# 60 inclusive keeps a day's margin.
 REQUESTS_PER_SECOND = 3.0
 INTERVAL_DAY = "day"
-MAX_DAYS_PER_REQUEST: dict[str, int] = {INTERVAL_DAY: 2000}
+INTERVAL_MINUTE = "minute"
+MAX_DAYS_PER_REQUEST: dict[str, int] = {INTERVAL_DAY: 2000, INTERVAL_MINUTE: 60}
 
 # Exponential backoff on throttling (429) and server errors: the delay before each retry.
 RETRY_DELAYS_SECONDS: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0)
@@ -212,12 +216,19 @@ def _data(response: Response, url: str) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class Candle:
-    trade_date: date
+    """One bar; ``ts`` is when it starts, with Kite's +05:30 offset."""
+
+    ts: datetime
     open: Decimal
     high: Decimal
     low: Decimal
     close: Decimal
     volume: int
+
+    @property
+    def trade_date(self) -> date:
+        """The Indian calendar day the bar belongs to."""
+        return self.ts.date()
 
 
 def historical_url(instrument_token: int, interval: str, start: date, end: date) -> str:
@@ -237,13 +248,17 @@ def candle_ranges(start: date, end: date, *, interval: str) -> list[tuple[date, 
     return ranges
 
 
-def fetch_daily_candles(
-    session: KiteSession, instrument_token: int, *, start: date, end: date
+def fetch_candles(
+    session: KiteSession, instrument_token: int, *, interval: str, start: date, end: date
 ) -> list[Candle]:
-    """Raw daily candles for one instrument, oldest first, exactly as Kite returned them."""
+    """Raw candles for one instrument, oldest first, exactly as Kite returned them.
+
+    A date-only ``to`` covers that whole day for minute bars too: 31 July to
+    1 August 2024 returned both days' 375 bars each.
+    """
     candles: list[Candle] = []
-    for chunk_start, chunk_end in candle_ranges(start, end, interval=INTERVAL_DAY):
-        url = historical_url(instrument_token, INTERVAL_DAY, chunk_start, chunk_end)
+    for chunk_start, chunk_end in candle_ranges(start, end, interval=interval):
+        url = historical_url(instrument_token, interval, chunk_start, chunk_end)
         candles.extend(parse_candles(session.get_json(url)))
     return candles
 
@@ -252,7 +267,7 @@ def parse_candles(document: Any) -> list[Candle]:
     rows = document["data"]["candles"]
     return [
         Candle(
-            trade_date=datetime.strptime(str(row[0]), "%Y-%m-%dT%H:%M:%S%z").date(),
+            ts=datetime.strptime(str(row[0]), "%Y-%m-%dT%H:%M:%S%z"),
             open=Decimal(str(row[1])),
             high=Decimal(str(row[2])),
             low=Decimal(str(row[3])),

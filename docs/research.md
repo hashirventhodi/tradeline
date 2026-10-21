@@ -71,6 +71,18 @@ end-of-day rows, the official unadjusted prices, and Kite's bars serve as the
 cross-check (the RELIANCE comparison is a test). The ADR's wording and the role
 of `candles_daily` remain to be settled.
 
+## Kite minute history depth
+
+Probed on 2026-10-21 from live Kite Connect minute responses (not recorded,
+except the two days under `tests/fixtures/ingest_minute_candles/`).
+
+| Question | Answer | Checked on |
+|---|---|---|
+| How far back does Kite minute history go? | **2015-02-02** for INFY, RELIANCE and TCS: a request for 2015-01-01 to 2015-02-28 starts at 2015-02-02 09:15, and any earlier window (2010, 2014, December 2014 to January 2015) returns no bars. About eleven years and eight months to 2026-10-21. | 2026-10-21 |
+| What span does one minute request accept? | 61 days inclusive of both ends (1 July to 30 August 2024 answered; to 31 August refused with `InputException: interval exceeds max limit: 60 days`). The ingest asks for 60 inclusive. | 2026-10-21 |
+| Is a date-only `to` inclusive of that day? | Yes: `from=2024-07-31&to=2024-08-01` returns 750 bars, 375 a day, 09:15 to 15:29 IST, each stamped with its start minute and `+0530`. | 2026-10-21 |
+| Are minute bars adjusted? | **Yes, like daily bars.** INFY's 1 July 2024 09:15 open is 1526.5, Kite's adjusted daily open for that day; February 2015 bars are at a quarter to a half of the prices then quoted. Some adjusted minute prices are not on any tick (TCS 2015-02-02 09:15 high 1243.63). `candles_minute` therefore holds Kite's adjusted series as of the fetch, as `candles_daily` does. | 2026-10-21 |
+
 ## US-market findings (for reference; not the chosen market)
 
 Alpaca offers free paper trading with IEX data and ₹99-equivalent full SIP data; Massive (formerly Polygon) runs 29 to 199 dollars a month; SEC EDGAR is free. These made the US the easier engineering choice. The Operator chose Indian equities, which cost more in friction (no sandbox, daily login, static IP) but is the market they trade.
