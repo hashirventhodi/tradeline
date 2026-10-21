@@ -4,8 +4,8 @@ BSE's announcements page reads a JSON API on ``api.bseindia.com``, 50 filings
 a page, newest first, with the day's total in ``Table1[0].ROWCNT``. The API
 answers only a browser: it wants the site as Referer and Origin and refuses
 any client whose TLS handshake is not a browser's (live use needs
-``LiveTransport(browser_tls=True)``). ``BseSession`` owns the headers and the
-backoff, as ``NseSession`` does for NSE.
+``BrowserTransport``). ``BseSession`` owns the headers and the backoff, as
+``NseSession`` does for NSE.
 
 A filing names its company by BSE scrip code and BSE's company name; it
 carries no NSE symbol and no ISIN. BSE states when it received the filing

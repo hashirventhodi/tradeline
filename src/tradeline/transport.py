@@ -1,10 +1,11 @@
 """The one boundary to the outside world.
 
-Every source adapter makes HTTP calls through a ``Transport``. There are four:
+Every source adapter makes HTTP calls through a ``Transport``. There are five:
 
 - ``LiveTransport``: real HTTP. Refuses to be constructed under the test environment.
-  With ``browser_tls`` it presents a browser's TLS handshake, which BSE's API
-  requires: it refuses httpx and curl outright, whatever their headers.
+- ``BrowserTransport``: real HTTP with a browser's TLS handshake, which BSE's API
+  requires: it refuses httpx and curl outright, whatever their headers. Refused
+  under test too.
 - ``PlaybackTransport``: serves recorded fixtures; an unrecorded request raises.
 - ``RecordingTransport``: wraps another transport and writes what it sees as fixtures.
 - ``RefusingTransport``: raises on any call; the default under test.
@@ -78,45 +79,54 @@ class UnrecordedRequest(LookupError):
     pass
 
 
+def _refuse_under_test(name: str) -> None:
+    if Environment.current() is Environment.TEST:
+        raise LiveTransportForbidden(
+            f"the {name} cannot be used under TRADELINE_ENV=test; "
+            "use PlaybackTransport with recorded fixtures"
+        )
+
+
 class LiveTransport:
-    def __init__(
-        self, *, timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS, browser_tls: bool = False
-    ) -> None:
-        if Environment.current() is Environment.TEST:
-            raise LiveTransportForbidden(
-                "the live transport cannot be used under TRADELINE_ENV=test; "
-                "use PlaybackTransport with recorded fixtures"
-            )
-        self._timeout = timeout_seconds
-        self._browser: curl_requests.Session[curl_requests.Response] | None = None
-        self._client: httpx.Client | None = None
-        if browser_tls:
-            # Cookies are the sources' business (see NseSession), so this session keeps none.
-            self._browser = curl_requests.Session(impersonate="chrome", allow_redirects=False)
-        else:
-            self._client = httpx.Client(timeout=timeout_seconds, follow_redirects=False)
+    """Real HTTP through httpx."""
+
+    def __init__(self, *, timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS) -> None:
+        _refuse_under_test("live transport")
+        self._client = httpx.Client(timeout=timeout_seconds, follow_redirects=False)
 
     def send(self, request: Request) -> Response:
-        if self._browser is not None:
-            self._browser.cookies.clear()
-            answer = self._browser.request(
-                request.method,  # type: ignore[arg-type]
-                request.url,
-                headers=dict(request.headers),
-                data=request.body,
-                timeout=self._timeout,
-            )
-            return Response(
-                status=answer.status_code,
-                headers=tuple((k, v or "") for k, v in answer.headers.multi_items()),
-                body=answer.content,
-            )
-        assert self._client is not None
         raw = self._client.request(
             request.method, request.url, headers=dict(request.headers), content=request.body
         )
         return Response(
             status=raw.status_code, headers=tuple(raw.headers.multi_items()), body=raw.content
+        )
+
+
+class BrowserTransport:
+    """Real HTTP with a browser's TLS handshake (curl_cffi impersonating Chrome)."""
+
+    def __init__(self, *, timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS) -> None:
+        _refuse_under_test("browser transport")
+        self._timeout = timeout_seconds
+        # Cookies are the sources' business (see NseSession), so this session keeps none.
+        self._session: curl_requests.Session[curl_requests.Response] = curl_requests.Session(
+            impersonate="chrome", allow_redirects=False
+        )
+
+    def send(self, request: Request) -> Response:
+        self._session.cookies.clear()
+        answer = self._session.request(
+            request.method,  # type: ignore[arg-type]
+            request.url,
+            headers=dict(request.headers),
+            data=request.body,
+            timeout=self._timeout,
+        )
+        return Response(
+            status=answer.status_code,
+            headers=tuple((k, v or "") for k, v in answer.headers.multi_items()),
+            body=answer.content,
         )
 
 
@@ -159,7 +169,7 @@ def transport_for(environment: Environment, *, browser_tls: bool = False) -> Tra
     """The default transport when none is injected: live, except under test."""
     if environment is Environment.TEST:
         return RefusingTransport()
-    return LiveTransport(browser_tls=browser_tls)
+    return BrowserTransport() if browser_tls else LiveTransport()
 
 
 _UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
