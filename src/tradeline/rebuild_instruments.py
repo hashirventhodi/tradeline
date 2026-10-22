@@ -177,7 +177,7 @@ def _record_stale_months(
     months = conn.execute(
         "SELECT DISTINCT m.month, m.rule_version, (v.parameters->>'lookback_trading_days')::int,"
         " (v.parameters->>'min_listing_trading_days')::int,"
-        " v.parameters->>'listing_age_from' IS NOT DISTINCT FROM 'earliest'"
+        " v.parameters->>'listing_age_from' IS NOT DISTINCT FROM 'earliest_evidence'"
         " FROM universe_membership m JOIN universe_rule_versions v ON v.version = m.rule_version"
         " WHERE v.parameters->>'rank_by' = 'instrument' AND NOT EXISTS ("
         "  SELECT 1 FROM universe_stale_months s"

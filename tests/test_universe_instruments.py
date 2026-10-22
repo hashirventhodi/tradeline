@@ -47,7 +47,7 @@ BY_SYMBOL = UniverseRule(
     min_presence_percent=90,
 )
 BY_INSTRUMENT = replace(BY_SYMBOL, rank_by="instrument")
-EARLIEST = replace(BY_INSTRUMENT, listing_age_from="earliest")
+EARLIEST = replace(BY_INSTRUMENT, listing_age_from="earliest_evidence")
 
 # Window traded value over 28 March to 30 April 2025, from the untrimmed files.
 RELIANCE = Decimal("402258396718.85")

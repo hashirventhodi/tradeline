@@ -174,7 +174,7 @@ def test_a_corrected_listing_date_after_the_first_row_leaves_listing_age_and_its
 ) -> None:
     # ADR 0017: RELIANCE's Listing Age counts from its first row, 17 March,
     # whether the master dates it 25 March or 1995.
-    listing = replace(SHORT, min_listing_trading_days=5, listing_age_from="earliest")
+    listing = replace(SHORT, min_listing_trading_days=5, listing_age_from="earliest_evidence")
     with app_connection(fresh_database_url) as conn:
         ingest_eod(conn, Playback(FIXTURES, EOD_FIXTURES, edit=listed_late), start=START, end=END)
         ingest_symbol_changes(conn, Playback(INSTRUMENT_FIXTURES))

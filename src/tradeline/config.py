@@ -26,7 +26,7 @@ class ConfigError(ValueError):
 
 RankBy = Literal["symbol", "instrument"]
 RANK_BY: tuple[RankBy, ...] = get_args(RankBy)
-ListingAgeFrom = Literal["listing_date", "earliest"]
+ListingAgeFrom = Literal["listing_date", "earliest_evidence"]
 LISTING_AGE_FROM: tuple[ListingAgeFrom, ...] = get_args(ListingAgeFrom)
 
 
@@ -69,8 +69,10 @@ class UniverseRule:
             raise ConfigError(
                 f"universe.listing_age_from must be one of {', '.join(LISTING_AGE_FROM)}"
             )
-        if self.listing_age_from == "earliest" and self.rank_by != "instrument":
-            raise ConfigError('universe.listing_age_from = "earliest" needs rank_by = "instrument"')
+        if self.listing_age_from == "earliest_evidence" and self.rank_by != "instrument":
+            raise ConfigError(
+                'universe.listing_age_from = "earliest_evidence" needs rank_by = "instrument"'
+            )
         for name in ("top_n", "lookback_trading_days", "min_listing_trading_days"):
             if getattr(self, name) < 1:
                 raise ConfigError(f"universe.{name} must be at least 1")
