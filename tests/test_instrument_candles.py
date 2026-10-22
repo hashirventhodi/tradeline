@@ -16,11 +16,22 @@ fixture is edited by hand.
 """
 
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 import psycopg
+import pytest
 
-from playback import Edit, Playback, kite_candles, lines, shift_close
+from playback import (
+    Edit,
+    Playback,
+    add_bar,
+    kite_candles,
+    lines,
+    recorded_range,
+    shift_close,
+    then,
+)
 from tradeline import queries
 from tradeline.config import Config
 from tradeline.db import app_connection
@@ -28,7 +39,7 @@ from tradeline.ingest.candles import CandleIngestResult, ingest_candles
 from tradeline.ingest.eod import ingest_eod
 from tradeline.ingest.symbol_changes import ingest_symbol_changes
 from tradeline.rebuild_instruments import rebuild_instruments
-from tradeline.reconcile import ReconcileReport, reconcile
+from tradeline.reconcile import PreListingCandle, ReconcileReport, reconcile
 from tradeline.sources.kite import INSTRUMENTS_URL, KiteSession
 from tradeline.transport import PlaybackTransport, Request
 
@@ -157,6 +168,115 @@ def test_an_instrument_day_stored_under_two_kite_names_reads_the_newer_and_repor
         }
     ]
     assert "1 candle disagreement" in report.text()
+
+
+# ETERNAL's Instrument was listed on 2021-07-23 (NSE's equity master), long before
+# its first row here, so Kite is asked from earlier than that and the recorded week
+# is played back with bars added, as Kite returns bars under a token from before the
+# security now holding it was listed (MAZDOCK's, docs/research.md, #34).
+EARLIER = date(2021, 7, 1)
+LISTED = date(2021, 7, 23)
+
+
+def fetch_from(
+    conn: psycopg.Connection, start: date, *bars: list[object], symbol: str = "ETERNAL"
+) -> None:
+    edit = then(*(add_bar(ETERNAL_TOKEN, bar) for bar in bars))
+    transport = Playback(
+        KITE, ask=recorded_range("2025-04-07", "2025-04-11"), edit=kite_candles(edit)
+    )
+    session = KiteSession(transport, api_key="key", access_token="tok", sleep=lambda _: None)
+    ingest_candles(conn, session, start=start, end=END, symbols=[symbol])
+
+
+def test_a_candle_dated_before_the_instruments_listing_is_a_pre_listing_candle_not_an_extra(
+    fresh_database_url: str,
+) -> None:
+    # An earlier security's penny-stock bar, its price adjusted to zero.
+    bar = ["2021-07-22T00:00:00+0530", 0, 0, 0, 0, 7154666]
+    with app_connection(fresh_database_url) as conn:
+        load_nse(conn)
+        rebuild_instruments(conn)
+        fetch_from(conn, EARLIER, bar)
+        report = reconcile(conn, SETTINGS, start=EARLIER, end=END)
+
+    assert report.pre_listing_candles == (
+        PreListingCandle(
+            instrument=ETERNAL,
+            symbol="ETERNAL",
+            series="EQ",
+            trade_date=date(2021, 7, 22),
+            close=Decimal(0),
+            listing_age_from=LISTED,
+        ),
+    )
+    # Not compared: the four days of the recorded week are the rows, with nothing discrepant.
+    assert (report.rows, report.discrepancies) == (4, 0)
+    assert report.passed
+    summary = report.summary()
+    assert (summary["rows"], summary["extra"]) == (4, 0)
+    assert summary["pre_listing_candles"] == 1
+    assert summary["listed_pre_listing_candles"] == [
+        {
+            "instrument": ETERNAL,
+            "symbol": "ETERNAL",
+            "series": "EQ",
+            "trade_date": "2021-07-22",
+            "close": "0",
+            "listing_age_from": "2021-07-23",
+        }
+    ]
+    assert (
+        "1 pre-listing candle (dated before its Instrument's Listing Age starts; not compared):\n"
+        "  ZOMATO@2021-07-23 EQ 2021-07-22: ETERNAL 0, Listing Age from 2021-07-23\n"
+    ) in report.text()
+
+
+def test_a_candle_from_the_listing_day_on_with_no_nse_row_is_still_an_extra(
+    fresh_database_url: str,
+) -> None:
+    on_listing = ["2021-07-23T00:00:00+0530", 116, 138, 115, 125.85, 694895021]
+    with app_connection(fresh_database_url) as conn:
+        load_nse(conn)
+        rebuild_instruments(conn)
+        fetch_from(conn, EARLIER, on_listing)
+        report = reconcile(conn, SETTINGS, start=EARLIER, end=END)
+
+    assert [(d.symbol, d.trade_date) for d in report.extra] == [("ETERNAL", LISTED)]
+    assert report.pre_listing_candles == ()
+    assert report.rows == 5
+
+
+def test_a_range_holding_only_pre_listing_candles_is_refused_as_nothing_to_reconcile(
+    fresh_database_url: str,
+) -> None:
+    bar = ["2021-07-22T00:00:00+0530", 0, 0, 0, 0, 7154666]
+    with app_connection(fresh_database_url) as conn:
+        load_nse(conn)
+        rebuild_instruments(conn)
+        fetch_from(conn, EARLIER, bar)
+
+        with pytest.raises(ValueError, match="1 pre-listing candle"):
+            reconcile(conn, SETTINGS, start=EARLIER, end=date(2021, 7, 31))
+
+
+def test_a_pre_listing_day_under_two_kite_names_is_no_candle_disagreement(
+    fresh_database_url: str,
+) -> None:
+    # Fetched under ZOMATO before the rename, then as ETERNAL after Kite readjusted
+    # the earlier security's bar: the two differ, but neither is the Instrument's.
+    with app_connection(fresh_database_url) as conn:
+        load_nse(conn, dump=as_before_the_rename)
+        fetch_from(
+            conn, EARLIER, ["2021-07-22T00:00:00+0530", 0, 0, 0, 0, 7154666], symbol="ZOMATO"
+        )
+        load_nse(conn)
+        rebuild_instruments(conn)
+        fetch_from(conn, EARLIER, ["2021-07-22T00:00:00+0530", 0.05, 0.05, 0.05, 0.05, 3577333])
+        report = reconcile(conn, SETTINGS, start=EARLIER, end=END)
+
+    assert [c.trade_date for c in report.pre_listing_candles] == [date(2021, 7, 22)]
+    assert report.candle_disagreements == ()
 
 
 def test_an_instruments_candles_read_through_a_symbol_are_those_of_the_instrument_it_named(

@@ -123,6 +123,17 @@ def shift_close(token: str, stamp: str, by: str) -> CandleEdit:
     return edit
 
 
+def add_bar(token: str, bar: Candle) -> CandleEdit:
+    """Instrument ``token``'s bars with ``bar`` added, in timestamp order."""
+
+    def edit(request: Request, candles: list[Candle]) -> list[Candle]:
+        if f"/historical/{token}/" not in request.url:
+            return candles
+        return sorted([*candles, bar], key=lambda c: c[0])
+
+    return edit
+
+
 def then(*edits: CandleEdit) -> CandleEdit:
     """The candle edits applied in turn."""
 

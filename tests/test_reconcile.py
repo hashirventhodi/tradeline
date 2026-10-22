@@ -239,6 +239,8 @@ def test_the_command_exits_zero_on_clean_fixtures_with_a_summary_and_a_table(
         "listed": [],
         "candle_disagreements": 0,
         "listed_candle_disagreements": [],
+        "pre_listing_candles": 0,
+        "listed_pre_listing_candles": [],
     }
     assert "172 rows, 0 discrepancies" in table
     assert "PASS" in table

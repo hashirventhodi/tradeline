@@ -165,6 +165,10 @@ _Avoid_: Multiplier, ratio, adjustment
 The Raw Series with every Corporate Action known on an As-Of Date applied, whichever of the Instrument's Symbols it was filed under, computed whenever it is read and never stored. The only price series the engine, the backtester, and the tests read.
 _Avoid_: Adjusted candles, continuous prices, clean prices
 
+**Pre-listing Candle**:
+A broker candle dated before the start of its Instrument's Listing Age. It cannot be the Instrument's own trading (a broker's token can carry an earlier security's history), so it is reported, never compared or used, and never attributed to another Instrument.
+_Avoid_: Pre-listing history, extra (an extra is a candle on a day the Instrument was trading and NSE has no row)
+
 **As-Of Date**:
 The date on which an Adjusted Series is asked for. Only Corporate Actions with an Ex-Date on or before it are applied, and no bar after it is returned, so a Run on that date sees only what the market had already priced.
 _Avoid_: Reference date, valuation date, cutoff
