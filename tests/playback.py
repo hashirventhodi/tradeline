@@ -123,6 +123,21 @@ def shift_close(token: str, stamp: str, by: str) -> CandleEdit:
     return edit
 
 
+def zero_prices(token: str, stamp: str) -> CandleEdit:
+    """Instrument ``token``'s bars whose timestamp starts with ``stamp`` with every price
+    0, as Kite serves a bar whose adjusted prices all round away."""
+
+    def edit(request: Request, candles: list[Candle]) -> list[Candle]:
+        if f"/historical/{token}/" not in request.url:
+            return candles
+        for candle in candles:
+            if candle[0].startswith(stamp):
+                candle[1:5] = [0, 0, 0, 0]
+        return candles
+
+    return edit
+
+
 def add_bar(token: str, bar: Candle) -> CandleEdit:
     """Instrument ``token``'s bars with ``bar`` added, in timestamp order."""
 

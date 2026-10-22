@@ -33,12 +33,23 @@ are compared after taking it out: the factor of a stretch of days is the
 median of Kite's close over NSE's across it, the stretches being cut at every
 Ex-Date NSE lists for any of its Symbols (any kind, since Kite's rules for which
 actions it adjusts are its own). The median is robust to a few bad closes;
-a stretch of one or two days cannot show a bad close at all. A close
+a stretch of one or two non-zero closes cannot show a bad one at all. A close
 mismatches when it is further from NSE's close times the factor than
 ``close_tolerance`` of that price plus half Kite's 5 paisa tick, since Kite
 rounds its adjusted prices to the tick. Bars of one stretch fetched on
 different days, either side of a new action, carry different factors and are
 reported as mismatches, which they are.
+
+Kite's close can be 0: an adjusted price rounds to 0 when it is under half
+the tick, or under 0.50 where Kite rounds an instrument's history to whole
+rupees (#17, #41). Such a bar is left out of its stretch's factor, a ratio of
+0 showing only that the price rounded away, and is still compared against
+NSE's close times the factor of the rest: it passes where that is within half
+the tick of 0 and mismatches otherwise, so a whole-rupee 0 for 0.30 is a
+mismatch. A stretch whose every close is 0 has no factor: its bars count as
+rows and are never close mismatches, like a stretch too short to show a bad
+close. Only the close is compared; a zero open, high or low is
+``compare-adjusted``'s to find.
 
 The run passes when all discrepancies together, close mismatches as well as
 missing and extra rows, are under ``max_discrepancy_pct`` of the rows
@@ -440,7 +451,11 @@ def _close_mismatches(
 
     mismatches: list[Discrepancy] = []
     for stretch_rows in stretches.values():
-        factor = statistics.median(_ratio(r) for r in stretch_rows)
+        # A zero close rounded away and shows no factor; a stretch of only those has none.
+        ratios = [_ratio(r) for r in stretch_rows if r.candle_close]
+        if not ratios:
+            continue
+        factor = statistics.median(ratios)
         for r in stretch_rows:
             expected = _of(r.eod_close) * factor
             if abs(_of(r.candle_close) - expected) > tolerance * expected + HALF_TICK:
