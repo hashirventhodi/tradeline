@@ -1,0 +1,7 @@
+# The Trading Calendar the parity tests read unless a test writes its own: no
+# Special Session, and NSE's two weekday holidays in the recorded end-of-day
+# range (the citations are the tests', not reviewed ones).
+covers,2015-01-01,2026-12-31
+date,kind,citation
+2024-07-17,holiday,NSE/CMTR/59722
+2024-08-15,holiday,NSE/CMTR/59722

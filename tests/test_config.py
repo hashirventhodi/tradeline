@@ -185,6 +185,12 @@ def test_the_committed_config_states_kite_paritys_tolerance_and_gate() -> None:
     assert config.parity == Config.Parity(close_tolerance=0.001, max_unexplained_pct=0.1)
 
 
+def test_the_committed_config_gives_parity_and_integrity_one_trading_calendar() -> None:
+    config = load_config(Path(__file__).resolve().parents[1] / "tradeline.toml")
+
+    assert config.parity.trading_calendar == config.integrity.trading_calendar
+
+
 def test_parity_settings_load_from_their_own_section(tmp_path: Path) -> None:
     path = tmp_path / "tradeline.toml"
     path.write_text("[parity]\nclose_tolerance = 0.002\nmax_unexplained_pct = 0.5\n")

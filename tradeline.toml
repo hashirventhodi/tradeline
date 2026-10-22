@@ -27,6 +27,9 @@ close_tolerance = 0.001
 # The command fails at or above this percentage of the rows compared whose
 # difference (missing, extra, or close) no Parity Reason explains.
 max_unexplained_pct = 0.1
+# The Trading Calendar, the file [integrity] checks against: a missing candle
+# on one of its Special Sessions is explained.
+trading_calendar = "trading_calendar.csv"
 
 # RSS feeds for `ingest news`: a name for each feed and its URL. Items carried
 # by more than one feed are stored once, under the first feed listed.

@@ -14,6 +14,8 @@ with one bar dropped or one close changed on its way to the ingest
 """
 
 import json
+import shutil
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -49,7 +51,11 @@ ACTIONS_START, ACTIONS_END = date(2024, 7, 1), date(2024, 12, 31)
 TRADING_DAYS = 43
 EQ_SYMBOLS = 4
 ROWS = TRADING_DAYS * EQ_SYMBOLS
-SETTINGS = Config.Parity(close_tolerance=0.001, max_unexplained_pct=0.1)
+# No Special Session in range; a test of one writes its own calendar (``calendar``).
+CALENDAR = FIXTURES / "trading_calendar.csv"
+SETTINGS = Config.Parity(
+    close_tolerance=0.001, max_unexplained_pct=0.1, trading_calendar=str(CALENDAR)
+)
 
 INFY_TOKEN = "408065"
 
@@ -151,8 +157,8 @@ def test_the_run_fails_when_unexplained_differences_exceed_the_threshold_and_pas
 ) -> None:
     load(fresh_database_url, drop_bar(INFY_TOKEN, "2024-07-15"))
 
-    strict = run(fresh_database_url, Config.Parity(max_unexplained_pct=0.1))
-    lenient = run(fresh_database_url, Config.Parity(max_unexplained_pct=1.0))
+    strict = run(fresh_database_url, replace(SETTINGS, max_unexplained_pct=0.1))
+    lenient = run(fresh_database_url, replace(SETTINGS, max_unexplained_pct=1.0))
 
     # One unexplained row in 172 is 0.58 percent.
     assert strict.unexplained_pct == lenient.unexplained_pct
@@ -171,7 +177,7 @@ def test_a_run_exactly_at_the_threshold_fails_since_it_must_be_under_it(
         # days of four symbols, one row missing, so 6.25 percent.
         report = parity(
             conn,
-            Config.Parity(max_unexplained_pct=6.25),
+            replace(SETTINGS, max_unexplained_pct=6.25),
             start=date(2024, 7, 15),
             end=date(2024, 7, 19),
         )
@@ -199,11 +205,11 @@ def test_with_no_parity_reason_yet_every_difference_is_unexplained_and_counted_b
     summary = report.summary()
     assert (summary["differences"], summary["unexplained"]) == (2, 2)
     assert summary["by_kind"] == {
-        "missing": {"total": 1, "unexplained": 1},
+        "missing": {"total": 1, "special_session": 0, "unexplained": 1},
         "extra": {"total": 0, "series_move": 0, "unexplained": 0},
         "close": {"total": 1, "unexplained": 1},
     }
-    assert summary["by_reason"] == {"series_move": 0, "unexplained": 2}
+    assert summary["by_reason"] == {"series_move": 0, "special_session": 0, "unexplained": 2}
     assert [(d["kind"], d["reason"]) for d in summary["listed_unexplained"]] == [
         ("missing", None),
         ("close", None),
@@ -246,8 +252,61 @@ def test_a_candle_on_a_day_nse_lists_the_instrument_in_no_series_stays_unexplain
     assert [(d.kind, d.symbol, d.trade_date, d.reason) for d in report.unexplained] == [
         ("extra", "INFY", date(2024, 7, 15), None)
     ]
-    assert report.by_reason == {"series_move": 0, "unexplained": 1}
+    assert report.by_reason == {"series_move": 0, "special_session": 0, "unexplained": 1}
     assert not report.passed
+
+
+def calendar(tmp_path: Path, rows: str) -> Config.Parity:
+    """The settings with a Trading Calendar of ``rows`` (the citations are the tests')."""
+    path = tmp_path / "trading_calendar.csv"
+    path.write_text("covers,2024-01-01,2024-12-31\ndate,kind,citation\n" + rows)
+    return replace(SETTINGS, trading_calendar=str(path))
+
+
+def test_a_bar_dropped_on_a_special_session_is_explained_and_the_verdict_ignores_it(
+    fresh_database_url: str, tmp_path: Path
+) -> None:
+    load(fresh_database_url, drop_bar(INFY_TOKEN, "2024-07-15"))
+
+    report = run(
+        fresh_database_url, calendar(tmp_path, "2024-07-15,special_session,NSE/CMTR/77777\n")
+    )
+
+    ((missing),) = report.missing
+    assert (missing.symbol, missing.trade_date) == ("INFY", date(2024, 7, 15))
+    assert missing.reason == Reason.SPECIAL_SESSION
+    assert report.unexplained == ()
+    assert report.passed
+    summary = report.summary()
+    assert summary["by_kind"]["missing"] == {"total": 1, "special_session": 1, "unexplained": 0}
+    assert summary["by_reason"] == {"series_move": 0, "special_session": 1, "unexplained": 0}
+    assert summary["listed_unexplained"] == []
+    assert "by reason: series_move 0, special_session 1, unexplained 0" in report.text()
+
+
+def test_the_same_bar_dropped_on_an_ordinary_day_stays_unexplained(
+    fresh_database_url: str, tmp_path: Path
+) -> None:
+    load(fresh_database_url, drop_bar(INFY_TOKEN, "2024-07-15"))
+
+    report = run(
+        fresh_database_url, calendar(tmp_path, "2024-07-16,special_session,NSE/CMTR/77777\n")
+    )
+
+    ((missing),) = report.missing
+    assert missing.trade_date == date(2024, 7, 15)
+    assert missing.reason is None
+    assert report.unexplained == (missing,)
+    assert not report.passed
+
+
+def test_a_malformed_calendar_refuses_the_run_naming_the_line(
+    fresh_database_url: str, tmp_path: Path
+) -> None:
+    load(fresh_database_url)
+
+    with pytest.raises(ValueError, match="trading_calendar.csv line 3"):
+        run(fresh_database_url, calendar(tmp_path, "2024-07-15,special_session\n"))
 
 
 def test_an_empty_database_cannot_pass(fresh_database_url: str) -> None:
@@ -312,6 +371,12 @@ def test_a_stretch_whose_every_close_is_zero_has_no_factor_and_no_close_mismatch
 REPO_CONFIG = Path(__file__).resolve().parents[1] / "tradeline.toml"
 
 
+def in_a_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run from a directory holding the test calendar at the committed config's path."""
+    shutil.copy(CALENDAR, tmp_path / "trading_calendar.csv")
+    monkeypatch.chdir(tmp_path)
+
+
 def parity_command(
     url: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> tuple[int, list[dict[str, Any]], str]:
@@ -322,9 +387,13 @@ def parity_command(
 
 
 def test_the_command_exits_zero_on_clean_fixtures_with_a_summary_and_a_table(
-    fresh_database_url: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    fresh_database_url: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setenv("TRADELINE_CONFIG", str(REPO_CONFIG))
+    in_a_checkout(tmp_path, monkeypatch)
     load(fresh_database_url)
 
     code, lines, table = parity_command(fresh_database_url, monkeypatch, capsys)
@@ -347,11 +416,11 @@ def test_the_command_exits_zero_on_clean_fixtures_with_a_summary_and_a_table(
         "unexplained_pct": "0.0000",
         "passed": True,
         "by_kind": {
-            "missing": {"total": 0, "unexplained": 0},
+            "missing": {"total": 0, "special_session": 0, "unexplained": 0},
             "extra": {"total": 0, "series_move": 0, "unexplained": 0},
             "close": {"total": 0, "unexplained": 0},
         },
-        "by_reason": {"series_move": 0, "unexplained": 0},
+        "by_reason": {"series_move": 0, "special_session": 0, "unexplained": 0},
         "listed_unexplained": [],
         "candle_disagreements": 0,
         "listed_candle_disagreements": [],
@@ -371,12 +440,12 @@ def test_the_command_exits_non_zero_above_the_configured_threshold(
     load(fresh_database_url, drop_bar(INFY_TOKEN, "2024-07-15"))
     config = tmp_path / "tradeline.toml"
 
-    config.write_text("[parity]\nmax_unexplained_pct = 0.1\n")
+    config.write_text(f'[parity]\nmax_unexplained_pct = 0.1\ntrading_calendar = "{CALENDAR}"\n')
     monkeypatch.setenv("TRADELINE_CONFIG", str(config))
     strict_code, strict_lines, strict_table = parity_command(
         fresh_database_url, monkeypatch, capsys
     )
-    config.write_text("[parity]\nmax_unexplained_pct = 1.0\n")
+    config.write_text(f'[parity]\nmax_unexplained_pct = 1.0\ntrading_calendar = "{CALENDAR}"\n')
     lenient_code, _, _ = parity_command(fresh_database_url, monkeypatch, capsys)
 
     assert strict_code == 1
@@ -396,14 +465,18 @@ def test_the_command_exits_non_zero_above_the_configured_threshold(
         }
     ]
     assert "1 unexplained (0.5814%), must be under 0.1%: FAIL" in strict_table
-    assert "by reason: series_move 0, unexplained 1" in strict_table
+    assert "by reason: series_move 0, special_session 0, unexplained 1" in strict_table
     assert "missing  INFY" in strict_table
 
 
 def test_every_line_of_the_command_carries_its_range_and_the_symbols_named(
-    fresh_database_url: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    fresh_database_url: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setenv("TRADELINE_CONFIG", str(REPO_CONFIG))
+    in_a_checkout(tmp_path, monkeypatch)
     monkeypatch.setenv("DATABASE_URL", fresh_database_url)
     load(fresh_database_url)
     capsys.readouterr()
@@ -416,3 +489,22 @@ def test_every_line_of_the_command_carries_its_range_and_the_symbols_named(
     for line in lines:
         assert (line["range_start"], line["range_end"]) == ("2024-07-01", "2024-07-31")
         assert line["symbols"] == ["INFY"]
+
+
+def test_the_command_refuses_a_malformed_calendar_naming_the_line(
+    fresh_database_url: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    load(fresh_database_url)
+    settings = calendar(tmp_path, "2024-07-15,special_session\n")
+    config = tmp_path / "tradeline.toml"
+    config.write_text(f'[parity]\ntrading_calendar = "{settings.trading_calendar}"\n')
+    monkeypatch.setenv("TRADELINE_CONFIG", str(config))
+
+    code, lines, _ = parity_command(fresh_database_url, monkeypatch, capsys)
+
+    assert code == 1
+    assert lines[-1]["level"] == "ERROR"
+    assert "trading_calendar.csv line 3" in lines[-1]["msg"]

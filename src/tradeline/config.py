@@ -116,6 +116,10 @@ class Config:
         # explains are under this percentage of the rows compared; a run
         # exactly at it fails (Phase 1: under 0.1, ADR 0018).
         max_unexplained_pct: float = 0.1
+        # The Trading Calendar whose Special Sessions explain a missing candle:
+        # the same file as ``integrity.trading_calendar``, relative to the
+        # working directory.
+        trading_calendar: str = "trading_calendar.csv"
 
     @dataclass(frozen=True)
     class Integrity:
