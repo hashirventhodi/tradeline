@@ -177,6 +177,31 @@ _Avoid_: Pre-listing history, extra (an extra is a candle on a day the Instrumen
 The date on which an Adjusted Series is asked for. Only Corporate Actions with an Ex-Date on or before it are applied, and no bar after it is returned, so a Run on that date sees only what the market had already priced.
 _Avoid_: Reference date, valuation date, cutoff
 
+### Data checks
+
+**Integrity Check**:
+The check of NSE's data as we hold it against NSE itself, never against a broker: every day NSE was open has its end-of-day file, held whole, and every large move in the Adjusted Series is explained. A day an Instrument has no row in a file held whole is NSE's own record, reported but never a failure.
+_Avoid_: Reconcile, reconciliation (Reconciliation is the broker's positions against the Ledger), validation
+
+**Kite Parity**:
+The comparison of Kite's daily candles with the Raw Series, in presence and close, after taking out Kite's own adjustment. Every difference either has a Parity Reason or is unexplained, and only unexplained differences count against it.
+_Avoid_: Reconcile, reconciliation, chart check
+
+**Parity Reason**:
+A stated, checkable cause of a difference Kite Parity finds: a series move (NSE lists the Instrument in another series that day), a Special Session Kite has no candle for, a day outside every range Kite was asked for, Kite's additive adjustment, or Kite's coarser rounding. A difference without one is unexplained.
+_Avoid_: Excuse, known issue, exception
+
+**Large Move**:
+A close-to-close change of more than 1.5 times, either way, in an Instrument's Adjusted Series across its listing series. Unless a split or bonus on that day explains it, it must be explained by a reviewed record with its reason and source, because an unexplained one may be a split or bonus the Adjusted Series lacks.
+_Avoid_: Jump, spike, outlier
+
+**Trading Calendar**:
+The days NSE was open for equity trading: every weekday but the holidays NSE announced, and every Special Session.
+
+**Special Session**:
+A session NSE holds outside its normal days, such as the Diwali muhurat session.
+_Avoid_: Weekend session (some are on weekdays)
+
 ### Operations
 
 **Operator**:

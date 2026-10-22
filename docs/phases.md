@@ -11,7 +11,8 @@ Done when: repo exists with GLOSSARY.md, ADRs 0001 to 0015, architecture, phases
 Build: Kite candle ingestion (daily and minute), NSE end-of-day file ingestion, NSE corporate actions and our adjustment, NSE and BSE announcements, RSS ingestion, sector map, Universe Rule, Postgres schema and migrations, append-only enforcement, Docker Compose for local development.
 
 Accept when:
-- Ten years of daily candles for every symbol that was ever in the Universe are loaded, with a row count reconciliation against NSE end-of-day files within 0.1%.
+- Ten years of NSE end-of-day files pass the Integrity Check: a file for every day in the Trading Calendar, and every Large Move of an ever-member explained (ADR 0018).
+- Ten years of daily candles for every Instrument that was ever in the Universe are loaded, and Kite Parity against NSE's end-of-day files has unexplained differences under 0.1% (ADR 0018).
 - Our adjusted series matches the broker's displayed adjusted chart on a sample of 20 symbols with known splits or bonuses, to the paisa.
 - The Universe Rule, run for every month in the last ten years, is reproducible: two runs produce byte-identical membership tables.
 - The current Universe overlaps the current NIFTY 200 by at least 85%; disagreements are listed with reasons.
