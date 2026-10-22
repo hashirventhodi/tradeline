@@ -28,11 +28,12 @@ the Instrument of an earlier record on its day; none fails it.
 
 from __future__ import annotations
 
-import csv
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Literal, get_args
+
+from tradeline.reviewed_csv import FirstLines, Line, parse_date, read_lines, require_header
 
 COLUMNS = ("symbol", "trade_date", "reason", "citation")
 Reason = Literal["demerger", "rights", "dividend", "resumed", "market"]
@@ -53,47 +54,31 @@ class LargeMoveRecord:
 
 def load_large_move_records(path: Path) -> list[LargeMoveRecord]:
     """Every row of the Large Move records file at ``path``; any bad row refuses the file."""
-    if not path.exists():
-        raise ValueError(f"Large Move records file {path} does not exist")
-    lines = [
-        (number, line)
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
-        if line.strip() and not line.lstrip().startswith("#")
-    ]
-    if not lines or next(csv.reader([lines[0][1]])) != list(COLUMNS):
-        raise ValueError(f"{path}: the first row must be the header {','.join(COLUMNS)}")
+    lines = read_lines(path, "Large Move records")
+    require_header(path, next(iter(lines), None), COLUMNS, "first")
     records: list[LargeMoveRecord] = []
-    seen: dict[tuple[str, date], int] = {}
-    for number, line in lines[1:]:
-        record = _row(path, number, line)
-        key = (record.symbol, record.trade_date)
-        if key in seen:
-            raise ValueError(
-                f"{path.name} line {number}: {record.symbol}: {record.trade_date} is already"
-                f" recorded on line {seen[key]}"
-            )
-        seen[key] = number
+    first = FirstLines[tuple[str, date]]()
+    for line in lines[1:]:
+        record = _row(line)
+        first.add(
+            (record.symbol, record.trade_date),
+            line,
+            f"{record.symbol}: {record.trade_date} is already recorded",
+        )
         records.append(record)
     return records
 
 
-def _row(path: Path, number: int, line: str) -> LargeMoveRecord:
-    fields = [f.strip() for f in next(csv.reader([line]))]
-    where = f"{path.name} line {number}"
-    if len(fields) != len(COLUMNS):
-        raise ValueError(f"{where}: expected {len(COLUMNS)} columns ({','.join(COLUMNS)}): {line}")
-    symbol, day, reason, citation = fields
+def _row(line: Line) -> LargeMoveRecord:
+    symbol, day, reason, citation = line.columns(COLUMNS)
     if not symbol:
-        raise ValueError(f"{where}: the Symbol is required: {line}")
-    where = f"{where}: {symbol}"
-    try:
-        trade_date = date.fromisoformat(day)
-    except ValueError:
-        raise ValueError(f"{where}: trade_date {day!r} is not a date (YYYY-MM-DD)") from None
+        raise ValueError(f"{line.where}: the Symbol is required: {line.text}")
+    where = f"{line.where}: {symbol}"
+    trade_date = parse_date(where, "trade_date", day)
     if reason not in REASONS:
         raise ValueError(f"{where}: reason {reason!r} is not one of {', '.join(REASONS)}")
     if not citation:
         raise ValueError(
             f"{where}: no citation; cite the official source, or note that none was found"
         )
-    return LargeMoveRecord(symbol, trade_date, reason, citation, number)
+    return LargeMoveRecord(symbol, trade_date, reason, citation, line.number)

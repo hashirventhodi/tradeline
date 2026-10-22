@@ -27,7 +27,6 @@ serves the Integrity Check and Kite Parity, which reads the Special Sessions.
 
 from __future__ import annotations
 
-import csv
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date
@@ -35,6 +34,7 @@ from pathlib import Path
 from typing import Literal, get_args
 
 from tradeline.dates import calendar_days
+from tradeline.reviewed_csv import FirstLines, Line, parse_date, read_lines, require_header
 
 CalendarKind = Literal["holiday", "special_session"]
 KINDS: tuple[CalendarKind, ...] = get_args(CalendarKind)
@@ -90,62 +90,45 @@ def is_weekday(day: date) -> bool:
 
 def load_trading_calendar(path: Path) -> TradingCalendar:
     """The Trading Calendar file at ``path``; any bad row refuses the file."""
-    if not path.exists():
-        raise ValueError(f"Trading Calendar file {path} does not exist")
-    lines = [
-        (number, line)
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
-        if line.strip() and not line.lstrip().startswith("#")
-    ]
+    lines = read_lines(path, "Trading Calendar")
     if not lines:
         raise ValueError(f"{path}: the first row must be {COVERS},FIRST_DATE,LAST_DATE")
-    first, last = _covers(path, *lines[0])
-    if len(lines) < 2 or next(csv.reader([lines[1][1]])) != list(COLUMNS):
-        raise ValueError(f"{path}: the second row must be the header {','.join(COLUMNS)}")
+    first, last = _covers(lines[0])
+    require_header(path, lines[1] if len(lines) > 1 else None, COLUMNS, "second")
     days: list[CalendarDay] = []
-    seen: dict[date, int] = {}
-    for number, line in lines[2:]:
-        day = _row(path, number, line)
-        where = f"{path.name} line {number}: {day.trade_date}"
+    listed = FirstLines[date]()
+    for line in lines[2:]:
+        day = _row(line)
+        where = f"{line.where}: {day.trade_date}"
         if not first <= day.trade_date <= last:
             raise ValueError(f"{where} is outside the calendar's coverage, {first} to {last}")
-        if day.trade_date in seen:
-            raise ValueError(f"{where} is already listed on line {seen[day.trade_date]}")
-        seen[day.trade_date] = number
+        listed.add(day.trade_date, line, f"{day.trade_date} is already listed")
         days.append(day)
     return TradingCalendar(first, last, tuple(days))
 
 
-def _covers(path: Path, number: int, line: str) -> tuple[date, date]:
-    fields = [f.strip() for f in next(csv.reader([line]))]
-    where = f"{path.name} line {number}"
+def _covers(line: Line) -> tuple[date, date]:
+    fields = line.fields()
     if len(fields) != 3 or fields[0] != COVERS:
-        raise ValueError(f"{where}: the first row must be {COVERS},FIRST_DATE,LAST_DATE: {line}")
-    first, last = (_date(where, "covers", text) for text in fields[1:])
+        raise ValueError(
+            f"{line.where}: the first row must be {COVERS},FIRST_DATE,LAST_DATE: {line.text}"
+        )
+    first, last = (parse_date(line.where, "covers", text) for text in fields[1:])
     if first > last:
-        raise ValueError(f"{where}: the calendar's first date {first} is after its last {last}")
+        raise ValueError(
+            f"{line.where}: the calendar's first date {first} is after its last {last}"
+        )
     return first, last
 
 
-def _row(path: Path, number: int, line: str) -> CalendarDay:
-    fields = [f.strip() for f in next(csv.reader([line]))]
-    where = f"{path.name} line {number}"
-    if len(fields) != len(COLUMNS):
-        raise ValueError(f"{where}: expected {len(COLUMNS)} columns ({','.join(COLUMNS)}): {line}")
-    text, kind, citation = fields
-    trade_date = _date(where, "date", text)
-    where = f"{where}: {trade_date}"
+def _row(line: Line) -> CalendarDay:
+    text, kind, citation = line.columns(COLUMNS)
+    trade_date = parse_date(line.where, "date", text)
+    where = f"{line.where}: {trade_date}"
     if kind not in KINDS:
         raise ValueError(f"{where}: kind {kind!r} is not one of {', '.join(KINDS)}")
     if not citation:
         raise ValueError(f"{where}: no citation; cite NSE's circular by URL or number")
     if kind == "holiday" and not is_weekday(trade_date):
         raise ValueError(f"{where}: a holiday on a {trade_date:%A}; only weekdays are listed")
-    return CalendarDay(trade_date, kind, citation, number)
-
-
-def _date(where: str, column: str, text: str) -> date:
-    try:
-        return date.fromisoformat(text)
-    except ValueError:
-        raise ValueError(f"{where}: {column} {text!r} is not a date (YYYY-MM-DD)") from None
+    return CalendarDay(trade_date, kind, citation, line.number)
