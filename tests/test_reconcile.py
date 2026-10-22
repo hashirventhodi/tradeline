@@ -28,6 +28,8 @@ from playback import (
     drop_bar,
     kite_candles,
     shift_close,
+    then,
+    zero_prices,
 )
 from tradeline.cli import main
 from tradeline.config import Config
@@ -194,6 +196,46 @@ def test_symbols_can_be_narrowed_and_one_without_candles_is_refused(
 
     assert tcs.rows == TRADING_DAYS
     assert tcs.discrepancies == 0
+
+
+# Monday 1 and Tuesday 2 July 2024: one stretch of two INFY bars.
+SHORT_START, SHORT_END = date(2024, 7, 1), date(2024, 7, 2)
+
+
+def run_short(url: str) -> ReconcileReport:
+    with app_connection(url) as conn:
+        return reconcile(conn, SETTINGS, start=SHORT_START, end=SHORT_END, symbols=["INFY"])
+
+
+def test_a_zero_close_is_left_out_of_its_stretchs_factor_and_compared_against_the_rest(
+    fresh_database_url: str,
+) -> None:
+    # Of two bars, a ratio of 0 in the median would halve the factor and fail both.
+    load(fresh_database_url, zero_prices(INFY_TOKEN, "2024-07-01"))
+
+    report = run_short(fresh_database_url)
+
+    ((mismatch),) = report.close_mismatches
+    assert mismatch.trade_date == date(2024, 7, 1)
+    assert mismatch.candle_close == Decimal(0)
+    # NSE's 1590.8 times the factor of 2 July's bar alone, about 0.9788.
+    assert mismatch.expected_close == Decimal("1557.09")
+    assert report.rows == 2
+
+
+def test_a_stretch_whose_every_close_is_zero_has_no_factor_and_no_close_mismatches(
+    fresh_database_url: str,
+) -> None:
+    load(
+        fresh_database_url,
+        then(zero_prices(INFY_TOKEN, "2024-07-01"), zero_prices(INFY_TOKEN, "2024-07-02")),
+    )
+
+    report = run_short(fresh_database_url)
+
+    assert report.close_mismatches == ()
+    assert report.rows == 2
+    assert report.discrepancies == 0
 
 
 REPO_CONFIG = Path(__file__).resolve().parents[1] / "tradeline.toml"
