@@ -1,6 +1,7 @@
 import io
 import json
 import os
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,8 @@ import pytest
 
 from tradeline.cli import main
 from tradeline.dates import IST
+from tradeline.db import connect
+from tradeline.migrations import SCHEMA_MIGRATIONS_READ, apply_migrations
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -76,6 +79,30 @@ def test_a_command_on_a_database_with_a_pending_migration_is_refused_with_the_fi
     (line,) = json_lines(capsys.readouterr().out)
     assert line["level"] == "ERROR"
     assert line["msg"] == f"1 migration pending ({latest}); run `tradeline migrate`"
+
+
+def test_a_member_only_login_role_meeting_a_database_without_0022_is_told_to_migrate(
+    empty_database_url: str,
+    member_only_url: Callable[..., str],
+    repo_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # The production login role (Phase 6) cannot read schema_migrations before 0022 (#44).
+    with connect(empty_database_url) as conn:
+        apply_migrations(conn)
+        conn.execute("DELETE FROM schema_migrations WHERE version = %s", (SCHEMA_MIGRATIONS_READ,))
+        conn.execute("REVOKE SELECT ON schema_migrations FROM tradeline_app")
+    monkeypatch.setenv("DATABASE_URL", member_only_url(empty_database_url))
+
+    assert main(["reconcile", "--from", "2024-07-01"]) == 1
+
+    (line,) = json_lines(capsys.readouterr().out)
+    assert line["level"] == "ERROR"
+    assert line["msg"] == (
+        f"cannot read schema_migrations, which {SCHEMA_MIGRATIONS_READ} grants;"
+        " run `tradeline migrate`"
+    )
 
 
 def test_an_unknown_command_is_refused(capsys: pytest.CaptureFixture[str]) -> None:

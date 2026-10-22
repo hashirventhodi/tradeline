@@ -18,6 +18,9 @@ log = logging.getLogger(__name__)
 # Serialises concurrent ``migrate`` runs against one database.
 _LOCK_KEY = 0x7472_6164  # "trad"
 
+# The migration that lets ``tradeline_app`` read which migrations are applied.
+SCHEMA_MIGRATIONS_READ = "0022_schema_migrations_read"
+
 
 def available_migrations() -> list[tuple[str, str]]:
     """``(version, sql)`` pairs in application order."""
@@ -35,6 +38,9 @@ def applied_migrations(conn: psycopg.Connection) -> list[str]:
     return [str(version) for (version,) in rows]
 
 
+_RUN_MIGRATE = "run `tradeline migrate`"
+
+
 class PendingMigrations(RuntimeError):
     """The database is behind the code: a command would read a schema it lacks."""
 
@@ -42,7 +48,16 @@ class PendingMigrations(RuntimeError):
         count = len(versions)
         super().__init__(
             f"{count} migration{'s' if count != 1 else ''} pending ({', '.join(versions)});"
-            " run `tradeline migrate`"
+            f" {_RUN_MIGRATE}"
+        )
+
+
+class UnreadableMigrations(RuntimeError):
+    """The connecting role cannot tell whether a migration is pending (#44)."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            f"cannot read schema_migrations, which {SCHEMA_MIGRATIONS_READ} grants; {_RUN_MIGRATE}"
         )
 
 
