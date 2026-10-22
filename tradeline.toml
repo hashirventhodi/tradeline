@@ -50,3 +50,8 @@ cited = "cited_corporate_actions.csv"
 # Sessions it held, each citing NSE's circular, and the dates it covers (see
 # src/tradeline/trading_calendar.py).
 trading_calendar = "trading_calendar.csv"
+# The checked-in Large Move records: the reviewed reason and source of each
+# Large Move no split or bonus explains (see src/tradeline/large_move_records.py).
+large_moves = "large_moves.csv"
+# A close more than this many times the previous close, either way, is a Large Move.
+large_move_ratio = 1.5

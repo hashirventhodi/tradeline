@@ -46,9 +46,18 @@ def loaded(database_url: str) -> str:
     return database_url
 
 
+def no_large_move_records(tmp_path: Path) -> Path:
+    path = tmp_path / "large_moves.csv"
+    path.write_text("symbol,trade_date,reason,citation\n")
+    return path
+
+
 def run(url: str, path: Path, start: date = START, end: date = END) -> IntegrityReport:
+    settings = Config.Integrity(
+        trading_calendar=str(path), large_moves=str(no_large_move_records(path.parent))
+    )
     with app_connection(url) as conn:
-        return integrity(conn, Config.Integrity(trading_calendar=str(path)), start=start, end=end)
+        return integrity(conn, settings, start=start, end=end)
 
 
 def test_a_calendar_listing_both_holidays_passes_over_the_recorded_files(
@@ -156,7 +165,10 @@ def integrity_command(
     capsys: pytest.CaptureFixture[str],
 ) -> tuple[int, list[dict[str, Any]], str]:
     config = tmp_path / "tradeline.toml"
-    config.write_text(f'[integrity]\ntrading_calendar = "{calendar(tmp_path, rows)}"\n')
+    config.write_text(
+        f'[integrity]\ntrading_calendar = "{calendar(tmp_path, rows)}"\n'
+        f'large_moves = "{no_large_move_records(tmp_path)}"\n'
+    )
     monkeypatch.setenv("TRADELINE_CONFIG", str(config))
     monkeypatch.setenv("DATABASE_URL", url)
     capsys.readouterr()
@@ -189,6 +201,17 @@ def test_the_command_exits_zero_when_the_check_passes_with_a_summary_and_a_table
         "holiday_with_file": 0,
         "unlisted_weekend_file": 0,
         "listed_day_failures": [],
+        "ever_members": 0,
+        "unresolved_members": [],
+        "large_moves": 0,
+        "large_moves_explained": {},
+        "unexplained_large_moves": 0,
+        "listed_unexplained_large_moves": [],
+        "unresolved_records": [],
+        "unmatched_records": [],
+        "gaps": 0,
+        "gaps_by_instrument": {},
+        "listed_gaps": [],
         "passed": True,
     }
     assert "43 trading days checked, 0 day failures" in table
