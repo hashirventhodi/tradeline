@@ -166,7 +166,7 @@ The Raw Series with every Corporate Action known on an As-Of Date applied, which
 _Avoid_: Adjusted candles, continuous prices, clean prices
 
 **Pre-listing Candle**:
-A broker candle dated before the start of its Instrument's Listing Age. It cannot be the Instrument's own trading (a broker's token can carry an earlier security's history), so it is reported, never compared or used, and never attributed to another Instrument.
+A broker candle dated before the start of its Instrument's Listing Age. It cannot be the Instrument's own trading (a broker's token can carry an earlier security's history), so it is reported, never compared, and never attributed to another Instrument.
 _Avoid_: Pre-listing history, extra (an extra is a candle on a day the Instrument was trading and NSE has no row)
 
 **As-Of Date**:

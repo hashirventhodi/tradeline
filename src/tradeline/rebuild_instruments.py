@@ -245,7 +245,9 @@ def _grouping(
 
     Each interval carries its Instrument's listing date and first row; under a rule
     counting Listing Age from the earliest evidence (ADR 0017) the earlier of the two
-    is the Instrument's listing."""
+    is the Instrument's listing: the rule of the view ``instrument_listing_age``
+    (migration 0021), restated here because the rebuild's Instruments are not stored
+    yet. Change the two together."""
     groups: defaultdict[str, set[tuple[str, str, date, date]]] = defaultdict(set)
     eligible: dict[str, bool] = {}
     for key, (listed_on, first_row), interval in intervals:

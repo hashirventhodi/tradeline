@@ -33,7 +33,7 @@ from tradeline.instruments_report import instruments_report
 from tradeline.logging import configure_logging, log_context
 from tradeline.login import login as login_service
 from tradeline.manual_links import load_manual_links
-from tradeline.migrations import apply_migrations
+from tradeline.migrations import PendingMigrations, apply_migrations
 from tradeline.rebuild_instruments import rebuild_instruments as rebuild_instruments_service
 from tradeline.reconcile import reconcile as reconcile_service
 from tradeline.secrets import (
@@ -638,7 +638,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             secrets=EnvSecrets.for_environment(environment),
         )
         return COMMANDS[args.command](ctx, args)
-    except (MissingSecret, KiteError, ValueError) as error:  # ConfigError is a ValueError
+    except (
+        MissingSecret,
+        KiteError,
+        PendingMigrations,
+        ValueError,
+    ) as error:  # ConfigError is a ValueError
         log.error(str(error))
         return 1
     except Exception:

@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import psycopg
 import pytest
 
 from tradeline.cli import main
@@ -54,6 +55,27 @@ def test_migrate_without_a_database_url_fails_with_a_json_error_line(
     assert line["level"] == "ERROR"
     assert line["command"] == "migrate"
     assert "DATABASE_URL" in str(line["msg"])
+
+
+def test_a_command_on_a_database_with_a_pending_migration_is_refused_with_the_fix(
+    empty_database_url: str,
+    repo_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # A database migrated before the latest migration was merged (#34's retro).
+    monkeypatch.setenv("DATABASE_URL", empty_database_url)
+    assert main(["migrate"]) == 0
+    with psycopg.connect(empty_database_url) as conn:
+        (latest,) = conn.execute("SELECT max(version) FROM schema_migrations").fetchone() or ()
+        conn.execute("DELETE FROM schema_migrations WHERE version = %s", (latest,))
+    capsys.readouterr()
+
+    assert main(["reconcile", "--from", "2024-07-01"]) == 1
+
+    (line,) = json_lines(capsys.readouterr().out)
+    assert line["level"] == "ERROR"
+    assert line["msg"] == f"1 migration pending ({latest}); run `tradeline migrate`"
 
 
 def test_an_unknown_command_is_refused(capsys: pytest.CaptureFixture[str]) -> None:

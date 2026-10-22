@@ -35,6 +35,24 @@ def applied_migrations(conn: psycopg.Connection) -> list[str]:
     return [str(version) for (version,) in rows]
 
 
+class PendingMigrations(Exception):
+    """The database is behind the code: a command would read a schema it lacks."""
+
+    def __init__(self, versions: list[str]) -> None:
+        count = len(versions)
+        super().__init__(
+            f"{count} migration{'s' if count != 1 else ''} pending ({', '.join(versions)});"
+            " run `tradeline migrate`"
+        )
+        self.versions = versions
+
+
+def pending_migrations(conn: psycopg.Connection) -> list[str]:
+    """The versions this code has that the database has not applied, in order."""
+    done = set(applied_migrations(conn))
+    return [version for version, _ in available_migrations() if version not in done]
+
+
 def apply_migrations(conn: psycopg.Connection) -> list[str]:
     """Apply every pending migration; return the versions applied in this call."""
     applied: list[str] = []
