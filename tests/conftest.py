@@ -105,8 +105,8 @@ def another_database_url(request: pytest.FixtureRequest, migrated_template: str)
 
 
 @pytest.fixture
-def member_only_role(request: pytest.FixtureRequest) -> Iterator[Callable[..., str]]:
-    """Make a login role that is only a member of tradeline_app; return a URL as it, to ``url``.
+def member_only_url(request: pytest.FixtureRequest) -> Iterator[Callable[..., str]]:
+    """Make a login role that is only a member of tradeline_app and return ``url`` as that role.
 
     The production shape (db.py). Roles are cluster-wide, so each is dropped after the test.
     """
@@ -132,4 +132,6 @@ def member_only_role(request: pytest.FixtureRequest) -> Iterator[Callable[..., s
     yield make
     with psycopg.connect(MAINTENANCE_URL, autocommit=True) as conn:
         for name in names:
-            conn.execute(psycopg.sql.SQL("DROP ROLE {}").format(psycopg.sql.Identifier(name)))
+            conn.execute(
+                psycopg.sql.SQL("DROP ROLE IF EXISTS {}").format(psycopg.sql.Identifier(name))
+            )

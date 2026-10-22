@@ -38,6 +38,9 @@ def applied_migrations(conn: psycopg.Connection) -> list[str]:
     return [str(version) for (version,) in rows]
 
 
+_RUN_MIGRATE = "run `tradeline migrate`"
+
+
 class PendingMigrations(RuntimeError):
     """The database is behind the code: a command would read a schema it lacks."""
 
@@ -45,19 +48,16 @@ class PendingMigrations(RuntimeError):
         count = len(versions)
         super().__init__(
             f"{count} migration{'s' if count != 1 else ''} pending ({', '.join(versions)});"
-            " run `tradeline migrate`"
+            f" {_RUN_MIGRATE}"
         )
 
 
-class UnreadableMigrations(PendingMigrations):
-    """The role cannot read ``schema_migrations``, so 0022, which lets it, is pending."""
+class UnreadableMigrations(RuntimeError):
+    """The connecting role cannot tell whether a migration is pending (#44)."""
 
     def __init__(self) -> None:
-        RuntimeError.__init__(
-            self,
-            f"{SCHEMA_MIGRATIONS_READ} and perhaps later migrations pending"
-            " (this role cannot read schema_migrations until it is applied);"
-            " run `tradeline migrate`",
+        super().__init__(
+            f"cannot read schema_migrations, which {SCHEMA_MIGRATIONS_READ} grants; {_RUN_MIGRATE}"
         )
 
 

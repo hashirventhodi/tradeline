@@ -35,7 +35,7 @@ from tradeline.instruments_report import instruments_report
 from tradeline.logging import configure_logging, log_context
 from tradeline.login import login as login_service
 from tradeline.manual_links import load_manual_links
-from tradeline.migrations import PendingMigrations, apply_migrations
+from tradeline.migrations import PendingMigrations, UnreadableMigrations, apply_migrations
 from tradeline.rebuild_instruments import rebuild_instruments as rebuild_instruments_service
 from tradeline.reconcile import reconcile as reconcile_service
 from tradeline.secrets import (
@@ -664,6 +664,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         MissingSecret,
         KiteError,
         PendingMigrations,
+        UnreadableMigrations,
         ValueError,  # ConfigError is a ValueError
     ) as error:
         log.error(str(error))

@@ -34,7 +34,7 @@ def connect(url: str) -> psycopg.Connection:
 def app_connection(url: str) -> psycopg.Connection:
     conn = psycopg.connect(url)
     try:
-        pending = _pending_migrations(conn)
+        pending = _pending_migrations_as_member(conn)
         if pending:
             raise PendingMigrations(pending)
         _set_app_role(conn)
@@ -44,12 +44,12 @@ def app_connection(url: str) -> psycopg.Connection:
     return conn
 
 
-def _pending_migrations(conn: psycopg.Connection) -> list[str]:
+def _pending_migrations_as_member(conn: psycopg.Connection) -> list[str]:
     """Read before SET ROLE, so the owner sees every pending version even before 0022.
 
     A role that cannot read ``schema_migrations`` reads it again as ``tradeline_app``:
     a member without INHERIT holds that role's grants only after SET ROLE. If that
-    is refused too, 0022 is pending.
+    is refused too, 0022 is most likely pending.
     """
     try:
         return pending_migrations(conn)
