@@ -218,7 +218,7 @@ def _corporate_actions(
 ) -> list[CorporateAction]:
     rows = conn.execute(
         f"WITH {_OWNED} SELECT c.symbol, c.series, c.ex_date, c.subject, c.kind,"
-        " c.factor_numerator, c.factor_denominator, c.isin, c.record_date, c.face_value"
+        " c.factor_numerator, c.factor_denominator, c.isin, c.record_date, c.face_value, c.nse_list"
         " FROM corporate_actions c JOIN owned o ON o.symbol = c.symbol"
         " AND (o.since IS NULL OR c.ex_date >= o.since)"
         " AND (o.until IS NULL OR c.ex_date < o.until)"
@@ -235,14 +235,27 @@ def adjusting_corporate_actions(conn: psycopg.Connection) -> list[CorporateActio
     filed it, by Symbol, then Ex-Date: the actions that can explain an ISIN change."""
     rows = conn.execute(
         "SELECT symbol, series, ex_date, subject, kind, factor_numerator, factor_denominator,"
-        " isin, record_date, face_value FROM corporate_actions WHERE kind IN ('split', 'bonus')"
+        " isin, record_date, face_value, nse_list FROM corporate_actions"
+        " WHERE kind IN ('split', 'bonus')"
         " ORDER BY symbol, ex_date, series, subject"
     ).fetchall()
     return [_corporate_action(row) for row in rows]
 
 
 def _corporate_action(row: tuple[Any, ...]) -> CorporateAction:
-    symbol, series, ex_date, subject, kind, numerator, denominator, isin, record_date, fv = row
+    (
+        symbol,
+        series,
+        ex_date,
+        subject,
+        kind,
+        numerator,
+        denominator,
+        isin,
+        record_date,
+        fv,
+        nse_list,
+    ) = row
     if kind not in KINDS:
         raise ValueError(f"unknown corporate action kind {kind!r} stored for {symbol}")
     return CorporateAction(
@@ -255,6 +268,7 @@ def _corporate_action(row: tuple[Any, ...]) -> CorporateAction:
         isin=isin,
         record_date=record_date,
         face_value=fv,
+        nse_list=nse_list,
     )
 
 

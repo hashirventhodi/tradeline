@@ -214,13 +214,33 @@ def test_the_instruments_are_rebuilt_after_end_of_day_and_corporate_actions_and_
     assert rebuild.finished_at <= candles.started_at
     assert runs["nse_symbol_changes"].rows_seen == 11  # the trimmed list
     assert rebuild.details["symbol_changes"] == 11
-    assert rebuild.details["manual_links"] == 24  # the repo's file, read on every rebuild
+    assert rebuild.details["manual_links"] == 33  # the repo's file, read on every rebuild
     assert rebuild.details["instruments"] == 8  # the eight symbols of July and August
     # A week either side of the day: an ISIN change explained by an action within
     # EX_DATE_SLACK of it finds the action stored, even one going ex days later.
     actions = runs["nse_corporate_actions"]
     assert (actions.range_start, actions.range_end) == (date(2024, 7, 25), date(2024, 8, 8))
     assert actions.rows_seen == 1  # NORBTEAEXP's AGM on 2 August
+
+
+def test_the_collection_asks_each_of_nses_corporate_action_lists_for_the_week_either_side(
+    conn: psycopg.Connection,
+) -> None:
+    transport = sources()
+    result = collect(conn, transport)
+
+    actions = {r.source: r for r in result.runs}["nse_corporate_actions"]
+    assert actions.details["requests"] == 3
+    assert [
+        call.url.split("?")[1]
+        for call in transport.calls
+        if "/api/corporates-corporateActions" in call.url
+    ] == [
+        "index=equities&from_date=25-07-2024&to_date=08-08-2024",
+        "index=sme&from_date=25-07-2024&to_date=08-08-2024",
+        "index=mf&from_date=25-07-2024&to_date=08-08-2024",
+    ]
+    assert actions.rows_seen == 1  # the SME and fund-unit lists have nothing that week
 
 
 def test_a_failed_corporate_action_fetch_is_recorded_and_the_steps_after_it_still_run(

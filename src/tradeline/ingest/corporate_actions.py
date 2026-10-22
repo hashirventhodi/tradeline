@@ -1,10 +1,16 @@
-"""``ingest corporate-actions``: NSE's corporate-action list into ``corporate_actions``.
+"""``ingest corporate-actions``: NSE's corporate-action lists into ``corporate_actions``.
 
 One ingest run (source ``nse_corporate_actions``) covers the ex-date range, one
-request per calendar year (and per symbol when symbols are named) so that a
-ten-year load is ten bounded responses rather than one. Each record's subject
-is read by ``tradeline.adjust.interpret`` into a kind and, for splits and
-bonuses, the price factor, which are stored beside NSE's facts.
+request per calendar year and per list (and per symbol when symbols are named)
+so that a ten-year load is bounded responses rather than one. The lists are the
+main board's, the SME platform's, and fund units' (``nse.CORPORATE_ACTION_LISTS``),
+and each row records the one it came from. Each record's subject is read by
+``tradeline.adjust.interpret`` into a kind and, for splits and bonuses, the
+price factor, which are stored beside NSE's facts.
+
+A record with no Ex-Date (the fund-unit list's redemptions) takes effect on no
+day and is not stored; an ``isin`` that is not an ISIN (the SME list gives a
+number) is stored as NULL. Both are counted by list in the run's details.
 
 A record is inserted once per (symbol, series, ex-date, subject) and never
 changed. A record already stored for which this run derives a different kind
@@ -19,11 +25,13 @@ on its own.
 from __future__ import annotations
 
 import logging
+import re
 from collections import Counter
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import date
 from fractions import Fraction
+from itertools import product
 from typing import Any
 
 import psycopg
@@ -38,6 +46,7 @@ log = logging.getLogger(__name__)
 SOURCE = "nse_corporate_actions"
 # Unparsed subjects and anomalies are counted in full; this many of each are recorded in detail.
 MAX_RECORDED = 100
+_ISIN = re.compile(r"[A-Z]{2}[A-Z0-9]{9}[0-9]")
 
 
 @dataclass(frozen=True)
@@ -92,6 +101,8 @@ def _load(
     symbols: Sequence[str] | None,
 ) -> None:
     by_kind: Counter[str] = Counter()
+    no_ex_date: Counter[str] = Counter()
+    not_an_isin: Counter[str] = Counter()
     unparsed_subjects: list[dict[str, Any]] = []
     anomaly_actions: list[dict[str, Any]] = []
     # Filled in as the run goes, so a failed run's record still shows what it got to.
@@ -102,45 +113,60 @@ def _load(
         "unparsed_subjects": unparsed_subjects,
         "anomalies": 0,
         "anomaly_actions": anomaly_actions,
+        "no_ex_date": {},
+        "not_an_isin": {},
     }
-    for chunk_start, chunk_end in year_chunks(start, end):
-        for symbol in [None] if symbols is None else list(symbols):
-            notices = nse.fetch_corporate_actions(
-                session, start=chunk_start, end=chunk_end, symbol=symbol
-            )
-            run.details["requests"] += 1
-            actions = [_derive(notice) for notice in notices]
-            for action in actions:
-                by_kind[action.kind] += 1
-                if action.factor is None and looks_adjusting(action.subject):
-                    run.details["unparsed"] += 1
-                    record = {
-                        "symbol": action.symbol,
-                        "ex_date": action.ex_date.isoformat(),
-                        "subject": action.subject,
-                    }
-                    log.warning("corporate action looks adjusting but has no factor", extra=record)
-                    if len(unparsed_subjects) < MAX_RECORDED:
-                        unparsed_subjects.append(record)
-            written, anomalies = _insert(conn, actions)
-            conn.commit()
-            run.rows_seen += len(notices)
-            run.rows_written += written
-            run.details["anomalies"] += len(anomalies)
-            for record in anomalies:
-                log.warning("corporate action derived differently; stored row kept", extra=record)
-                if len(anomaly_actions) < MAX_RECORDED:
-                    anomaly_actions.append(record)
-            log.info(
-                "loaded corporate actions",
-                extra={
-                    "chunk_start": chunk_start.isoformat(),
-                    "chunk_end": chunk_end.isoformat(),
-                    "symbol": symbol,
-                    "rows": len(notices),
-                    "rows_written": written,
-                },
-            )
+    for (chunk_start, chunk_end), nse_list, symbol in product(
+        year_chunks(start, end),
+        nse.CORPORATE_ACTION_LISTS,
+        [None] if symbols is None else list(symbols),
+    ):
+        notices = nse.fetch_corporate_actions(
+            session, start=chunk_start, end=chunk_end, nse_list=nse_list, symbol=symbol
+        )
+        run.details["requests"] += 1
+        actions = []
+        for notice in notices:
+            if notice.ex_date is None:
+                no_ex_date[nse_list] += 1
+                continue
+            if notice.isin is not None and not _ISIN.fullmatch(notice.isin):
+                not_an_isin[nse_list] += 1
+            actions.append(_derive(notice, nse_list))
+        for action in actions:
+            by_kind[action.kind] += 1
+            if action.factor is None and looks_adjusting(action.subject):
+                run.details["unparsed"] += 1
+                record = {
+                    "symbol": action.symbol,
+                    "ex_date": action.ex_date.isoformat(),
+                    "subject": action.subject,
+                }
+                log.warning("corporate action looks adjusting but has no factor", extra=record)
+                if len(unparsed_subjects) < MAX_RECORDED:
+                    unparsed_subjects.append(record)
+        written, anomalies = _insert(conn, actions)
+        conn.commit()
+        run.details["no_ex_date"] = dict(sorted(no_ex_date.items()))
+        run.details["not_an_isin"] = dict(sorted(not_an_isin.items()))
+        run.rows_seen += len(notices)
+        run.rows_written += written
+        run.details["anomalies"] += len(anomalies)
+        for record in anomalies:
+            log.warning("corporate action derived differently; stored row kept", extra=record)
+            if len(anomaly_actions) < MAX_RECORDED:
+                anomaly_actions.append(record)
+        log.info(
+            "loaded corporate actions",
+            extra={
+                "chunk_start": chunk_start.isoformat(),
+                "chunk_end": chunk_end.isoformat(),
+                "nse_list": nse_list,
+                "symbol": symbol,
+                "rows": len(notices),
+                "rows_written": written,
+            },
+        )
     run.details["by_kind"] = dict(sorted(by_kind.items()))
 
 
@@ -153,8 +179,10 @@ def year_chunks(start: date, end: date) -> Iterator[tuple[date, date]]:
         chunk_start = date(chunk_start.year + 1, 1, 1)
 
 
-def _derive(notice: nse.CorporateActionNotice) -> CorporateAction:
+def _derive(notice: nse.CorporateActionNotice, nse_list: str) -> CorporateAction:
+    assert notice.ex_date is not None
     kind, factor = interpret(notice.subject)
+    isin = notice.isin if notice.isin is not None and _ISIN.fullmatch(notice.isin) else None
     return CorporateAction(
         symbol=notice.symbol,
         series=notice.series,
@@ -162,15 +190,16 @@ def _derive(notice: nse.CorporateActionNotice) -> CorporateAction:
         subject=notice.subject,
         kind=kind,
         factor=factor,
-        isin=notice.isin,
+        isin=isin,
         record_date=notice.record_date,
         face_value=notice.face_value,
+        nse_list=nse_list,
     )
 
 
 _KEY = ("symbol", "series", "ex_date", "subject")
 _DERIVED = ("kind", "factor_numerator", "factor_denominator")
-_COLUMNS = (*_KEY, "isin", "record_date", "face_value", *_DERIVED)
+_COLUMNS = (*_KEY, "isin", "record_date", "face_value", "nse_list", *_DERIVED)
 _NAMES = ", ".join(_COLUMNS)
 
 
@@ -190,7 +219,7 @@ def _insert(
     result = conn.execute(
         "WITH incoming AS ("
         "  SELECT * FROM unnest(%s::text[], %s::text[], %s::date[], %s::text[], %s::text[],"
-        "   %s::date[], %s::numeric[], %s::text[], %s::bigint[], %s::bigint[])"
+        "   %s::date[], %s::numeric[], %s::text[], %s::text[], %s::bigint[], %s::bigint[])"
         f"  AS n({_NAMES})),"
         " inserted AS ("
         f"  INSERT INTO corporate_actions ({_NAMES}) SELECT {_NAMES} FROM incoming"
@@ -213,6 +242,7 @@ def _insert(
             [a.isin for a in rows],
             [a.record_date for a in rows],
             [a.face_value for a in rows],
+            [a.nse_list for a in rows],
             [a.kind for a in rows],
             [None if a.factor is None else a.factor.numerator for a in rows],
             [None if a.factor is None else a.factor.denominator for a in rows],

@@ -240,6 +240,8 @@ def test_an_adjusting_action_without_a_factor_is_refused() -> None:
         ("Bonus 4:1", "bonus", Fraction(1, 5)),
         ("Bonus- 1:1", "bonus", Fraction(1, 2)),
         ("Bonus 1: 25", "bonus", Fraction(25, 26)),
+        # TOUCHWOOD, SM, ex 2019-08-22: 1.5 new shares for every 1 held, so 3:2.
+        ("BONUS 1.5:1", "bonus", Fraction(2, 5)),
         ("Bonus 1:1 /Dividend- Rs 29 Per Share", "bonus", Fraction(1, 2)),
         (
             "Annual General Meeting/Dividend - Rs 20 Per Share/Bonus 1:1 (Revised)",

@@ -68,3 +68,33 @@ ICICINV20,NV20IETF,2023-12-20,https://nsearchives.nseindia.com/content/circulars
 ICICISENSX,SENSEXIETF,2023-12-20,https://nsearchives.nseindia.com/content/circulars/CML59760.pdf
 # KOTAKNV20 to NV20: NSE/CML/61135 (gives ISIN INF174K01Z71), w.e.f. March 20, 2024.
 KOTAKNV20,NV20,2024-03-20,https://nsearchives.nseindia.com/content/circulars/CML61135.pdf
+#
+# ISIN changes under one Symbol that no NSE corporate-action list reaches (#33;
+# docs/research.md, "Fund, SME, TIDEWATER and KARDA ISIN changes (#33)"). Each
+# cites NSE's "Change in ISIN" circular. The splits and bonuses among them join
+# the history but give no Adjustment Factor (#37).
+#
+# KOTAKGOLD, INF373I01015 to INF373I01049: an ETF unit split; NSE files it
+# under today's Symbol and ISIN (GOLD1), which the builder cannot reach.
+KOTAKGOLD,KOTAKGOLD,2015-04-15,https://nsearchives.nseindia.com/content/circulars/CML29412.pdf
+# TIDEWATER, INE484C01014 to INE484C01022: face value Rs 10 to Rs 5 (NSE/CML/31924,
+# NSE/CMPT/31946) and a 1:1 bonus (NSE/CML/32044); in no NSE list.
+TIDEWATER,TIDEWATER,2016-03-17,https://nsearchives.nseindia.com/content/circulars/CML31978.pdf
+# IGOLD, INF109K01FV4 to INF109KB1WF4: an ETF unit split; in no NSE list.
+IGOLD,IGOLD,2016-06-10,https://nsearchives.nseindia.com/content/circulars/CML32526.pdf
+# ICICIGOLD, INF109KB1WF4 to INF109KC1NT3: an ETF unit split; in no NSE list.
+ICICIGOLD,ICICIGOLD,2018-11-16,https://nsearchives.nseindia.com/content/circulars/CML39383.pdf
+# KARDA, INE278R01018 to INE278R01026: face value Rs 10 to Rs 2 (NSE/CML/44773,
+# NCL/CMPT/44827); in no NSE list.
+KARDA,KARDA,2020-07-03,https://nsearchives.nseindia.com/content/circulars/CML44835.pdf
+# ICICIBANKN, INF109KC1E27 to INF109KC15I8: an ETF unit split; in no NSE list.
+ICICIBANKN,ICICIBANKN,2022-09-02,https://nsearchives.nseindia.com/content/circulars/CML53470.pdf
+# HDFCLIQUID, INF179KC1HE2 to INF179KC1JG3: a change of scheme name and ISIN,
+# with no change of price.
+HDFCLIQUID,HDFCLIQUID,2025-02-28,https://nsearchives.nseindia.com/content/circulars/CML66863.pdf
+# JSLL, INE0J5801011 to INE0J5801029 (SME): face value Rs 10 to Rs 2 (NSE/CML/68231);
+# not in NSE's SME list.
+JSLL,JSLL,2025-06-12,https://nsearchives.nseindia.com/content/circulars/CML68416.pdf
+# GICL, INE947T01014 to INE947T01022 (SME): face value Rs 10 to Rs 5 (NSE/CML/70527)
+# and a 1:1 bonus (NSE/CML/70874); not in NSE's SME list.
+GICL,GICL,2025-10-15,https://nsearchives.nseindia.com/content/circulars/CML70656.pdf

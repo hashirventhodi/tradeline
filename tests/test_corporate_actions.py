@@ -1,10 +1,13 @@
 """``ingest corporate-actions`` against the recorded NSE fixture, and the adjusted series it yields.
 
-The fixture is NSE's corporate-action list for ex-dates 2024-07-01 to
-2024-12-31, trimmed to the five symbols of the end-of-day fixtures plus rows
-that exercise the reading of subjects: a bonus and a split on the same day
-(VERTOZ), a split in NSE's "Rs10/-" spelling (KPIGREEN), a rights issue
-(JAIPURKURT), a demerger (OCCL), and a record NSE lists twice (NORBTEAEXP).
+The fixture is NSE's three corporate-action lists for ex-dates 2024-07-01 to
+2024-12-31. The main board's is trimmed to the five symbols of the end-of-day
+fixtures plus rows that exercise the reading of subjects: a bonus and a split
+on the same day (VERTOZ), a split in NSE's "Rs10/-" spelling (KPIGREEN), a
+rights issue (JAIPURKURT), a demerger (OCCL), and a record NSE lists twice
+(NORBTEAEXP). The SME platform's is trimmed to KCK's split, PULZ's bonus, and
+four meetings, each with a number where an ISIN belongs. The fund units' is
+as served: four records with no Ex-Date.
 
 The adjusted series is checked two ways: by hand against the raw end-of-day
 rows, and against Kite's own adjusted RELIANCE bars in the candle fixtures,
@@ -42,7 +45,7 @@ CANDLE_FIXTURES = Path(__file__).parent / "fixtures" / "ingest_candles"
 START, END = date(2024, 7, 1), date(2024, 8, 30)  # the end-of-day and candle fixtures
 ACTIONS_START, ACTIONS_END = date(2024, 7, 1), date(2024, 12, 31)
 TRADING_DAYS = 43
-RECORDS, UNIQUE_RECORDS = 20, 19
+RECORDS, UNIQUE_RECORDS = 30, 25  # equities 20 (19 unique), sme 6, mf 4 with no Ex-Date
 BONUS_EX_DATE = date(2024, 10, 28)  # RELIANCE 1:1
 DIVIDEND_EX_DATE = date(2024, 8, 19)  # RELIANCE Rs 10
 D = Decimal
@@ -87,17 +90,19 @@ def test_a_fixture_backed_run_stores_every_action_with_its_kind_and_factor(
     run = queries.ingest_runs(conn, source="nse_corporate_actions")[-1]  # oldest
 
     assert (two_runs.first.rows_seen, two_runs.first.rows_written) == (RECORDS, UNIQUE_RECORDS)
-    assert (two_runs.first.requests, two_runs.first.unparsed, two_runs.first.anomalies) == (1, 0, 0)
+    assert (two_runs.first.requests, two_runs.first.unparsed, two_runs.first.anomalies) == (3, 0, 0)
     assert run.command == "ingest"
     assert (run.range_start, run.range_end) == (ACTIONS_START, ACTIONS_END)
     assert (run.rows_seen, run.rows_written, run.error) == (RECORDS, UNIQUE_RECORDS, None)
     assert run.details["by_kind"] == {
-        "bonus": 2,
+        "bonus": 3,
         "dividend": 8,
-        "other": 7,
+        "other": 11,
         "rights": 1,
-        "split": 2,
+        "split": 3,
     }
+    assert run.details["no_ex_date"] == {"mf": 4}
+    assert run.details["not_an_isin"] == {"sme": 6}
 
     dividend, bonus = queries.corporate_actions(conn, "RELIANCE")
     assert (dividend.ex_date, dividend.kind, dividend.factor) == (
@@ -113,6 +118,33 @@ def test_a_fixture_backed_run_stores_every_action_with_its_kind_and_factor(
         BONUS_EX_DATE,
         D("10"),
     )
+    assert bonus.nse_list == "equities"
+
+
+def test_the_sme_lists_split_and_bonus_are_stored_with_their_factors_and_no_isin(
+    conn: psycopg.Connection,
+) -> None:
+    """NSE's SME records carry a number where the ISIN belongs (KCK's split: "432229")."""
+    (_agm, split) = queries.corporate_actions(conn, "KCK")
+    (_agm, bonus, _egm) = queries.corporate_actions(conn, "PULZ")
+
+    assert (split.ex_date, split.kind, split.factor) == (
+        date(2024, 10, 30),
+        "split",
+        Fraction(1, 5),
+    )
+    assert (bonus.ex_date, bonus.kind, bonus.factor) == (
+        date(2024, 10, 25),
+        "bonus",
+        Fraction(1, 2),
+    )
+    assert {(a.series, a.isin, a.nse_list) for a in (split, bonus)} == {("SM", None, "sme")}
+
+
+def test_a_fund_unit_record_with_no_ex_date_is_not_stored(conn: psycopg.Connection) -> None:
+    """NSE's fund-unit list gives SDL24BEES's maturity and NAVINIFTY's merger no Ex-Date."""
+    assert queries.corporate_actions(conn, "SDL24BEES") == []
+    assert queries.corporate_actions(conn, "NAVINIFTY") == []
 
 
 def test_two_actions_on_one_day_a_split_a_rights_issue_and_a_demerger_are_each_read(
@@ -266,7 +298,8 @@ def test_a_symbol_with_only_a_meeting_is_returned_unadjusted_and_unflagged_per_s
 
 
 class StubNse:
-    """Refuses the warm-up as NSE's edge does, and answers every API call with the same body."""
+    """Refuses the warm-up as NSE's edge does, and answers every API call for the main
+    board's list with the same body, and for the SME and fund-unit lists with none."""
 
     def __init__(self, body: bytes) -> None:
         self.body = body
@@ -276,7 +309,8 @@ class StubNse:
         if "/api/" not in request.url:
             return Response(403, (), b"")
         self.api_calls.append(request)
-        return Response(200, (("content-type", "application/json"),), self.body)
+        body = self.body if "index=equities" in request.url else b"[]"
+        return Response(200, (("content-type", "application/json"),), body)
 
 
 def record(symbol: str, subject: str, ex_date: str = "05-Jul-2024") -> dict[str, Any]:
@@ -309,23 +343,21 @@ def test_year_chunks_cut_a_range_at_calendar_years_inclusive_at_both_ends() -> N
     ]
 
 
-def test_a_multi_year_range_is_one_request_per_year_and_per_named_symbol(
+def test_a_multi_year_range_is_one_request_per_year_per_list_and_per_named_symbol(
     database_url: str, two_runs: TwoRuns
 ) -> None:
     nse = StubNse(b"[]")
     with app_connection(database_url) as conn:
         result = ingest_corporate_actions(
-            conn, nse, start=date(2023, 6, 1), end=date(2025, 2, 1), symbols=["INFY", "BAJAJ-AUTO"]
+            conn, nse, start=date(2023, 6, 1), end=date(2024, 2, 1), symbols=["INFY", "GOLDSTAR"]
         )
 
-    assert (result.requests, result.rows_seen, result.rows_written) == (6, 0, 0)
+    assert (result.requests, result.rows_seen, result.rows_written) == (12, 0, 0)
     assert [call.url.split("?")[1] for call in nse.api_calls] == [
-        "index=equities&from_date=01-06-2023&to_date=31-12-2023&symbol=INFY",
-        "index=equities&from_date=01-06-2023&to_date=31-12-2023&symbol=BAJAJ-AUTO",
-        "index=equities&from_date=01-01-2024&to_date=31-12-2024&symbol=INFY",
-        "index=equities&from_date=01-01-2024&to_date=31-12-2024&symbol=BAJAJ-AUTO",
-        "index=equities&from_date=01-01-2025&to_date=01-02-2025&symbol=INFY",
-        "index=equities&from_date=01-01-2025&to_date=01-02-2025&symbol=BAJAJ-AUTO",
+        f"index={index}&from_date={start}&to_date={end}&symbol={symbol}"
+        for start, end in (("01-06-2023", "31-12-2023"), ("01-01-2024", "01-02-2024"))
+        for index in ("equities", "sme", "mf")
+        for symbol in ("INFY", "GOLDSTAR")
     ]
 
 

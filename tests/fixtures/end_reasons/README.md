@@ -16,7 +16,9 @@ kept rows are as served; only whole rows (or records) were removed.
 - `GET_www.nseindia.com_api_corporates-corporateActions_*`: NSE's corporate
   actions with an ex-date from 13 May to 10 June 2019, trimmed to the four
   Symbols' records: one, PENPEBS's "Scheme Of Amalgamation" ex 7 June 2019
-  (record date 10 June). The session's warm-up request is
+  (record date 10 June). The SME and fund-unit lists for the same dates,
+  recorded on 2026-10-22, hold none of the four Symbols' records (SME 2,
+  fund units 91), so both are kept as `[]`. The session's warm-up request is
   `../ingest_corporate_actions/`'s.
 - `GET_nsearchives.nseindia.com_content_equities_delisted.csv_*`: NSE's list
   of delisted securities (`Symbol,Company,Delisted Date,Type of Delisting`
@@ -34,5 +36,5 @@ equity master and Kite's instrument dump are not kept here: the tests play
 
 To re-record, run the NSE session over a `RecordingTransport` for
 `bhavcopy_url(day)` for each day, `corporate_actions_url(2019-05-13,
-2019-06-10)`, and `DELISTINGS_URL` (`tradeline.sources.nse`), then trim as
+2019-06-10, nse_list=...)` for each of `CORPORATE_ACTION_LISTS`, and `DELISTINGS_URL` (`tradeline.sources.nse`), then trim as
 above.

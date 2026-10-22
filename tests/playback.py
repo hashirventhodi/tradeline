@@ -135,14 +135,15 @@ def then(*edits: CandleEdit) -> CandleEdit:
 
 
 def nse_corporate_actions_from(from_date: str, to_date: str) -> Ask:
-    """Ask NSE's corporate-action list for the recorded ``from_date`` to ``to_date``
-    (``DD-MM-YYYY``) instead; every other request is asked as sent."""
+    """Ask each of NSE's corporate-action lists for the recorded ``from_date`` to
+    ``to_date`` (``DD-MM-YYYY``) instead; every other request is asked as sent."""
 
     def ask(request: Request) -> Request:
         parts = urlsplit(request.url)
         if parts.path != "/api/corporates-corporateActions":
             return request
-        query = f"index=equities&from_date={from_date}&to_date={to_date}"
+        (nse_list,) = parse_qs(parts.query)["index"]
+        query = f"index={nse_list}&from_date={from_date}&to_date={to_date}"
         return Request(request.method, parts._replace(query=query).geturl(), request.headers, None)
 
     return ask
@@ -150,7 +151,7 @@ def nse_corporate_actions_from(from_date: str, to_date: str) -> Ask:
 
 def corporate_actions_in_requested_range(request: Request, body: bytes) -> bytes:
     """NSE's corporate actions with an Ex-Date in the range the request asked for, as NSE
-    would have sent them; every other body as recorded."""
+    would have sent them (none of those with no Ex-Date); every other body as recorded."""
     parts = urlsplit(request.url)
     if parts.path != "/api/corporates-corporateActions":
         return body
@@ -161,6 +162,6 @@ def corporate_actions_in_requested_range(request: Request, body: bytes) -> bytes
     records = [
         r
         for r in json.loads(body)
-        if start <= datetime.strptime(r["exDate"], "%d-%b-%Y").date() <= end
+        if r["exDate"] != "-" and start <= datetime.strptime(r["exDate"], "%d-%b-%Y").date() <= end
     ]
     return json.dumps(records).encode()

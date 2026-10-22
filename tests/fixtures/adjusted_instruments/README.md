@@ -21,7 +21,9 @@ Gujarat Gas split its shares 5 for 1 (Rs 10 to Rs 2) with Ex-Date 15 January
   symbol-change list trimmed to the GUJGASLTD to GUJENERGY record.
 - `GET_www.nseindia.com_api_corporates-corporateActions_*`: NSE's Corporate
   Action list for GUJENERGY, ex-dates 14 to 16 January 2019, as served: the
-  one split, which NSE now files under GUJENERGY with the new ISIN.
+  one split, which NSE now files under GUJENERGY with the new ISIN. The SME
+  and fund-unit lists for the same query, recorded on 2026-10-22, are `[]` as
+  served.
 
 The symbol-change list and the equity master were served gzip-encoded and the
 Corporate Action list brotli-encoded; the bodies are stored decoded and the
@@ -31,5 +33,5 @@ Kite's instrument list from `../ingest_eod/`.
 
 To re-record, run the NSE session over a `RecordingTransport` for
 `EQUITY_L.csv`, `symbolchange.csv`, the six days' end-of-day files, and
-`corporate_actions_url(date(2019, 1, 14), date(2019, 1, 16),
-symbol="GUJENERGY")` (`tradeline.sources.nse`), then trim as above.
+`corporate_actions_url(date(2019, 1, 14), date(2019, 1, 16), nse_list=...,
+symbol="GUJENERGY")` for each of `CORPORATE_ACTION_LISTS` (`tradeline.sources.nse`), then trim as above.
