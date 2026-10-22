@@ -32,6 +32,7 @@ from tradeline.ingest.eod import ingest_eod
 from tradeline.ingest.news import Feed, ingest_news
 from tradeline.ingest.symbol_changes import ingest_symbol_changes
 from tradeline.instruments_report import instruments_report
+from tradeline.integrity import integrity as integrity_service
 from tradeline.logging import configure_logging, log_context
 from tradeline.login import login as login_service
 from tradeline.manual_links import load_manual_links
@@ -409,6 +410,25 @@ def verify_universe(ctx: Context, args: argparse.Namespace) -> int:
     return 0
 
 
+def integrity(ctx: Context, args: argparse.Namespace) -> int:
+    """The Integrity Check of NSE's data against NSE alone; exit 1 unless it passes.
+
+    The summary is the last JSON line on stdout; the table goes to stderr.
+    Nothing is written.
+    """
+    end = args.start if args.end is None else args.end
+    with _scope(args.start, end):
+        with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+            report = integrity_service(conn, ctx.config.integrity, start=args.start, end=end)
+        sys.stderr.write(report.text())
+        log.log(
+            logging.INFO if report.passed else logging.ERROR,
+            "integrity finished",
+            extra={"report": report.summary()},
+        )
+    return 0 if report.passed else 1
+
+
 Command = Callable[[Context, argparse.Namespace], int]
 
 COMMANDS: dict[str, Command] = {
@@ -423,6 +443,7 @@ COMMANDS: dict[str, Command] = {
     "instruments": instruments,
     "verify-universe": verify_universe,
     "collect-daily": collect_daily,
+    "integrity": integrity,
 }
 
 
@@ -642,6 +663,12 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="DATE",
         type=date.fromisoformat,
         help="the trading day to collect; defaults to today in IST",
+    )
+    subparsers.add_parser(
+        "integrity",
+        parents=[date_range],
+        help="check NSE's end-of-day files against the Trading Calendar, never a broker;"
+        " exit 1 unless every check passes",
     )
     return parser
 

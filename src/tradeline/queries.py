@@ -124,6 +124,20 @@ def _end_of_day(
     return [EndOfDayRow(*row) for row in rows]
 
 
+def end_of_day_dates(conn: psycopg.Connection, *, start: date, end: date) -> list[date]:
+    """The days from ``start`` to ``end`` inclusive that have an end-of-day file, oldest first.
+
+    A day has its file when any row of it is stored: ``ingest eod`` loads a
+    file whole or not at all.
+    """
+    rows = conn.execute(
+        "SELECT DISTINCT trade_date FROM eod_bhavcopy WHERE trade_date BETWEEN %s AND %s"
+        " ORDER BY trade_date",
+        (start, end),
+    ).fetchall()
+    return [day for (day,) in rows]
+
+
 def symbols(conn: psycopg.Connection, *, symbol: str | None = None) -> list[Symbol]:
     """The instrument master, or the rows (one per series) for one symbol."""
     rows = conn.execute(

@@ -6,14 +6,17 @@ real recording back through ``Playback`` with an ``ask`` that maps its request
 onto the recorded one, an ``edit`` that changes the recorded body, or both.
 """
 
+import io
 import json
+import zipfile
 from collections.abc import Callable
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+from tradeline.sources.nse import bhavcopy_url
 from tradeline.transport import PlaybackTransport, Request, Response, UnrecordedRequest
 
 Ask = Callable[[Request], Request]
@@ -191,3 +194,30 @@ def corporate_actions_in_requested_range(request: Request, body: bytes) -> bytes
         if r["exDate"] != "-" and start <= datetime.strptime(r["exDate"], "%d-%b-%Y").date() <= end
     ]
     return json.dumps(records).encode()
+
+
+def bhavcopy_as_of(day: date, recorded: date) -> tuple[Ask, Edit]:
+    """NSE's end-of-day file for ``recorded`` served as ``day``'s, its dates moved to ``day``.
+
+    Both days must be in the same file format (UDiFF from 2024-07-08). Every
+    other request is asked and served as recorded.
+    """
+    url = bhavcopy_url(day)
+
+    def ask(request: Request) -> Request:
+        if request.url != url:
+            return request
+        return Request(request.method, bhavcopy_url(recorded), request.headers, request.body)
+
+    def edit(request: Request, body: bytes) -> bytes:
+        if request.url != url:
+            return body
+        with zipfile.ZipFile(io.BytesIO(body)) as archive:
+            (name,) = archive.namelist()
+            text = archive.read(name).decode()
+        moved = io.BytesIO()
+        with zipfile.ZipFile(moved, "w") as archive:
+            archive.writestr(name, text.replace(recorded.isoformat(), day.isoformat()))
+        return moved.getvalue()
+
+    return ask, edit
