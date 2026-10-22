@@ -1294,6 +1294,116 @@ on Sunday 2026-11-08.
   or a session it calls, is not in the calendar; the file check names such a
   day once its file is ingested (or found missing).
 
+## Large Move records (#58)
+
+Reviewed on 2026-10-22 against the #29 database (end-of-day files 2015-01-01
+to 2026-10-19). `tradeline integrity --from 2015-01-01 --to 2026-10-19`
+with a header-only `large_moves.csv` found 43 Large Moves among the 517
+ever-members, all unexplained: no split or bonus falls on any of them, since
+the Adjusted Series takes out every split and bonus it has. The spec's 82
+were raw EQ closes; read as #56 measures them (the Adjusted Series, across
+the listing series), a split's day and a series move no longer show, and 43
+remain. A move on 2015-01-01, the range's first day, would not be seen.
+
+For each, NSE's circulars from 30 days before to 3 days after the move
+(`nseindia.com/api/circulars`, every department) were searched by company
+name, and NSE's corporate announcements for the Symbol around the day
+(`nseindia.com/api/corporate-announcements`). Each cited circular or filing
+was fetched and read; the three image-only circulars (NSE/CMTR/39430,
+NSE/SURV/40123, NSE/SURV/41288) were read as images.
+
+### Counts by reason
+
+| Reason | Moves |
+|---|---|
+| demerger | 26 |
+| market | 14 |
+| rights | 1 |
+| dividend | 1 |
+| resumed | 1 |
+| unexplained | 0 |
+
+- **demerger (26).** Each is the Ex-Date of a scheme in NSE's Corporate Action
+  list ("Scheme Of Arrangement", "Composite Scheme Of Arrangement" or
+  "Demerger"), and an NSE circular names the day. For an F&O stock, either
+  NSE's F&O adjustment "on account of scheme of arrangement" states the
+  ex-date (ADANIENT 2015, IDFC 2015, ARVIND 2018, PEL 2022) or NSE held a
+  pre-open call auction for the scheme that day (ABIRLANUVO, CROMPGREAV,
+  SINTEX, KPIT, CENTURYTEX, TATACHEM; from 2025 a Special Pre-Open Session:
+  SIEMENS, ABFRL, TATAMOTORS, VEDL). Otherwise NSE moved the stock to
+  trade-for-trade (BE) "Pursuant to Scheme of Arrangement" from that day
+  (JSL, IIFL, TATACOMM, ANANTRAJ, EDELWEISS, NIITLTD, SANOFI, RAYMOND twice,
+  STAR, SHANKARA, HEG). That is why 12 of the 26 moves are in BE.
+- **rights (1).** IDEA 2019-03-29, its 87:38 rights issue at Rs 12.50. The
+  theoretical ex-rights price, (38 x 29 + 87 x 12.50) / 125 = 17.50, is
+  close to the 18.25 close. NCL/CMPT/40552 adjusts F&O for it.
+- **dividend (1).** MAJESCO 2020-12-23, the interim dividend of Rs 974 per
+  share paid from the sale of its US business. The board outcome was filed
+  with NSE on 2020-12-15. The close fell from 985.65 to 12.20.
+- **resumed (1).** BCG 2025-07-14 (the Instrument LYCOS named). It was
+  suspended from 2024-06-14 and resumed in BE (NSE/CML/68967). The 241 gap
+  days of LYCOS below are that suspension.
+- **market (14).** None has a corporate action. Each cites the exchange's
+  record of the day where one exists: NSE's news verification or
+  price-movement query and the company's reply, an NSE circular, or a
+  regulator's release.
+  - UNITECH 2015-06-03: loan default rumours. NSE's press release of
+    2015-06-04 records the clarification.
+  - RCOM 2018-05-17: up on talk of a settlement with Ericsson. NSE's news
+    verification records it.
+  - DHFL 2018-09-21: default rumours. NSE's news verification records them,
+    and DHFL's reply says it had not defaulted.
+  - INFIBEAM 2018-09-28: Infibeam filed a voluntary clarification that day.
+  - RCOM and RPOWER 2019-02-04: RCOM's board chose NCLT resolution
+    (NSE/SURV/40123). Reliance Power's press release said the move did not
+    affect it.
+  - JETAIRWAYS 2019-06-18 and 2019-06-20: lenders took it to insolvency, and
+    the NCLT admitted it two days later. NSE queried the news and the price
+    move, and moved it to trade-for-trade (NSE/SURV/41288).
+  - IBULHSGFIN 2019-09-30: the Delhi High Court PIL. The company's filing of
+    2019-09-27 records it.
+  - YESBANK 2020-03-06: the RBI moratorium (its press release of
+    2020-03-05).
+  - YESBANK 2020-03-17: the Reconstruction Scheme in force, and trading in
+    the new ISIN (NSE/CML/43833).
+  - IDEA 2020-03-18: the Supreme Court's AGR order that day. Vodafone Idea's
+    filing of 2020-03-19 records it.
+  - IBULHSGFIN 2020-03-19: no exchange record of the day was found. The
+    reviewer's note cites the March 2020 market-wide fall and the company's
+    filings on its Yes Bank loans.
+  - POLICYBZR 2026-09-24: IRDAI's consultation paper "Recalibrating Economics
+    of Insurance Distribution". PB Fintech's reply to NSE's price-movement
+    query calls the fall market-driven.
+
+No move turned out to be a split or bonus missing from NSE's lists, so no
+Cited Action was added and none is unresolved.
+
+### Outcome
+
+`tradeline integrity --from 2015-01-01 --to 2026-10-19` with the 43 records,
+on 2026-10-22, gave PASS:
+
+- 2,923 trading days, 0 day failures;
+- 517 ever-members and 43 Large Moves, all explained (26 demerger, 14 market,
+  1 rights, 1 dividend, 1 resumed);
+- 0 unexplained, 0 unresolved records and 0 unmatched records.
+
+The 2,675 gaps fall across 21 Instruments. They are reported and never
+failed: FCEL 449, HDIL 334, RCOM 295, LYCOS 241, JPASSOCIAT 227, FRETAIL 218,
+RELCAPITAL 194, SINTEX 180, EROSMEDIA 108, SREINFRA 103, RELINFRA 79,
+FORCEMOT 76, MEP 61, ABAN 50, PIPAVAVDOC 27, IBREALEST 12, SUBEX 10,
+UPERGANGES 5, PRAKASH 3, BEPL 2 and GOLDINFRA 1.
+
+### Unresolved
+
+- **No Large Move is left unexplained.**
+- **Weaker citations.** Two market records rest on a reviewer's note rather
+  than an exchange record of the day. IBULHSGFIN 2020-03-19 has none at all.
+  For RPOWER 2019-02-04 the only record is its own press release that RCOM's
+  move did not affect it.
+- **Later moves.** A Large Move after 2026-10-19, or a new ever-member's
+  earlier one, fails the check until a record is added.
+
 ## US-market findings (for reference; not the chosen market)
 
 Alpaca offers free paper trading with IEX data and ₹99-equivalent full SIP data; Massive (formerly Polygon) runs 29 to 199 dollars a month; SEC EDGAR is free. These made the US the easier engineering choice. The Operator chose Indian equities, which cost more in friction (no sandbox, daily login, static IP) but is the market they trade.
@@ -1331,3 +1441,4 @@ Within the agreed ₹5,000 to ₹12,000 band with headroom for a paid data upgra
 - Listing dates (#32): NSE circulars NSE/CML/46245 and 46277 (SUBEX), 57743 (NESTLEIND), 41893, 58560 and 60618 (FORCEMOT), 45904 and 48190 (CAMS), 28696 and 28574 (SHAKTIPUMP), 57699, 73797, 75748 and 41915, at nsearchives.nseindia.com/content/circulars/CML<number>.pdf or .zip, found through nseindia.com/api/circulars; Nestlé India's Regulation 30 disclosure of the NSE listing (nestle.in, special announcements); CAMS's press release filing of 2021-05-07 (nsearchives.nseindia.com/corporate/CAMS_07052021180955_Pressrelease.pdf); NSE's "Securities Available for Trading" page (nseindia.com/static/products-services/equity-market-securities-available-for-trading); NSE's About Equities page for the capital market segment's opening on 1994-11-03 (nseindia.com/static/products-services/about-equity-market); NSE's data description (archives.nseindia.com/content/press/Data_details_CM.pdf); archived copies of NSE's EQUITY_L.csv at web.archive.org (snapshots 20150102124557, 20150310012511, 20181219143033, 20210516062344, 20220102154932, 20230428005156, 20250726163846)
 - ISIN changes (#33): NSE's Corporate Action API (nseindia.com/api/corporates-corporateActions with `index=equities`, `sme` and `mf`); NSE circulars NSE/CML/29389, 29412, 31924, 31978, 32044, 32517, 32526, 35394, 35452, 39361, 39363, 39383, 39385, 42873, 42888, 44773, 44835, 45054, 45074, 47279, 47320, 47344, 47347, 47665, 47721, 48556, 48595, 48928, 48964, 50053, 50106, 50329, 50382, 50496, 50529, 50859, 50905, 53206, 53260, 53404, 53470, 58455, 58523, 58972, 59009, 60421, 60492, 60740, 60870, 61766, 61914, 66863, 68231, 68416, 70527, 70656, 70874, 72553, 72617, 72620, 72718, 72916, 72980, 73020, 73115, 73816, 73909, 74765, 74911, 74912, 75102, 75236, 75432, 75678, 75868, NSE/CMPT/31946 and NCL/CMPT/44827, at nsearchives.nseindia.com/content/circulars/, found through nseindia.com/api/circulars; Jeena Sikho Lifecare's and Globe International Carriers' filings at nsearchives.nseindia.com/corporate/, found through nseindia.com/api/corporate-announcements
 - Trading Calendar (#57): NSE's circular search (nseindia.com/api/circulars, `dept=CMTR` and `dept=MSD`, December 2014 to October 2026); NSE circulars NSE/CMTR/28337, 28939, 31047, 31297, 33424, 33746, 35993, 36475, 39216, 39612, 40536, 42403, 42483, 42877, 43290, 46230, 46623, 50050, 50560, 54023, 54757, 57285, 59124, 59722, 60338, 61518, 64628, 64960, 65587, 65729, 70319, 71775, 72260, 72349, 76941 and NSE/MSD/42319, 59999, 60340, 60677, 61893, 66381, at nsearchives.nseindia.com/content/circulars/<dept><number>.pdf (57285 and 60338 are .zip)
+- Large Move records (#58): NSE's circular search (nseindia.com/api/circulars, all departments, 30 days before to 3 days after each move) and corporate announcements (nseindia.com/api/corporate-announcements); NSE circulars NSE/CMPT/29829, 30815, NSE/CMTR/30850, 31553, 31832, 34910, 39430, 39976, 42322, 43646, 67392, 68037, 70614, 73856, NSE/SURV/31133, 40123, 41288, NSE/CML/41079, 42085, 43833, 45883, 56859, 56872, 62383, 62751, 65322, 67935, 68967, 70275, 76106, NCL/CMPT/39442, 40552 and 53443, at nsearchives.nseindia.com/content/circulars/<dept><number>.pdf; NSE's press release of 2015-06-04 (nsearchives.nseindia.com/content/press/04062015.htm); company filings at nsearchives.nseindia.com/corporate/ (DHFL, RCOM, RPOWER, IHFL/IBULHSGFIN, YESBANK, IDEA, MAJESCO, POLICYBZR, as cited in large_moves.csv) and Infibeam Avenues' voluntary clarification of 2018-09-28 (avenuesai.com); RBI press release of 2020-03-05 (rbi.org.in, prid=49476)

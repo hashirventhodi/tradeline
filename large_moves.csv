@@ -1,0 +1,113 @@
+# Large Move records (ADR 0018): the reviewed reason and source of each Large
+# Move of an ever-member that no split or bonus explains.
+#
+# A Large Move is a close more than integrity.large_move_ratio (1.5) times the
+# previous close, either way, in the Adjusted Series as of the check's end
+# date, read across the listing series. Every row is reviewed like code. The
+# Symbol is the one NSE published on the day of the move (trade_date), which
+# names the Instrument. The reason is one of demerger (a demerger or other
+# scheme), rights, dividend, resumed (trading resumed after a suspension) or
+# market (a market move with no corporate event). The citation is an official
+# source: an NSE circular by number (each is at
+# https://nsearchives.nseindia.com/content/circulars/<DEPT><NUMBER>.pdf), a
+# company filing to the exchange by its nsearchives URL, or a regulator's
+# record. A market move with none says so in a reviewer's note. Several sources
+# are separated by ";". A row without a citation, with an unknown reason, or a
+# second row for one Symbol and day refuses the whole file.
+# `tradeline.large_move_records` reads this file; its location is
+# `integrity.large_moves` in tradeline.toml. The review is in docs/research.md
+# under "Large Move records (#58)".
+symbol,trade_date,reason,citation
+#
+# Demergers and other schemes. Each was the Ex-Date of a scheme of arrangement
+# in NSE's Corporate Action list (subject "Scheme Of Arrangement", "Composite
+# Scheme Of Arrangement" or "Demerger"), and NSE's circular names the day: an
+# F&O adjustment "on account of scheme of arrangement" with that Ex-Date, a
+# pre-open call auction (from 2025 a Special Pre-Open Session) "Scheme of
+# Arrangement" on that day, or a move to trade-for-trade (series BE) "Pursuant
+# to Scheme of Arrangement" with effect from that day.
+#
+# ADANIENT: NSE/CMPT/29829 (May 29, 2015): F&O adjustment, scheme of arrangement, "The ex-date in this regard shall be June 03, 2015".
+ADANIENT,2015-06-03,demerger,NSE/CMPT/29829
+# IDFC: NSE/CMPT/30815 (ex-date October 01, 2015); NSE/CMTR/30850, pre-open call auction "Demerger Scheme" on October 01, 2015.
+IDFC,2015-10-01,demerger,NSE/CMPT/30815; NSE/CMTR/30850
+# JSL: NSE/SURV/31133 (November 16, 2015): trade-for-trade (BE) pursuant to the Scheme of Arrangement from November 19, 2015.
+JSL,2015-11-19,demerger,NSE/SURV/31133
+# ABIRLANUVO: NSE/CMTR/31553: pre-open call auction, Scheme of Arrangement, January 20, 2016.
+ABIRLANUVO,2016-01-20,demerger,NSE/CMTR/31553
+# CROMPGREAV: NSE/CMTR/31832: pre-open call auction, Scheme of Arrangement, March 15, 2016.
+CROMPGREAV,2016-03-15,demerger,NSE/CMTR/31832
+# SINTEX: NSE/CMTR/34910: pre-open call auction, Scheme of Arrangement, May 25, 2017.
+SINTEX,2017-05-25,demerger,NSE/CMTR/34910
+# ARVIND: NCL/CMPT/39442: F&O adjustment, scheme of arrangement, ex-date November 28, 2018 (the pre-open circular NSE/CMTR/39430 is an image).
+ARVIND,2018-11-28,demerger,NCL/CMPT/39442; NSE/CMTR/39430
+# KPIT: NSE/CMTR/39976: pre-open call auction, Scheme of Arrangement, January 24, 2019.
+KPIT,2019-01-24,demerger,NSE/CMTR/39976
+# IIFL: NSE/CML/41079: trade-for-trade (BE) pursuant to Scheme of Arrangement from May 30, 2019.
+IIFL,2019-05-30,demerger,NSE/CML/41079
+# TATACOMM: NSE/CML/42085: trade-for-trade (BE) pursuant to Scheme of Arrangement from September 17, 2019.
+TATACOMM,2019-09-17,demerger,NSE/CML/42085
+# CENTURYTEX: NSE/CMTR/42322: pre-open call auction, Scheme of Arrangement, October 11, 2019.
+CENTURYTEX,2019-10-11,demerger,NSE/CMTR/42322
+# TATACHEM: NSE/CMTR/43646: pre-open call auction, Scheme of Arrangement, March 04, 2020.
+TATACHEM,2020-03-04,demerger,NSE/CMTR/43646
+# ANANTRAJ: NSE/CML/45883: trade-for-trade (BE) pursuant to Scheme of Arrangement from October 06, 2020.
+ANANTRAJ,2020-10-06,demerger,NSE/CML/45883
+# PEL: NCL/CMPT/53443: F&O adjustment for 4 shares of Piramal Pharma per PEL share, "Ex-date: August 30, 2022".
+PEL,2022-08-30,demerger,NCL/CMPT/53443
+# EDELWEISS: NSE/CML/56859: trade-for-trade (BE) pursuant to Scheme of Arrangement from June 02, 2023.
+EDELWEISS,2023-06-02,demerger,NSE/CML/56859
+# NIITLTD: NSE/CML/56872: trade-for-trade (BE) pursuant to Scheme of Arrangement from June 08, 2023.
+NIITLTD,2023-06-08,demerger,NSE/CML/56872
+# SANOFI: NSE/CML/62383: trade-for-trade (BE) pursuant to Scheme of Arrangement from June 13, 2024.
+SANOFI,2024-06-13,demerger,NSE/CML/62383
+# RAYMOND: NSE/CML/62751: trade-for-trade (BE) pursuant to Scheme of Arrangement from July 11, 2024.
+RAYMOND,2024-07-11,demerger,NSE/CML/62751
+# STAR: NSE/CML/65322: trade-for-trade (BE) pursuant to Scheme of Arrangement from December 06, 2024.
+STAR,2024-12-06,demerger,NSE/CML/65322
+# SIEMENS: NSE/CMTR/67392: Special Pre-Open Session, Scheme of Arrangement, April 07, 2025.
+SIEMENS,2025-04-07,demerger,NSE/CMTR/67392
+# RAYMOND: NSE/CML/67935: trade-for-trade (BE) pursuant to Scheme of Arrangement from May 14, 2025.
+RAYMOND,2025-05-14,demerger,NSE/CML/67935
+# ABFRL: NSE/CMTR/68037: Special Pre-Open Session, Scheme of Arrangement, May 22, 2025.
+ABFRL,2025-05-22,demerger,NSE/CMTR/68037
+# SHANKARA: NSE/CML/70275: trade-for-trade (BE) pursuant to Scheme of Arrangement from September 24, 2025.
+SHANKARA,2025-09-24,demerger,NSE/CML/70275
+# TATAMOTORS: NSE/CMTR/70614: Special Pre-Open Session, Scheme of Arrangement, October 14, 2025.
+TATAMOTORS,2025-10-14,demerger,NSE/CMTR/70614
+# VEDL: NSE/CMTR/73856: Special Pre-Open Session, Scheme of Arrangement, April 30, 2026.
+VEDL,2026-04-30,demerger,NSE/CMTR/73856
+# HEG: NSE/CML/76106: trade-for-trade (BE) pursuant to Scheme of Arrangement from September 07, 2026.
+HEG,2026-09-07,demerger,NSE/CML/76106
+#
+# Rights. IDEA's 87:38 rights issue at Rs 12.50 (NSE's list: "Rights 87:38 @
+# Premium Of Rs 2.50 Per Share", Ex-Date 2019-03-29); NCL/CMPT/40552 adjusts
+# F&O "on account of Rights Issue" after March 28, 2019. The theoretical
+# ex-rights price (38 x 29 + 87 x 12.50) / 125 = 17.50 is near the 18.25 close.
+IDEA,2019-03-29,rights,NCL/CMPT/40552
+#
+# Dividends. MAJESCO's interim dividend of Rs 974 per share (NSE's list,
+# Ex-Date 2020-12-23), paid from the sale of its US business: the board's
+# outcome filed with NSE on December 15, 2020.
+MAJESCO,2020-12-23,dividend,https://nsearchives.nseindia.com/corporate/MAJESCO_15122020084831_SELetter15122020.pdf
+#
+# Resumed after a suspension. BCG (Brightcom Group, the Instrument LYCOS
+# named) was suspended from June 14, 2024 and resumed in BE on July 14, 2025.
+BCG,2025-07-14,resumed,NSE/CML/68967
+#
+# Market moves: no corporate event. Each cites the exchange's or the
+# company's record of the day where one exists.
+UNITECH,2015-06-03,market,"NSE press release of June 04, 2015 (nsearchives.nseindia.com/content/press/04062015.htm): NSE sought clarification on loan default talk; Unitech called the rumours false. No corporate action."
+RCOM,2018-05-17,market,"reviewer: NSE sought clarification of the news item 'RCOM, Ericsson inform NCLT that they are in settlement talks' (company reply https://nsearchives.nseindia.com/corporate/RCOM_7477_reply_17052018181505.zip, May 17, 2018). No corporate action."
+DHFL,2018-09-21,market,"https://nsearchives.nseindia.com/corporate/sbedarkar_21092018171531_DHFL_7629_reply_828.pdf: DHFL's reply to NSE's news verification of 'DHFL shares fall 50% on default rumour', stating it had not defaulted. No corporate action."
+INFIBEAM,2018-09-28,market,"Infibeam Avenues' voluntary clarification to NSE and BSE of September 28, 2018 on the fall in its share price (https://www.avenuesai.com/wp-content/uploads/2021/02/VoluntaryClarification.pdf): no pending information or announcement. No corporate action (the Re 0.10 dividend went ex on September 19)."
+RCOM,2019-02-04,market,"NSE/SURV/40123 (February 04, 2019): RCOM's board proposed debt resolution through NCLT (press releases of February 01 and 03, 2019); F&O contracts to expire. No corporate action."
+RPOWER,2019-02-04,market,"reviewer: Reliance group stocks fell with RCOM's NCLT move (NSE/SURV/40123); Reliance Power's press release of February 04, 2019 'No impact of RCOM move on Reliance Power group' (https://nsearchives.nseindia.com/corporate/RPOWER_04022019091100_Mediarelease04022019_019.pdf). No corporate action."
+JETAIRWAYS,2019-06-18,market,"reviewer: lenders referred Jet Airways to insolvency; NSE sought clarification of 'Jet Air lands in NCLT as banks give up on revival' (June 18, 2019); NSE/SURV/41288 moves it to trade-for-trade from June 28, 2019. No corporate action."
+JETAIRWAYS,2019-06-20,market,"reviewer: NCLT admitted SBI's insolvency petition on June 20, 2019; NSE recorded a significant price movement that day and sought clarification. No corporate action."
+IBULHSGFIN,2019-09-30,market,"reviewer: the Delhi High Court issued notice on a PIL alleging fund diversion; the company's filing to NSE of September 27, 2019 (https://nsearchives.nseindia.com/corporate/IHFL_27092019184154_IBH_SE_Intimation_27Sep2019_567.pdf). No corporate action."
+YESBANK,2020-03-06,market,"RBI press release of March 05, 2020 'Yes Bank Ltd. placed under Moratorium' (https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=49476); the bank's intimation to NSE of March 06, 2020. No corporate action."
+YESBANK,2020-03-17,market,"NSE/CML/43833 (March 15, 2020): the Yes Bank Limited Reconstruction Scheme 2020 in force from March 13, 2020; the shares trade in the new ISIN from March 16, 2020 (manual link). No corporate action on the day."
+IDEA,2020-03-18,market,"https://nsearchives.nseindia.com/corporate/IDEA_19032020190645_SELetter19032020.pdf: on March 18, 2020 the Supreme Court ordered that no self-assessment of AGR dues can be done. No corporate action."
+IBULHSGFIN,2020-03-19,market,"reviewer: no corporate event or exchange record of the day found; a market-wide fall (March 2020) and the company's filings on Yes Bank loans (March 15 and 19, 2020). No corporate action."
+POLICYBZR,2026-09-24,market,"https://nsearchives.nseindia.com/corporate/POLICYBZR_27092026144620_ClarificationLettertoNSEBSEPBFL.pdf: the company's reply to NSE's price-movement query: market-driven after IRDAI's consultation paper 'Recalibrating Economics of Insurance Distribution'. No corporate action."
