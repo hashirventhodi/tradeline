@@ -21,7 +21,7 @@ from tradeline.collect import collect_daily as collect_daily_service
 from tradeline.compare_adjusted import compare_adjusted as compare_adjusted_service
 from tradeline.config import Config, default_config_path, load_config
 from tradeline.dates import IST, month_end, month_of, next_month, parse_month
-from tradeline.db import app_connection, connect
+from tradeline.db import NotAppRoleMember, app_connection, connect
 from tradeline.environment import Environment
 from tradeline.ingest.announcements import ingest_announcements
 from tradeline.ingest.candles import CurrentUniverse, ingest_candles
@@ -665,6 +665,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         KiteError,
         PendingMigrations,
         UnreadableMigrations,
+        NotAppRoleMember,
         ValueError,  # ConfigError is a ValueError
     ) as error:
         log.error(str(error))

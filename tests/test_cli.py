@@ -105,6 +105,28 @@ def test_a_member_only_login_role_meeting_a_database_without_0022_is_told_to_mig
     )
 
 
+def test_a_login_role_that_is_not_a_member_of_tradeline_app_is_told_to_grant_it(
+    database_url: str,
+    member_only_url: Callable[..., str],
+    repo_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Migrating would not help it, so it is not told to (#47).
+    outsider_url = member_only_url(database_url, member=False)
+    outsider = str(psycopg.conninfo.conninfo_to_dict(outsider_url)["user"])
+    monkeypatch.setenv("DATABASE_URL", outsider_url)
+
+    assert main(["reconcile", "--from", "2024-07-01"]) == 1
+
+    (line,) = json_lines(capsys.readouterr().out)
+    assert line["level"] == "ERROR"
+    assert line["msg"] == (
+        f'login role "{outsider}" is not a member of tradeline_app;'
+        f' grant it with `GRANT tradeline_app TO "{outsider}"`'
+    )
+
+
 def test_an_unknown_command_is_refused(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as exit_info:
         main(["frobnicate"])
