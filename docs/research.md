@@ -675,21 +675,35 @@ A manual link would join either history without the factor, the reason
 CCAVENUE has none (above); NSE's Corporate Action list supplies the factor
 for neither.
 
+### Outcome
+
+Both lists are now ingested beside `index=equities`, each row recording its
+list; the SME list's numbers are stored as no ISIN, and the fund-unit list's
+records with no Ex-Date are not stored. TOUCHWOOD's "BONUS 1.5:1" reads as
+3:2. The nine changes no list reaches (KOTAKGOLD, TIDEWATER, IGOLD,
+ICICIGOLD, KARDA, ICICIBANKN, HDFCLIQUID, JSLL, GICL) are joined by manual
+links citing their Change in ISIN circulars.
+
+On the #29 database, on 2026-10-22: the backfill of 2015-01-01 to 2026-10-22
+made 36 requests and stored 1,531 SME and 1,860 fund-unit rows (10,243
+fund-unit records served with no Ex-Date, duplicates included). The rebuild
+then made 509 corporate-action links (424 before) and 33 manual (24), and
+reports 10 unexplained ISIN changes (104): all 94 of this section are
+explained, and the 10 left (CCAVENUE, #31, among them) were reported before.
+It finds 66 more Universe months stale, all 120 of `ded30b1014c4` now, since
+the joins regroup SME and fund-unit rows in every window; recomputed, all
+120 match the stored months (`tradeline universe --month 2016-11 --to
+2026-10`), the six SUBEXLTD months reported as retired keys as in #35.
+
 ### Unresolved
 
-- **Not decided here:** whether to ingest `index=sme` and `index=mf`, and
-  how. The SME records carry no ISIN, MF records are filed under today's
-  Symbol and ISIN (KOTAKGOLD's 2015 split under GOLD1, INF174KA1HJ8), and
-  TOUCHWOOD's "BONUS 1.5:1" has no factor under `adjust.interpret`.
-- **Not in any NSE list**, though each is cited by circular: JSLL's and
-  GICL's 2025 SME actions; IGOLD's (2016), ICICIGOLD's (2018) and
-  ICICIBANKN's (2022) unit splits; TIDEWATER's split and bonus; KARDA's
-  split. Ingesting either API leaves these as anomalies.
-- **HDFCLIQUID** is the only one of the 94 with no price factor, so the only
-  one a same-Symbol manual link (ADR 0016) could join without leaving an
-  unadjusted fall in the Adjusted Series.
+- **No Adjustment Factor** for the eight manual links that are splits or
+  bonuses (all but HDFCLIQUID): their Adjusted Series keep an unadjusted fall
+  (#37).
 - **TIDEWATER's bonus Ex-Date** is inferred from the price; the circular
   read gives only the allotment date (2016-03-18).
+- **120 stale months** that recompute unchanged stay recorded as stale;
+  clearing them is the Operator's.
 
 ### Queries
 
