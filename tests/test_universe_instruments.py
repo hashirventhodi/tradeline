@@ -47,6 +47,7 @@ BY_SYMBOL = UniverseRule(
     min_presence_percent=90,
 )
 BY_INSTRUMENT = replace(BY_SYMBOL, rank_by="instrument")
+EARLIEST = replace(BY_INSTRUMENT, listing_age_from="earliest")
 
 # Window traded value over 28 March to 30 April 2025, from the untrimmed files.
 RELIANCE = Decimal("402258396718.85")
@@ -150,6 +151,31 @@ def test_a_renamed_member_is_not_excluded_as_recently_listed(fresh_database_url:
         assert by_symbol["ETERNAL"].excluded == "listed 13 trading days, fewer than 21"
         assert (4, "ETERNAL", ZOMATO + ETERNAL) in members(conn, BY_INSTRUMENT)
         assert queries.resolve_symbol(conn, "ETERNAL", as_of=END).key == "ZOMATO@2025-03-17"
+
+
+def admitted_late(request: Request, body: bytes) -> bytes:
+    """NSE's equity master with RELIANCE's listing date moved to 21 April 2025, after its
+    first row, as the master dates a stock's move from "permitted to trade" to listed."""
+    if request.url != EQUITY_MASTER_URL:
+        return body
+    readmit = lines(lambda rows: [row.replace("29-NOV-1995", "21-APR-2025") for row in rows])
+    return readmit(request, body)
+
+
+def test_listing_age_counts_from_the_first_row_when_the_listing_date_comes_after_it(
+    fresh_database_url: str,
+) -> None:
+    # ADR 0017. From 21 April RELIANCE has 8 trading days before May; from its
+    # first row, 17 March, 29 (the holidays are 31 March and 10, 14 and 18 April).
+    load(fresh_database_url, master=Playback(FIXTURES, EOD_FIXTURES, edit=admitted_late))
+    with app_connection(fresh_database_url) as conn:
+        by_listing_date = {s.symbol: s for s in standings(conn, BY_INSTRUMENT, month=MAY)}
+        compute_universe(conn, EARLIEST, month=MAY)
+
+        assert by_listing_date["RELIANCE"].excluded == "listed 8 trading days, fewer than 21"
+        assert (1, "RELIANCE", RELIANCE) in members(conn, EARLIEST)
+        # The key keeps NSE's date.
+        assert queries.resolve_symbol(conn, "RELIANCE", as_of=END).key == "RELIANCE@2025-04-21"
 
 
 def dump(conn: psycopg.Connection, rule: UniverseRule) -> bytes:

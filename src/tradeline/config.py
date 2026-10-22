@@ -26,6 +26,8 @@ class ConfigError(ValueError):
 
 RankBy = Literal["symbol", "instrument"]
 RANK_BY: tuple[RankBy, ...] = get_args(RankBy)
+ListingAgeFrom = Literal["listing_date", "earliest"]
+LISTING_AGE_FROM: tuple[ListingAgeFrom, ...] = get_args(ListingAgeFrom)
 
 
 @dataclass(frozen=True)
@@ -34,15 +36,17 @@ class UniverseRule:
 
     Every field takes part in ``version``, so any change to the rule is a new
     rule version and the membership it produces is recorded under it. The one
-    exception is ``rank_by`` at its original value, ``symbol``: it is left out
-    of the parameters, so the rule as it was before Instruments (ADR 0016)
-    keeps the version its memberships were stored under.
+    exceptions are ``rank_by`` and ``listing_age_from`` at their original
+    values, ``symbol`` and ``listing_date``: each is left out of the
+    parameters, so the rule as it was before Instruments (ADR 0016), and before
+    Listing Age counted from the earliest evidence (ADR 0017), keeps the
+    version its memberships were stored under.
     """
 
     top_n: int = 200
     # The trailing window, in trading days before the month's first trading day.
     lookback_trading_days: int = 126
-    # Trading days from the listing date to the month's first trading day.
+    # Trading days of Listing Age before the month's first trading day.
     min_listing_trading_days: int = 126
     # Rows required in the window, as a whole percentage of its trading days.
     min_presence_percent: int = 90
@@ -53,10 +57,20 @@ class UniverseRule:
     # What is ranked: each Symbol on its own, or each Instrument across its
     # Symbols (ADR 0016), so a rename inside the window is not a new listing.
     rank_by: RankBy = "symbol"
+    # What Listing Age counts from: the Instrument's listing date, or the
+    # earlier of it and the Instrument's first row (ADR 0017), which needs
+    # Instruments to be ranked.
+    listing_age_from: ListingAgeFrom = "listing_date"
 
     def __post_init__(self) -> None:
         if self.rank_by not in RANK_BY:
             raise ConfigError(f"universe.rank_by must be one of {', '.join(RANK_BY)}")
+        if self.listing_age_from not in LISTING_AGE_FROM:
+            raise ConfigError(
+                f"universe.listing_age_from must be one of {', '.join(LISTING_AGE_FROM)}"
+            )
+        if self.listing_age_from == "earliest" and self.rank_by != "instrument":
+            raise ConfigError('universe.listing_age_from = "earliest" needs rank_by = "instrument"')
         for name in ("top_n", "lookback_trading_days", "min_listing_trading_days"):
             if getattr(self, name) < 1:
                 raise ConfigError(f"universe.{name} must be at least 1")
@@ -68,6 +82,8 @@ class UniverseRule:
         parameters = dataclasses.asdict(self)
         if self.rank_by == "symbol":
             del parameters["rank_by"]
+        if self.listing_age_from == "listing_date":
+            del parameters["listing_age_from"]
         return parameters
 
     @property
