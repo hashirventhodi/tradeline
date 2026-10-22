@@ -642,8 +642,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         MissingSecret,
         KiteError,
         PendingMigrations,
-        ValueError,
-    ) as error:  # ConfigError is a ValueError
+        ValueError,  # ConfigError is a ValueError
+    ) as error:
         log.error(str(error))
         return 1
     except Exception:

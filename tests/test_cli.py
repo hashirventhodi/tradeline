@@ -67,7 +67,7 @@ def test_a_command_on_a_database_with_a_pending_migration_is_refused_with_the_fi
     monkeypatch.setenv("DATABASE_URL", empty_database_url)
     assert main(["migrate"]) == 0
     with psycopg.connect(empty_database_url) as conn:
-        (latest,) = conn.execute("SELECT max(version) FROM schema_migrations").fetchone() or ()
+        (latest,) = conn.execute("SELECT max(version) FROM schema_migrations").fetchone()  # type: ignore[misc]
         conn.execute("DELETE FROM schema_migrations WHERE version = %s", (latest,))
     capsys.readouterr()
 

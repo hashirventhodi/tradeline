@@ -6,9 +6,10 @@ the ``tradeline_app`` role, which has no UPDATE or DELETE on the tables that are
 append-only, so append-only is enforced by the database and not by convention.
 
 An app connection to a database with a migration pending is refused, naming
-them: a command run before ``migrate`` would otherwise fail on a view or column
-it lacks, with an error that does not say why. The check reads
-``schema_migrations`` before switching role, as the login role.
+the pending versions: a command run before ``migrate`` would otherwise fail on
+a view or column it lacks, with an error that does not say why. The check reads
+``schema_migrations`` before switching role, which the schema's owner and any
+member of ``tradeline_app`` can (migration 0022).
 
 Locally one ``DATABASE_URL`` serves both because the Compose user owns the
 schema and is a member of ``tradeline_app``. In production (Phase 6) the app
