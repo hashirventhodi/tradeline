@@ -18,6 +18,26 @@ part of it runs outside is a failure of its own (**uncovered**), and only the
 covered part is checked day by day, so a check never passes on a calendar
 that is silently short.
 
+**Large Moves.** Every Instrument ever in a stored Universe month, under any
+rule version, is an ever-member. Its Adjusted Series in the range, as of the
+range's end, is read in its listing series (EQ, BE, BZ, SM, ST) together, by
+day: a close more than ``large_move_ratio`` times the previous row's close in
+any of them, either way, is a Large Move, so a series move neither hides a
+move nor starts a new one. The first row in the range has no previous row.
+A split or bonus of the Instrument with that Ex-Date explains it, and so does
+a row of the Large Move records (``tradeline.large_move_records``) whose
+Symbol named the Instrument that day. Any other fails the check (an
+unexplained Large Move may be a split or bonus the Adjusted Series lacks).
+A record in the range whose Symbol named no Instrument that day, or that
+matches no Large Move, is reported and does not fail. A member whose Symbol
+names no Instrument (the Instruments were not rebuilt) fails the check, since
+its moves cannot be checked.
+
+**Gaps.** Days the Trading Calendar says NSE was open, between an
+ever-member's first and last row in the range, on which it has no row in any
+listing series. NSE's file is whole on those days, so a gap is NSE's own
+record (a suspension, mostly): counted and listed, never a failure.
+
 The report lists each failure, as text and as a machine-readable summary with
 the same data. Nothing is written: the check is a read.
 """
@@ -25,15 +45,20 @@ the same data. Nothing is written: the check is a read.
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
+from collections.abc import Iterable
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal, get_args
 
 import psycopg
 
 from tradeline import queries
+from tradeline.adjust import ADJUSTED_KINDS, AdjustedBar
 from tradeline.config import Config
+from tradeline.instruments import LISTING_SERIES
+from tradeline.large_move_records import LargeMoveRecord, load_large_move_records
 from tradeline.trading_calendar import TradingCalendar, is_weekday, load_trading_calendar
 
 DayFailureKind = Literal[
@@ -77,6 +102,51 @@ class Span:
 
 
 @dataclass(frozen=True)
+class LargeMove:
+    """A close more than the Large Move ratio from the previous row's close, either way."""
+
+    instrument: str
+    # The Symbol and series of the row that moved, as NSE published it.
+    symbol: str
+    series: str
+    trade_date: date
+    # Both closes in the Adjusted Series as of the check's end date.
+    previous_close: Decimal
+    close: Decimal
+    # What explains it: ``split`` or ``bonus`` (an action with that Ex-Date),
+    # or a Large Move record's reason. None when nothing does: a failure.
+    explained_by: str | None = None
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "instrument": self.instrument,
+            "symbol": self.symbol,
+            "series": self.series,
+            "trade_date": self.trade_date.isoformat(),
+            "previous_close": str(self.previous_close),
+            "close": str(self.close),
+            "explained_by": self.explained_by,
+        }
+
+    def text(self) -> str:
+        return (
+            f"  large move {self.trade_date} {self.instrument} ({self.symbol} {self.series}):"
+            f" {self.previous_close} to {self.close}"
+        )
+
+
+@dataclass(frozen=True)
+class Gap:
+    """A day NSE was open, inside an ever-member's rows in the range, with no row of it."""
+
+    instrument: str
+    trade_date: date
+
+    def summary(self) -> dict[str, Any]:
+        return {"instrument": self.instrument, "trade_date": self.trade_date.isoformat()}
+
+
+@dataclass(frozen=True)
 class IntegrityReport:
     start: date
     end: date
@@ -88,14 +158,36 @@ class IntegrityReport:
     day_failures: tuple[DayFailure, ...]
     # The parts of the range outside the calendar's coverage: each a failure.
     uncovered: tuple[Span, ...]
+    # The ever-members' Instruments checked for Large Moves and gaps.
+    ever_members: int
+    # Ever-member Symbols no Instrument answers for: each a failure.
+    unresolved_members: tuple[str, ...]
+    # Every Large Move of an ever-member in the range, explained or not, by day.
+    large_moves: tuple[LargeMove, ...]
+    # Records in the range whose Symbol named no Instrument that day, and
+    # records that match no Large Move: reported, never failures.
+    unresolved_records: tuple[LargeMoveRecord, ...]
+    unmatched_records: tuple[LargeMoveRecord, ...]
+    # Never failures.
+    gaps: tuple[Gap, ...]
+
+    @property
+    def unexplained_large_moves(self) -> tuple[LargeMove, ...]:
+        return tuple(m for m in self.large_moves if m.explained_by is None)
 
     @property
     def passed(self) -> bool:
-        return not self.day_failures and not self.uncovered
+        return (
+            not self.day_failures
+            and not self.uncovered
+            and not self.unresolved_members
+            and not self.unexplained_large_moves
+        )
 
     def summary(self) -> dict[str, Any]:
         """The machine-readable report: the same data as the text."""
         counts = Counter(f.kind for f in self.day_failures)
+        unexplained = self.unexplained_large_moves
         return {
             "start": self.start.isoformat(),
             "end": self.end.isoformat(),
@@ -106,6 +198,19 @@ class IntegrityReport:
             "day_failures": len(self.day_failures),
             **{kind: counts[kind] for kind in DAY_FAILURE_KINDS},
             "listed_day_failures": [f.summary() for f in self.day_failures[:MAX_LISTED]],
+            "ever_members": self.ever_members,
+            "unresolved_members": list(self.unresolved_members),
+            "large_moves": len(self.large_moves),
+            "large_moves_explained": dict(
+                sorted(Counter(m.explained_by for m in self.large_moves if m.explained_by).items())
+            ),
+            "unexplained_large_moves": len(unexplained),
+            "listed_unexplained_large_moves": [m.summary() for m in unexplained[:MAX_LISTED]],
+            "unresolved_records": [_record_summary(r) for r in self.unresolved_records],
+            "unmatched_records": [_record_summary(r) for r in self.unmatched_records],
+            "gaps": len(self.gaps),
+            "gaps_by_instrument": dict(sorted(Counter(g.instrument for g in self.gaps).items())),
+            "listed_gaps": [g.summary() for g in self.gaps[:MAX_LISTED]],
             "passed": self.passed,
         }
 
@@ -123,9 +228,45 @@ class IntegrityReport:
             for s in self.uncovered
         ]
         lines += [f.text() for f in self.day_failures[:MAX_LISTED]]
-        if len(self.day_failures) > MAX_LISTED:
-            lines.append(f"  ... and {len(self.day_failures) - MAX_LISTED} more")
+        lines += _more(self.day_failures)
+        unexplained = self.unexplained_large_moves
+        explained = len(self.large_moves) - len(unexplained)
+        lines.append(
+            f"Large Moves of {self.ever_members} ever-members: {len(self.large_moves)} found,"
+            f" {explained} explained, {len(unexplained)} unexplained"
+        )
+        lines += [
+            f"  unresolved member {symbol}: names no Instrument; run `tradeline"
+            " rebuild-instruments`"
+            for symbol in self.unresolved_members
+        ]
+        lines += [m.text() for m in unexplained[:MAX_LISTED]]
+        lines += _more(unexplained)
+        lines += [
+            f"  record line {r.line} ({r.symbol} {r.trade_date}): {r.symbol} named no Instrument"
+            for r in self.unresolved_records
+        ]
+        lines += [
+            f"  record line {r.line} ({r.symbol} {r.trade_date}): matches no Large Move"
+            for r in self.unmatched_records
+        ]
+        lines.append(f"Gaps (never failures): {len(self.gaps)}")
+        lines += [f"  gap {g.trade_date} {g.instrument}" for g in self.gaps[:MAX_LISTED]]
+        lines += _more(self.gaps)
         return "\n".join(lines) + "\n"
+
+
+def _more(listed: tuple[object, ...]) -> list[str]:
+    return [f"  ... and {len(listed) - MAX_LISTED} more"] if len(listed) > MAX_LISTED else []
+
+
+def _record_summary(record: LargeMoveRecord) -> dict[str, Any]:
+    return {
+        "line": record.line,
+        "symbol": record.symbol,
+        "trade_date": record.trade_date.isoformat(),
+        "reason": record.reason,
+    }
 
 
 def integrity(
@@ -144,6 +285,26 @@ def integrity(
         trading_days = len(open_days)
         with_file = queries.end_of_day_dates(conn, start=covered.start, end=covered.end)
         day_failures = _day_failures(calendar, open_days, with_file)
+    records = load_large_move_records(Path(settings.large_moves))
+    members = queries.universe_ever_members(conn)
+    instruments = sorted({m.instrument for m in members if m.instrument is not None})
+    unresolved_members = tuple(sorted({m.symbol for m in members if m.instrument is None}))
+    ratio = Decimal(str(settings.large_move_ratio))
+    moves: list[LargeMove] = []
+    gaps: list[Gap] = []
+    for instrument in instruments:
+        bars = [
+            bar
+            for bar in queries.adjusted_daily_candles(
+                conn, instrument, start=start, end=end, as_of=end
+            )
+            if bar.series in LISTING_SERIES
+        ]
+        moves += _large_moves(conn, instrument, bars, ratio=ratio, end=end)
+        gaps += _gaps(calendar, instrument, bars, covered)
+    resolved, unresolved_records = _resolve(conn, records, start=start, end=end)
+    explained = _explain(moves, resolved)
+    matched = {(m.instrument, m.trade_date) for m in moves}
     return IntegrityReport(
         start=start,
         end=end,
@@ -152,7 +313,90 @@ def integrity(
         trading_days=trading_days,
         day_failures=day_failures,
         uncovered=uncovered,
+        ever_members=len(instruments),
+        unresolved_members=unresolved_members,
+        large_moves=tuple(sorted(explained, key=lambda m: (m.trade_date, m.instrument))),
+        unresolved_records=unresolved_records,
+        unmatched_records=tuple(r for key, r in resolved.items() if key not in matched),
+        gaps=tuple(sorted(gaps, key=lambda g: (g.trade_date, g.instrument))),
     )
+
+
+def _large_moves(
+    conn: psycopg.Connection,
+    instrument: str,
+    bars: list[AdjustedBar],
+    *,
+    ratio: Decimal,
+    end: date,
+) -> list[LargeMove]:
+    """The Instrument's Large Moves, each explained by a split or bonus on its day if one is."""
+    actions = {
+        a.ex_date: a.kind
+        for a in queries.corporate_actions(conn, instrument, end=end)
+        if a.kind in ADJUSTED_KINDS
+    }
+    priced = [b for b in bars if b.close]  # a row with no close, or a zero one, has no move
+    moves = []
+    for previous, bar in zip(priced, priced[1:], strict=False):
+        assert previous.close is not None and bar.close is not None
+        if bar.close > previous.close * ratio or previous.close > bar.close * ratio:
+            moves.append(
+                LargeMove(
+                    instrument,
+                    bar.symbol,
+                    bar.series,
+                    bar.trade_date,
+                    previous.close,
+                    bar.close,
+                    actions.get(bar.trade_date),
+                )
+            )
+    return moves
+
+
+def _gaps(
+    calendar: TradingCalendar, instrument: str, bars: list[AdjustedBar], covered: Span
+) -> list[Gap]:
+    if not bars:
+        return []
+    first, last = max(bars[0].trade_date, covered.start), min(bars[-1].trade_date, covered.end)
+    if first > last:
+        return []
+    held = {b.trade_date for b in bars}
+    return [Gap(instrument, day) for day in calendar.trading_days(first, last) if day not in held]
+
+
+def _resolve(
+    conn: psycopg.Connection, records: Iterable[LargeMoveRecord], *, start: date, end: date
+) -> tuple[dict[tuple[str, date], LargeMoveRecord], tuple[LargeMoveRecord, ...]]:
+    """The records in the range by (the Instrument their Symbol named that day, day), and
+    those whose Symbol named none."""
+    resolved: dict[tuple[str, date], LargeMoveRecord] = {}
+    unresolved = []
+    for record in records:
+        if not start <= record.trade_date <= end:
+            continue
+        try:
+            named = queries.resolve_symbol(conn, record.symbol, as_of=record.trade_date)
+        except queries.NoInstrument:
+            unresolved.append(record)
+            continue
+        resolved[named.key, record.trade_date] = record
+    return resolved, tuple(unresolved)
+
+
+def _explain(
+    moves: Iterable[LargeMove], resolved: dict[tuple[str, date], LargeMoveRecord]
+) -> list[LargeMove]:
+    """The moves no split or bonus explains, explained by their record where there is one."""
+    explained = []
+    for move in moves:
+        record = resolved.get((move.instrument, move.trade_date))
+        if move.explained_by is None and record is not None:
+            move = replace(move, explained_by=record.reason)
+        explained.append(move)
+    return explained
 
 
 def _uncovered(calendar: TradingCalendar, start: date, end: date) -> tuple[Span, ...]:

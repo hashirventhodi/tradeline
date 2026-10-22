@@ -126,6 +126,16 @@ class Config:
         # The checked-in Trading Calendar (``tradeline.trading_calendar``),
         # relative to the working directory.
         trading_calendar: str = "trading_calendar.csv"
+        # The checked-in Large Move records (``tradeline.large_move_records``),
+        # relative to the working directory.
+        large_moves: str = "large_moves.csv"
+        # A close more than this many times the previous close, either way,
+        # is a Large Move.
+        large_move_ratio: float = 1.5
+
+        def __post_init__(self) -> None:
+            if not self.large_move_ratio > 1:
+                raise ConfigError("integrity.large_move_ratio must be more than 1")
 
     @dataclass(frozen=True)
     class Instruments:
