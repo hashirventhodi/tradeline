@@ -402,3 +402,33 @@ def test_the_command_records_every_source_it_could_not_reach_and_exits_non_zero(
         runs = queries.ingest_runs(conn, collection_id=uuid.UUID(str(last["collection_id"])))
     assert sorted(r.source for r in runs) == sorted([*expected, "instrument_links"])
     assert {r.status for r in runs if r.source != "instrument_links"} == {"failed"}
+
+
+def test_a_cited_action_nses_list_prices_differently_is_reported_and_fails_nothing(
+    fresh_database_url: str,
+) -> None:
+    # Made up, for the collection's rebuild to find: a cited 1:2 split of RELIANCE's and a
+    # listed 2:1 bonus two days after it, so the factors are 1/2 and 1/3.
+    with app_connection(fresh_database_url) as conn:
+        ingest_eod(
+            conn,
+            PlaybackTransport(FIXTURES / "universe"),
+            start=date(2024, 7, 1),
+            end=date(2024, 7, 31),
+        )
+        conn.execute(
+            "INSERT INTO corporate_actions (symbol, series, ex_date, subject, kind,"
+            " factor_numerator, factor_denominator, nse_list, citation) VALUES"
+            " ('RELIANCE', 'EQ', '2024-07-15', 'Sub-Division from Rs. 10/- to Rs. 5/-',"
+            "  'split', 1, 2, NULL, 'NSE/CML/2024/99999'),"
+            " ('RELIANCE', 'EQ', '2024-07-17', 'Bonus 2:1', 'bonus', 1, 3, 'equities', NULL)"
+        )
+        conn.commit()
+
+        result = collect(conn, sources())
+        (rebuild,) = queries.ingest_runs(
+            conn, collection_id=result.collection_id, source="instrument_links"
+        )
+
+    assert result.succeeded
+    assert rebuild.details["superseded_cited_actions"] == {"agree": 0, "anomalies": 1}

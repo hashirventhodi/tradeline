@@ -6,6 +6,9 @@ writes nothing, so it can be run at any time:
 - the anomalies: histories the builder split rather than joined, an
   unexplained ISIN change or a refused link (one that would have given an
   Instrument two live Symbols on a day);
+- the superseded Cited Actions: those NSE's list has a split or bonus for
+  within seven days, which the Adjusted Series does not apply, each with both
+  factors, marked as an anomaly where the factors differ (ADR 0006);
 - the Instruments that ended: those with no row on the last day of the Raw
   Series, each with its last day, last Symbol, and end reason (merged or
   delisted only on NSE's record, otherwise "reason not stated");
@@ -40,6 +43,7 @@ class InstrumentsReport:
     # The last day of the Raw Series the Instruments were built from; None before a build.
     last_day: date | None
     anomalies: tuple[Anomaly, ...]
+    superseded_cited: tuple[queries.SupersededCitedAction, ...]
     ended: tuple[queries.EndedInstrument, ...]
     # By reason, then key.
     without_candles: tuple[queries.EndReason, ...]
@@ -52,6 +56,20 @@ class InstrumentsReport:
         through = "no build" if self.last_day is None else f"through {self.last_day}"
         lines = [f"Instruments ({through})", "", f"Anomalies: {len(self.anomalies)}"]
         lines.extend(f"  {a.on}  {a.kind}  {a.symbol}  {a.detail}" for a in self.anomalies)
+        lines += ["", f"Superseded Cited Actions: {len(self.superseded_cited)}"]
+        if self.superseded_cited:
+            lines.append("  Ex-Date  Symbol  cited factor  listed factor  listed actions")
+        lines.extend(
+            _joined(
+                s.ex_date,
+                s.symbol,
+                s.cited_factor,
+                s.listed_factor,
+                "; ".join(f"{a.ex_date} {a.subject}" for a in s.listed),
+                "" if s.agrees else "ANOMALY",
+            )
+            for s in self.superseded_cited
+        )
         lines += ["", f"Ended Instruments: {len(self.ended)}"]
         if self.ended:
             lines.append("  key  last day  last Symbol  reason")
@@ -90,6 +108,7 @@ class InstrumentsReport:
         return {
             "last_day": None if self.last_day is None else self.last_day.isoformat(),
             "anomalies": dict(sorted(Counter(a.kind for a in self.anomalies).items())),
+            "superseded_cited_actions": queries.agree_and_anomalies(self.superseded_cited),
             "ended": len(self.ended),
             "without_candles": {
                 reason: len(members)
@@ -125,6 +144,7 @@ def instruments_report(conn: psycopg.Connection) -> InstrumentsReport:
         link_candidates=tuple(queries.link_candidates(conn)),
         stale=tuple(queries.stale_universe_months(conn)),
         obsolete_keys=tuple(queries.obsolete_universe_keys(conn)),
+        superseded_cited=tuple(queries.superseded_cited_actions(conn)),
     )
 
 

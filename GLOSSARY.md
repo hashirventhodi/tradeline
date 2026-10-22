@@ -153,6 +153,10 @@ _Avoid_: Unadjusted prices, raw candles (the broker's candles are the broker's o
 An event NSE lists for a Symbol, or states in a circular a reviewed row cites, that takes effect on an Ex-Date, and so for the Instrument that Symbol named that day: a split, bonus, rights issue, dividend, demerger, or meeting. Splits and bonuses change the Adjusted Series; rights issues and dividends are flagged on it; the rest are recorded only.
 _Avoid_: CA, event, announcement (an announcement is a filing, which may or may not describe a Corporate Action)
 
+**Cited Action**:
+A split or bonus taken from a reviewed record citing NSE's circulars, for one NSE's lists do not have. It is superseded, and not applied, when NSE's list has a split or bonus for the same Instrument within seven days of its Ex-Date; if that listed action's Adjustment Factor differs, the difference is reported for review.
+_Avoid_: Cited row, manual action, manual adjustment
+
 **Ex-Date**:
 The first trading day on which an Instrument trades without the entitlement of a Corporate Action, so the day the market price reflects it.
 _Avoid_: Effective date, action date, record date (the record date is the later date on which holders are fixed)

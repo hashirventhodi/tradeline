@@ -121,6 +121,8 @@ def test_the_rebuild_recorded_its_counts_in_the_run_details(conn: psycopg.Connec
         "link_candidates": 1,
         "stale_months": 0,
         "obsolete_universe_keys": 0,
+        "superseded_cited_actions": {"agree": 0, "anomalies": 0},
+        "superseded_cited_action_records": [],
     }
 
 
@@ -142,6 +144,7 @@ def test_the_instruments_command_prints_the_report_and_writes_nothing(
     assert finished["report"] == {
         "last_day": "2025-04-11",
         "anomalies": {"conflicting_link": 1},
+        "superseded_cited_actions": {"agree": 0, "anomalies": 0},
         "ended": 6,
         "without_candles": {},
         "link_candidates": 1,

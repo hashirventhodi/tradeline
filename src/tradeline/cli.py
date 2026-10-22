@@ -379,7 +379,8 @@ def rebuild_instruments(ctx: Context, args: argparse.Namespace) -> int:
 
 
 def instruments(ctx: Context, args: argparse.Namespace) -> int:
-    """The anomalies, ended Instruments, Link Candidates, and stale Universe months; read only.
+    """The anomalies, superseded Cited Actions, ended Instruments, Link Candidates, and stale
+    Universe months; read only.
 
     The report goes to stderr; its summary is the last JSON line on stdout.
     """

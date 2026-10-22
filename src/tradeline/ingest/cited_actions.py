@@ -15,10 +15,12 @@ lists (ADR 0006, amended by #37):
   more; a price band or an odd print is not.
 - **NSE's list wins.** Rows for which the Instrument their Symbol named on the
   Ex-Date has a listed split or bonus within ``SUPERSEDED_WITHIN`` are
-  reported as superseded (``adjust.superseded``), and, where the listed
-  factor differs from theirs, as an anomaly. They are stored all the same:
-  the Adjusted Series never applies a superseded row (``adjust.adjust``),
-  whichever arrived first.
+  reported as superseded (``queries.cited_supersession``), and, where the
+  listed factor differs from theirs, as an anomaly. They are stored all the
+  same: the Adjusted Series never applies a superseded Cited Action
+  (``adjust.adjust``), whichever arrived first. Every Instruments rebuild reports the same over
+  all stored rows, through the same check, so a row NSE lists later is
+  reported without this command.
 
 A row passing the price check is stored with its citation and no NSE list,
 its kind and factor as ``adjust.interpret`` reads its subject, and the series
@@ -40,7 +42,7 @@ from typing import Any
 import psycopg
 
 from tradeline import queries
-from tradeline.adjust import CorporateAction, superseded
+from tradeline.adjust import CorporateAction
 from tradeline.cited_actions import CitedAction
 from tradeline.ingest import COMMAND, record_ingest_run
 from tradeline.instruments import LISTING_SERIES
@@ -78,10 +80,10 @@ def ingest_cited_actions(
     """Check each Symbol's rows of one Ex-Date against the price and NSE's lists; store those
     the price agrees with."""
     refused: list[dict[str, Any]] = []
-    superseding: list[dict[str, Any]] = []
+    superseded_days: list[dict[str, Any]] = []
     anomalies: list[dict[str, Any]] = []
     with record_ingest_run(conn, command=COMMAND, source=SOURCE) as run:
-        run.details = {"refused": refused, "superseded": superseding, "anomalies": anomalies}
+        run.details = {"refused": refused, "superseded": superseded_days, "anomalies": anomalies}
         by_day: dict[tuple[str, date], list[CitedAction]] = defaultdict(list)
         for row in rows:
             by_day[(row.symbol, row.ex_date)].append(row)
@@ -93,21 +95,11 @@ def ingest_cited_actions(
                 log.warning("cited corporate action refused", extra=record)
                 refused.append(record)
                 continue
-            for found in superseded(
-                [*queries.corporate_actions(conn, symbol, as_of=ex_date), *checked]
-            ):
-                if found.ex_date != ex_date:
-                    continue
-                record = _day(symbol, ex_date, cited) | {
-                    "listed": [
-                        {"ex_date": a.ex_date.isoformat(), "subject": a.subject}
-                        for a in found.listed
-                    ],
-                    "cited_factor": str(found.cited_factor),
-                    "listed_factor": str(found.listed_factor),
-                }
+            found = queries.cited_supersession(conn, symbol, ex_date, checked)
+            if found is not None:
+                record = _day(symbol, ex_date, cited) | found.listed_record()
                 log.warning("cited corporate action superseded by NSE's list", extra=record)
-                superseding.append(record)
+                superseded_days.append(record)
                 if not found.agrees:
                     log.warning("NSE's list prices the change differently", extra=record)
                     anomalies.append(record)
@@ -119,7 +111,7 @@ def ingest_cited_actions(
         rows_seen=len(rows),
         rows_written=run.rows_written,
         refused=sum(len(r["lines"]) for r in refused),
-        superseded=sum(len(r["lines"]) for r in superseding),
+        superseded=sum(len(r["lines"]) for r in superseded_days),
         anomalies=len(anomalies),
     )
 

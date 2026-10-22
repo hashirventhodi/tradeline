@@ -18,7 +18,16 @@ from typing import Any, Literal, cast
 
 import psycopg
 
-from tradeline.adjust import KINDS, AdjustedBar, CorporateAction, Kind, RawBar, adjust
+from tradeline.adjust import (
+    KINDS,
+    AdjustedBar,
+    CorporateAction,
+    Kind,
+    RawBar,
+    Supersession,
+    adjust,
+    superseded,
+)
 from tradeline.dates import IST
 from tradeline.instruments import Anomaly, Interval, KeyFrom, Link, LinkCandidate
 from tradeline.sources.nse import Delisting, SymbolChange
@@ -887,6 +896,122 @@ class EndedInstrument:
     # ``merged``, ``delisted``, or ``ended, reason not stated`` (``EndReason``), and its record.
     reason: EndReasonKind
     detail: str
+
+
+@dataclass(frozen=True)
+class ListedAction:
+    """One of NSE's listed splits and bonuses, as a superseded Cited Action names it."""
+
+    ex_date: date
+    subject: str
+
+
+@dataclass(frozen=True)
+class SupersededCitedAction:
+    """The Cited Actions of one Symbol and Ex-Date that NSE's listed splits and bonuses
+    within seven days supersede (``adjust.superseded``)."""
+
+    symbol: str
+    ex_date: date
+    subjects: tuple[str, ...]
+    # By Ex-Date.
+    listed: tuple[ListedAction, ...]
+    cited_factor: Fraction
+    listed_factor: Fraction
+
+    @property
+    def agrees(self) -> bool:
+        """Whether NSE's list prices the change as the Cited Actions do; if not, an anomaly."""
+        return self.cited_factor == self.listed_factor
+
+    def record(self) -> dict[str, Any]:
+        """As a run's details and the log state it."""
+        return {
+            "symbol": self.symbol,
+            "ex_date": self.ex_date.isoformat(),
+            "subjects": list(self.subjects),
+        } | self.listed_record()
+
+    def listed_record(self) -> dict[str, Any]:
+        """The listed actions and both factors, as ``record`` states them."""
+        return {
+            "listed": [
+                {"ex_date": a.ex_date.isoformat(), "subject": a.subject} for a in self.listed
+            ],
+            "cited_factor": str(self.cited_factor),
+            "listed_factor": str(self.listed_factor),
+        }
+
+
+def agree_and_anomalies(superseded: Iterable[SupersededCitedAction]) -> dict[str, int]:
+    """Superseded Cited Actions counted as every report states them: those NSE's list prices
+    as they do, and the anomalies."""
+    agrees = [s.agrees for s in superseded]
+    return {"agree": sum(agrees), "anomalies": len(agrees) - sum(agrees)}
+
+
+def superseded_cited_actions(conn: psycopg.Connection) -> list[SupersededCitedAction]:
+    """The stored Cited Actions NSE's list superseded at the last rebuild, oldest Ex-Date
+    first."""
+    rows = conn.execute(
+        "SELECT symbol, ex_date, subjects, listed_ex_dates, listed_subjects,"
+        " cited_numerator, cited_denominator, listed_numerator, listed_denominator"
+        " FROM cited_action_supersessions ORDER BY ex_date, symbol"
+    ).fetchall()
+    return [
+        SupersededCitedAction(
+            symbol=symbol,
+            ex_date=ex_date,
+            subjects=tuple(subjects),
+            listed=tuple(ListedAction(*a) for a in zip(listed_days, listed_subjects, strict=True)),
+            cited_factor=Fraction(cited_n, cited_d),
+            listed_factor=Fraction(listed_n, listed_d),
+        )
+        for (
+            symbol,
+            ex_date,
+            subjects,
+            listed_days,
+            listed_subjects,
+            cited_n,
+            cited_d,
+            listed_n,
+            listed_d,
+        ) in rows
+    ]
+
+
+def cited_supersession(
+    conn: psycopg.Connection,
+    symbol: str,
+    ex_date: date,
+    cited: Iterable[CorporateAction] = (),
+) -> SupersededCitedAction | None:
+    """How NSE's list supersedes the Cited Actions of ``symbol`` on ``ex_date``, if it does
+    (``adjust.superseded``), as the Instruments stand now.
+
+    The actions read are those of the Instrument the Symbol named on the
+    Ex-Date, the reach the Adjusted Series uses, with ``cited``, any not stored
+    yet, beside them. A Symbol that named no Instrument by the Ex-Date is
+    refused with ``NoInstrument``. A stored Cited Action's has, since its price
+    check read the Symbol's close that day, unless the row was stored past the
+    check.
+    """
+    for found in superseded([*corporate_actions(conn, symbol, as_of=ex_date), *cited]):
+        if found.ex_date == ex_date:
+            return _superseded_cited_action(symbol, found)
+    return None
+
+
+def _superseded_cited_action(symbol: str, found: Supersession) -> SupersededCitedAction:
+    return SupersededCitedAction(
+        symbol=symbol,
+        ex_date=found.ex_date,
+        subjects=tuple(a.subject for a in found.cited),
+        listed=tuple(ListedAction(a.ex_date, a.subject) for a in found.listed),
+        cited_factor=found.cited_factor,
+        listed_factor=found.listed_factor,
+    )
 
 
 def instruments_last_day(conn: psycopg.Connection) -> date | None:

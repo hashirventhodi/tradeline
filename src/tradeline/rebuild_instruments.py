@@ -33,9 +33,20 @@ Symbols never reads the Instruments, so its months are never stale. A link
 dated after a window leaves the rows in it grouped as they were, so an
 ordinary rename makes no earlier month stale.
 
+Through the new Instruments, before they are committed, every stored Cited
+Action is checked against NSE's lists (``queries.cited_supersession``, as
+``ingest cited-actions`` checks a new one): those a listed split or bonus
+within seven days supersedes replace the last rebuild's
+(``cited_action_supersessions``), and each whose listed factor differs is
+logged as an anomaly. A Cited Action becomes superseded when NSE lists its
+action later, or when a rebuild joins it to the Instrument whose Symbol NSE
+filed the action under (ADR 0006, amended by #37 and #45). An anomaly fails
+nothing: the Adjusted Series already follows NSE's list.
+
 Each rebuild is recorded in the run history (command ``instruments``, source
 ``instrument_links``) with its counts: Instruments, links by source,
-anomalies by kind, Link Candidates, and the Universe months it found stale.
+anomalies by kind, Link Candidates, the Universe months it found stale, and
+the superseded Cited Actions with how many are anomalies.
 """
 
 from __future__ import annotations
@@ -77,6 +88,17 @@ class InstrumentRebuildResult:
     links: int
     anomalies: int
     link_candidates: int
+    # The stored Cited Actions NSE's list supersedes, by Ex-Date then Symbol.
+    superseded_cited: tuple[queries.SupersededCitedAction, ...]
+
+    @property
+    def superseded_cited_actions(self) -> int:
+        return len(self.superseded_cited)
+
+    @property
+    def cited_anomalies(self) -> int:
+        """The superseded Cited Actions the listed actions price differently."""
+        return sum(not s.agrees for s in self.superseded_cited)
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -85,6 +107,7 @@ class InstrumentRebuildResult:
             "links": self.links,
             "anomalies": self.anomalies,
             "link_candidates": self.link_candidates,
+            "superseded_cited_actions": queries.agree_and_anomalies(self.superseded_cited),
         }
 
 
@@ -96,6 +119,10 @@ def rebuild_instruments(
         built = build_instruments(evidence)
         stale = _record_stale_months(conn, built, found_by=run.id)
         _replace(conn, built)
+        # Read through the new Instruments, before they are committed.
+        superseded = _find_superseded_cited_actions(conn)
+        _replace_supersessions(conn, superseded)
+        cited_anomalies = [s for s in superseded if not s.agrees]
         conn.commit()
         links = Counter(link.kind for i in built.instruments for link in i.links)
         run.rows_seen = len(evidence.spans)
@@ -111,11 +138,17 @@ def rebuild_instruments(
             "link_candidates": len(built.link_candidates),
             "stale_months": stale,
             "obsolete_universe_keys": len(queries.obsolete_universe_keys(conn)),
+            "superseded_cited_actions": queries.agree_and_anomalies(superseded),
+            "superseded_cited_action_records": [s.record() for s in superseded],
         }
         for anomaly in built.anomalies:
             log.warning(
                 "instrument history split",
                 extra={"kind": anomaly.kind, "symbol": anomaly.symbol, "detail": anomaly.detail},
+            )
+        for differs in cited_anomalies:
+            log.warning(
+                "NSE's list prices a Cited Action's change differently", extra=differs.record()
             )
     return InstrumentRebuildResult(
         spans=len(evidence.spans),
@@ -123,6 +156,7 @@ def rebuild_instruments(
         links=sum(links.values()),
         anomalies=len(built.anomalies),
         link_candidates=len(built.link_candidates),
+        superseded_cited=tuple(superseded),
     )
 
 
@@ -335,4 +369,56 @@ def _replace(conn: psycopg.Connection, built: InstrumentBuild) -> None:
             [c.old_last for c in candidates],
             [c.new_first for c in candidates],
         ),
+    )
+
+
+def _find_superseded_cited_actions(conn: psycopg.Connection) -> list[queries.SupersededCitedAction]:
+    """Every stored Cited Action NSE's list supersedes, by Ex-Date then Symbol: each Symbol's
+    of one Ex-Date together. No two Symbols' are ever one Instrument's on one Ex-Date, and
+    each Symbol has named an Instrument by then: each had its close that day (the price
+    check), and an Instrument has one Symbol a day. One stored past the check whose Symbol
+    had not is logged and left out."""
+    days = conn.execute(
+        "SELECT DISTINCT symbol, ex_date FROM corporate_actions WHERE citation IS NOT NULL"
+        " ORDER BY ex_date, symbol"
+    ).fetchall()
+    superseded = []
+    for symbol, ex_date in days:
+        try:
+            supersession = queries.cited_supersession(conn, symbol, ex_date)
+        except queries.NoInstrument:
+            # Only a row stored past the price check; the rebuild still stands.
+            log.warning(
+                "a Cited Action's Symbol named no Instrument by its Ex-Date",
+                extra={"symbol": symbol, "ex_date": ex_date.isoformat()},
+            )
+            continue
+        if supersession is not None:
+            superseded.append(supersession)
+    return superseded
+
+
+def _replace_supersessions(
+    conn: psycopg.Connection, superseded: Sequence[queries.SupersededCitedAction]
+) -> None:
+    conn.execute("DELETE FROM cited_action_supersessions")
+    # Row by row: each row's arrays are of their own length.
+    conn.cursor().executemany(
+        "INSERT INTO cited_action_supersessions (symbol, ex_date, subjects, listed_ex_dates,"
+        " listed_subjects, cited_numerator, cited_denominator, listed_numerator,"
+        " listed_denominator) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        [
+            (
+                f.symbol,
+                f.ex_date,
+                list(f.subjects),
+                [a.ex_date for a in f.listed],
+                [a.subject for a in f.listed],
+                f.cited_factor.numerator,
+                f.cited_factor.denominator,
+                f.listed_factor.numerator,
+                f.listed_factor.denominator,
+            )
+            for f in superseded
+        ],
     )
