@@ -22,6 +22,16 @@ in the order ``REASONS`` lists for its kind, or is **unexplained**. A Parity
 Reason is a rule over data we hold, never a list of dates, and a new one needs
 ADR 0018 to agree it first.
 
+A close mismatch is tried first as an **additive adjustment**: Kite adjusts
+some older histories by subtracting as well as scaling (GNFC, OFSS), which no
+one factor takes out. When one least-squares fit of Kite's close as
+a x NSE's - b puts every compared bar of the mismatch's stretch within half a
+tick, over at least ``additive_min_bars`` bars, all of that stretch's
+mismatches are explained. Then as **coarse rounding**: Kite rounds some
+adjusted histories to whole rupees (MCX, BSE, BAJFINANCE), so a close equal to
+NSE's close times the stretch's factor rounded to the rupee, half to even, is
+explained. Only the rupee is recognised.
+
 A candle dated before its Instrument's Listing Age starts (the view
 ``instrument_listing_age``, ADR 0017) is a **Pre-listing Candle**: the
 Instrument was not trading on NSE that day, so the candle cannot be its own.
@@ -51,10 +61,10 @@ rupees (#17, #41). Such a bar is left out of its stretch's factor, a ratio of
 0 showing only that the price rounded away, and is still compared against
 NSE's close times the factor of the rest: it passes where that is within half
 the tick of 0 and mismatches otherwise, so a whole-rupee 0 for 0.30 is a
-mismatch. A stretch whose every close is 0 has no factor: its bars count as
-rows and are never close mismatches, like a stretch too short to show a bad
-close. Only the close is compared; a zero open, high or low is
-``compare-adjusted``'s to find.
+mismatch, one coarse rounding explains. A stretch whose every close is 0 has
+no factor: its bars count as rows and are never close mismatches, like a
+stretch too short to show a bad close. Only the close is compared; a zero
+open, high or low is ``compare-adjusted``'s to find.
 
 The run passes when unexplained differences, of all three kinds, are under
 ``max_unexplained_pct`` of the rows compared, a row being one (Instrument,
@@ -70,7 +80,7 @@ from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Decimal
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -82,6 +92,7 @@ from tradeline.config import Config
 Kind = Literal["missing", "extra", "close"]
 KINDS: tuple[Kind, ...] = ("missing", "extra", "close")
 HALF_TICK = Decimal("0.025")
+RUPEE = Decimal(1)
 HUNDRED = Decimal(100)
 # Every difference is counted; this many unexplained ones are listed in a summary.
 MAX_LISTED = 100
@@ -90,17 +101,25 @@ MAX_LISTED = 100
 class Reason(StrEnum):
     """A Parity Reason: a stated, checkable cause of a difference (ADR 0018).
 
-    None is in force yet. Each is added as a member, with its rule in
-    ``_rules`` and its place in ``REASONS``: a series move (#51), additive
-    adjustment and coarse rounding (#52), not fetched (#53), and a Special
-    Session (#55).
+    Each is a member, with its rule in ``_rules`` and its place in
+    ``REASONS``: a series move (#51), additive adjustment and coarse rounding
+    (#52), not fetched (#53), and a Special Session (#55).
     """
+
+    # Kite's close is a x NSE's - b over the mismatch's whole stretch (``_additive``).
+    ADDITIVE_ADJUSTMENT = "additive_adjustment"
+    # Kite's close is NSE's times the stretch's factor rounded to the rupee, half to even.
+    COARSE_ROUNDING = "coarse_rounding"
 
 
 # Each kind's Parity Reasons, in the order they are tried; the first that applies is
 # recorded. ADR 0018's order: missing, a Special Session then not fetched; extra, a
 # series move; close, an additive adjustment over its stretch then coarse rounding.
-REASONS: Mapping[Kind, tuple[Reason, ...]] = {"missing": (), "extra": (), "close": ()}
+REASONS: Mapping[Kind, tuple[Reason, ...]] = {
+    "missing": (),
+    "extra": (),
+    "close": (Reason.ADDITIVE_ADJUSTMENT, Reason.COARSE_ROUNDING),
+}
 
 
 @dataclass(frozen=True)
@@ -375,7 +394,43 @@ def _rules(
 
     A rule needing data beyond the compared rows (the Trading Calendar, the
     requested ranges, NSE's rows in other series) loads it here, once."""
-    return {}
+    additive: dict[int, bool] = {}  # by id of a stretch, which lives as long as the run
+
+    def additive_adjustment(found: _Found) -> bool:
+        stretch = _of(found.stretch)
+        if id(stretch) not in additive:
+            additive[id(stretch)] = _additive(stretch, settings.additive_min_bars)
+        return additive[id(stretch)]
+
+    return {
+        Reason.ADDITIVE_ADJUSTMENT: additive_adjustment,
+        Reason.COARSE_ROUNDING: _coarse_rounding,
+    }
+
+
+def _coarse_rounding(found: _Found) -> bool:
+    """Kite's close is the expected close rounded to the rupee, half to even. Only the
+    rupee is recognised: another tick needs evidence and ADR 0018 to agree it."""
+    return found.row.candle_close == _of(found.expected).quantize(RUPEE, ROUND_HALF_EVEN)
+
+
+def _additive(stretch: _Stretch, min_bars: int) -> bool:
+    """Whether one least-squares fit of Kite's close as a x NSE's - b puts every one of the
+    stretch's compared bars, at least ``min_bars`` of them, within half a tick of it.
+
+    A stretch's factor alone leaving mismatches is given: one is being classified. A
+    stretch whose NSE closes are all one price has no fit."""
+    if len(stretch.rows) < min_bars:
+        return False
+    points = [(_of(r.eod_close), _of(r.candle_close)) for r in stretch.rows]
+    mean_x = sum((x for x, _ in points), Decimal(0)) / len(points)
+    mean_y = sum((y for _, y in points), Decimal(0)) / len(points)
+    spread = sum(((x - mean_x) ** 2 for x, _ in points), Decimal(0))
+    if not spread:
+        return False
+    a = sum(((x - mean_x) * (y - mean_y) for x, y in points), Decimal(0)) / spread
+    b = a * mean_x - mean_y
+    return all(abs(y - (a * x - b)) <= HALF_TICK for x, y in points)
 
 
 def parity(

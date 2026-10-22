@@ -27,6 +27,10 @@ close_tolerance = 0.001
 # The command fails at or above this percentage of the rows compared whose
 # difference (missing, extra, or close) no Parity Reason explains.
 max_unexplained_pct = 0.1
+# A stretch's close mismatches are explained as Kite's additive adjustment when
+# one fit of a x NSE - b puts every bar within half a tick, over at least this
+# many compared bars.
+additive_min_bars = 5
 
 # RSS feeds for `ingest news`: a name for each feed and its URL. Items carried
 # by more than one feed are stored once, under the first feed listed.
