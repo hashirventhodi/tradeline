@@ -31,6 +31,11 @@ reason stated, or it still trades and Kite's dump lacks it), in
 An Instrument asked for under two of its Symbols is fetched once. A symbol in
 no Instrument (none rebuilt yet) is fetched under itself.
 
+Each range asked of Kite, per chunk, is recorded in ``candle_requests`` under
+the Symbol fetched, with that Symbol's bars, whether or not Kite returned any
+and again on every re-run (``queries.requested_candle_ranges``): Kite Parity's
+"not fetched" rests on it (#53, ADR 0018).
+
 Bars are stored exactly as Kite returned them. A bar already stored is left
 as it is: Kite can resend a bar, and a resend whose values differ is an
 anomaly, logged and recorded in the run's details with both versions, never
@@ -328,6 +333,7 @@ def _load_symbols(
                 session, instrument.token, interval=interval, start=start, end=end
             )
             written, changed = _insert_candles(conn, target, instrument, candles)
+            _record_requests(conn, run, interval, instrument, start, end)
             conn.commit()
             loaded += 1
             run.rows_seen += len(candles)
@@ -377,6 +383,32 @@ def _by_reason(
             member
         )
     return {reason: tuple(members) for reason, members in by_reason.items()}
+
+
+def _record_requests(
+    conn: psycopg.Connection,
+    run: IngestRunCounters,
+    interval: str,
+    instrument: _FetchTarget,
+    start: date,
+    end: date,
+) -> None:
+    """Record each range asked of Kite for ``instrument``, with its bars, bars or none."""
+    chunks = kite.candle_ranges(start, end, interval=interval)
+    conn.execute(
+        "INSERT INTO candle_requests"
+        " (ingest_run_id, symbol, series, interval, range_start, range_end)"
+        " SELECT %s, %s, %s, %s, range_start, range_end"
+        " FROM unnest(%s::date[], %s::date[]) AS r(range_start, range_end)",
+        (
+            run.id,
+            instrument.symbol,
+            instrument.series,
+            interval,
+            [chunk_start for chunk_start, _ in chunks],
+            [chunk_end for _, chunk_end in chunks],
+        ),
+    )
 
 
 _CANDLE_VALUES = ("open", "high", "low", "close", "volume")  # everything but the key

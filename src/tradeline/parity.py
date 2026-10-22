@@ -24,7 +24,10 @@ Reason is a rule over data we hold, never a list of dates, and a new one needs
 ADR 0018 to agree it first. A missing candle on a day the Trading Calendar
 (``parity.trading_calendar``, the file the Integrity Check reads) lists as a
 Special Session is explained as one; a calendar that does not load refuses
-the run, as it refuses the Integrity Check.
+the run, as it refuses the Integrity Check. A missing candle on a day outside
+every range candle ingest asked Kite for, under any of the Instrument's
+Symbols in that series (``queries.requested_candle_ranges``), is explained as
+not fetched: history never requested is not Kite missing it.
 
 A candle dated before its Instrument's Listing Age starts (the view
 ``instrument_listing_age``, ADR 0017) is a **Pre-listing Candle**: the
@@ -98,8 +101,7 @@ class Reason(StrEnum):
     """A Parity Reason: a stated, checkable cause of a difference (ADR 0018).
 
     Each is a member, with its rule in ``_rules`` and its place in
-    ``REASONS``. Still to come: additive adjustment and coarse rounding (#52),
-    and not fetched (#53).
+    ``REASONS``. Still to come: additive adjustment and coarse rounding (#52).
     """
 
     # A candle on a day NSE lists its Instrument in another listing series and
@@ -107,13 +109,15 @@ class Reason(StrEnum):
     SERIES_MOVE = "series_move"
     # A missing candle on a day the Trading Calendar lists as a Special Session.
     SPECIAL_SESSION = "special_session"
+    # A missing bar on a day no range candle ingest asked Kite for covers.
+    NOT_FETCHED = "not_fetched"
 
 
 # Each kind's Parity Reasons, in the order they are tried; the first that applies is
 # recorded. ADR 0018's order: missing, a Special Session then not fetched; extra, a
 # series move; close, an additive adjustment over its stretch then coarse rounding.
 REASONS: Mapping[Kind, tuple[Reason, ...]] = {
-    "missing": (Reason.SPECIAL_SESSION,),
+    "missing": (Reason.SPECIAL_SESSION, Reason.NOT_FETCHED),
     "extra": (Reason.SERIES_MOVE,),
     "close": (),
 }
@@ -402,7 +406,11 @@ def _rules(
     def special_session(found: _Found) -> bool:
         return found.row.trade_date in special_sessions
 
-    return {Reason.SERIES_MOVE: series_move, Reason.SPECIAL_SESSION: special_session}
+    return {
+        Reason.SERIES_MOVE: series_move,
+        Reason.SPECIAL_SESSION: special_session,
+        Reason.NOT_FETCHED: _not_fetched(conn, rows),
+    }
 
 
 def _listed_series(
@@ -432,6 +440,37 @@ def _listed_series(
     for instrument, trade_date, series in found:
         listed[(instrument, trade_date)].add(series)
     return listed
+
+
+def _not_fetched(conn: psycopg.Connection, rows: Sequence[_Row]) -> _Rule:
+    """A missing bar on a day outside every range candle ingest asked Kite for, under
+    any of the Instrument's Symbols, in that series: history never requested is not
+    Kite missing it. Requests are recorded under the Symbol fetched, the Instrument's
+    name at the time, so each of its Symbols is read."""
+    wanted = sorted({(r.instrument, r.series) for r in rows if not r.has_candle})
+    names: dict[str, set[str]] = defaultdict(set)
+    for instrument, symbol in conn.execute(
+        "SELECT instrument_key, symbol FROM symbol_instruments"
+        " WHERE instrument_key = ANY(%s::text[])",
+        ([instrument for instrument, _ in wanted],),
+    ).fetchall():
+        names[instrument].add(symbol)
+    requested = {
+        (instrument, series): [
+            requested_range
+            # A Symbol in no Instrument stands for its own.
+            for symbol in sorted(names[instrument] or {instrument})
+            for requested_range in queries.requested_candle_ranges(conn, symbol, series=series)
+        ]
+        for instrument, series in wanted
+    }
+
+    def rule(found: _Found) -> bool:
+        row = found.row
+        ranges = requested[(row.instrument, row.series)]
+        return not any(r.covers(row.trade_date) for r in ranges)
+
+    return rule
 
 
 def parity(
