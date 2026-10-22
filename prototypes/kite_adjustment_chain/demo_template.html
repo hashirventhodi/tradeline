@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kite Adjustment Chain</title>
+<style>
+  :root {
+    --bg: #fbfaf8; --panel: #ffffff; --ink: #1d1d1f; --muted: #6b6b70; --line: #e6e3de;
+    --accent: #1f5fbf; --accent-soft: #e8effa; --ok: #1d7a46; --ok-soft: #e6f4ec; --bad: #b3261e; --bad-soft: #fbeaea;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #151517; --panel: #1d1d20; --ink: #ececef; --muted: #9a9aa2; --line: #2e2e33;
+      --accent: #7aa7ff; --accent-soft: #1f2a40; --ok: #5fcf8f; --ok-soft: #17301f; --bad: #ff8a80; --bad-soft: #3a1d1d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+  main { max-width: 1080px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 32px 0 10px; font-weight: 600; }
+  p.lead { color: var(--muted); margin: 0 0 6px; max-width: 760px; }
+  .tag { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.done { opacity: .55; }
+  select, input { font: inherit; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
+  input.r { width: 120px; } input.b { width: 70px; }
+  .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+  .stat .n { font-size: 24px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .stat .l { color: var(--muted); font-size: 13px; }
+  .changed { margin-top: 10px; padding: 8px 12px; border-radius: 8px; background: var(--accent-soft); color: var(--ink); font-size: 14px; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 13.5px; }
+  th { text-align: left; color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  td { padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td.ok { color: var(--ok); } td.bad { color: var(--bad); }
+  .pill { display: inline-block; min-width: 64px; text-align: center; border-radius: 99px; padding: 0 8px; font-weight: 600; }
+  .pill.ok { background: var(--ok-soft); color: var(--ok); } .pill.bad { background: var(--bad-soft); color: var(--bad); }
+  .off { color: var(--muted); font-size: 12.5px; }
+  .tabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid var(--line); }
+  .tabs button { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 8px 10px; color: var(--muted); }
+  .tabs button.on { color: var(--ink); border-bottom-color: var(--accent); }
+  .steps { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+  .steps button { text-align: left; }
+  .stage-on { font-weight: 600; } .stage-off { color: var(--muted); text-decoration: line-through; }
+  .scroll { overflow-x: auto; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Kite's Adjustment, replayed stage by stage</h1>
+  <p class="lead"><span class="tag">PROTOTYPE · #62</span>&nbsp; The question: does replaying Kite's adjustment one stage at a time
+  reproduce Kite's daily closes <b>exactly</b> from NSE's raw closes? Each stage is what Kite did to the older history at one
+  Ex-Date: divide every close it already held by a divisor, or subtract an amount, then round to a tick. Older closes pass
+  through every later stage, earliest first. Nothing here is a tolerance: a close is reproduced or it is not.</p>
+  <p class="lead">These are the real closes from the ten-year #59 run. Switch stages on and off, change a divisor, a tick or how
+  ties round, and watch which closes the chain lands on.</p>
+
+  <h2>Guided walkthroughs</h2>
+  <div class="panel">
+    <div class="tabs" id="tabs"></div>
+    <p id="blurb"></p>
+    <div class="steps" id="steps"></div>
+  </div>
+
+  <h2>Current state</h2>
+  <div class="panel">
+    <div class="row" style="margin-bottom:12px">
+      <label>Instrument <select id="inst"></select></label>
+      <span class="off" id="key"></span>
+    </div>
+    <div class="summary" id="summary"></div>
+    <div class="changed" id="changed"></div>
+  </div>
+
+  <h2>Stages (newest first) · free play</h2>
+  <div class="panel scroll"><table id="stages"></table></div>
+
+  <h2>Stretches between Ex-Dates</h2>
+  <div class="panel scroll"><table id="stretches"></table></div>
+</main>
+
+<script>
+/* ---------- The logic: pure, exact, no DOM. Liftable into parity as it stands. ---------- */
+const Chain = (() => {
+  const abs = (a) => (a < 0n ? -a : a);
+  const gcd = (a, b) => { a = abs(a); b = abs(b); while (b) [a, b] = [b, a % b]; return a || 1n; };
+  const fr = (n, d) => { if (d < 0n) { n = -n; d = -d; } const g = gcd(n, d); return { n: n / g, d: d / g }; };
+  const dec = (s) => { const [i, f = ""] = s.split("."); return fr(BigInt(i + f), 10n ** BigInt(f.length)); };
+  const parse = (s) => { s = String(s).trim(); if (s.includes("/")) { const [a, b] = s.split("/"); return fr(dec(a).n * dec(b).d, dec(a).d * dec(b).n); } return dec(s); };
+  const floorDiv = (a, b) => { const q = a / b; return (a % b !== 0n && (a < 0n) !== (b < 0n)) ? q - 1n : q; };
+  const eq = (a, b) => a.n * b.d === b.n * a.d;
+  const show = (v) => { const s = (Number(v.n) / Number(v.d)).toFixed(2); return s; };
+
+  // round v to tick (in paise), ties: half_even | half_down | half_up
+  function roundTo(v, tickPaise, ties) {
+    const T = BigInt(tickPaise);
+    const N = v.n * 100n, D = v.d * T;                // v / (tick/100)
+    let q = floorDiv(N, D); const twice = 2n * (N - q * D);
+    if (twice > D || (twice === D && (ties === "half_up" || (ties === "half_even" && q % 2n !== 0n)))) q += 1n;
+    return fr(q * T, 100n);
+  }
+  // one stage: every older close becomes round(close / r - b)
+  function apply(stage, v) {
+    const r = { n: BigInt(stage.r[0]), d: BigInt(stage.r[1]) }, b = { n: BigInt(stage.b[0]), d: BigInt(stage.b[1]) };
+    const u = fr(v.n * r.d * b.d - b.n * v.d * r.n, v.d * r.n * b.d);
+    return roundTo(u, stage.tick, stage.ties);
+  }
+  // the stages a close passes through: every switched-on stage whose Ex-Date is after its day, earliest first
+  function chainFor(stages, day) {
+    return stages.filter((s) => s.on && s.ex > day).sort((a, b) => (a.ex < b.ex ? -1 : 1));
+  }
+  function replay(stages, day, raw) {
+    let v = dec(raw);
+    for (const s of chainFor(stages, day)) v = apply(s, v);
+    return v;
+  }
+  // judge every close one at a time
+  function evaluate(inst, stages) {
+    let total = 0, hit = 0, mism = 0, mismHit = 0;
+    const stretches = inst.stretches.map((st) => {
+      let ok = 0; const off = []; let m = 0, mh = 0;
+      for (const [day, nse, kite, code] of st.rows) {
+        const v = replay(stages, day, nse); const good = eq(v, dec(kite));
+        if (good) ok++; else off.push({ day, nse, kite, replay: show(v), code });
+        if (code !== "m") { m++; if (good) mh++; }
+      }
+      total += st.rows.length; hit += ok; mism += m; mismHit += mh;
+      return { idx: st.idx, from: st.rows[0][0], to: st.rows[st.rows.length - 1][0], bars: st.rows.length,
+               ok, off, mism: m, mismHit: mh, depth: chainFor(stages, st.rows[st.rows.length - 1][0]).length };
+    });
+    return { total, hit, mism, mismHit, stretches };
+  }
+  // the reducer the page drives
+  function reduce(state, action, DATA) {
+    switch (action.op) {
+      case "load": return { inst: action.inst, stages: (action.stages || DATA[action.inst].stages).map((s) => ({ ...s })), changed: `Loaded ${action.inst}` };
+      case "set": {
+        const stages = state.stages.map((s) => (s.ex === action.ex ? { ...s, ...action.patch } : s));
+        const what = Object.entries(action.patch).map(([k, v]) => `${k} = ${Array.isArray(v) ? fracText(v) : v}`).join(", ");
+        return { ...state, stages, changed: `Stage ${action.ex}: ${what}` };
+      }
+      default: return state;
+    }
+  }
+  // a divisor or amount as written: a decimal where it has one of up to 6 places, else a fraction
+  const fracText = (v) => { const n = Number(v[0]) / Number(v[1]); return (10n ** 6n) % BigInt(v[1]) === 0n ? String(+n.toFixed(6)) : `${v[0]}/${v[1]} (${n.toFixed(6)})`; };
+  const toFrac = (s) => { const f = parse(s); return [String(f.n), String(f.d)]; };
+  return { evaluate, reduce, fracText, toFrac, replay };
+})();
+</script>
+
+<script>
+/* ---------- The page: a thin shell over Chain. ---------- */
+const { data: DATA, scenarios: SCENARIOS } = /*DATA*/;
+let state = Chain.reduce(null, { op: "load", inst: "ITC" }, DATA);
+let scenario = null, stepAt = 0;
+const $ = (id) => document.getElementById(id);
+const OUT = { m: "matched today", a: "additive today", c: "coarse rounding today", u: "unexplained today" };
+
+function dispatch(action) {
+  const before = state.inst;
+  state = Chain.reduce(state, action, DATA);
+  render(before !== state.inst);
+}
+
+function render() {
+  const inst = DATA[state.inst];
+  $("inst").value = state.inst;
+  $("key").textContent = inst.key + " · EQ";
+  const ev = Chain.evaluate(inst, state.stages);
+  const pct = (a, b) => (b ? (100 * a / b).toFixed(2) + "%" : "–");
+  $("summary").innerHTML = [
+    [`${ev.hit} / ${ev.total}`, `closes reproduced exactly (${pct(ev.hit, ev.total)})`],
+    [`${ev.mismHit} / ${ev.mism}`, "closes Kite Parity flags today, now reproduced"],
+    [`${ev.total - ev.hit}`, "closes off the replay"],
+    [`${state.stages.filter((s) => s.on).length}`, "stages switched on"],
+  ].map(([n, l]) => `<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
+  $("changed").textContent = "Just now: " + state.changed;
+
+  $("stages").innerHTML = `<tr><th>On</th><th>Ex-Date</th><th>What Kite did</th><th>Divide by</th><th>Subtract</th><th>Tick</th><th>Ties</th></tr>` +
+    state.stages.map((s) => `<tr>
+      <td><input type="checkbox" data-ex="${s.ex}" data-k="on" ${s.on ? "checked" : ""}></td>
+      <td class="${s.on ? "stage-on" : "stage-off"}">${s.ex}</td><td>${s.label}</td>
+      <td><input class="r" data-ex="${s.ex}" data-k="r" value="${Chain.fracText(s.r).split(" ")[0]}"></td>
+      <td><input class="b" data-ex="${s.ex}" data-k="b" value="${Chain.fracText(s.b)}"></td>
+      <td><select data-ex="${s.ex}" data-k="tick">${[1, 5, 10, 50, 100, 500].map((t) => `<option value="${t}" ${t === s.tick ? "selected" : ""}>${t < 100 ? t + "p" : "Rs " + t / 100}</option>`).join("")}</select></td>
+      <td><select data-ex="${s.ex}" data-k="ties">${["half_even", "half_down", "half_up"].map((t) => `<option ${t === s.ties ? "selected" : ""}>${t}</option>`).join("")}</select></td>
+    </tr>`).join("") + (state.stages.length ? "" : `<tr><td colspan="7" class="off">No stages: Kite's closes are NSE's own.</td></tr>`);
+
+  $("stretches").innerHTML = `<tr><th>Stretch</th><th>Days</th><th>Stages it passes</th><th>Reproduced</th><th>Flagged today, now reproduced</th><th>Closes off the replay</th></tr>` +
+    ev.stretches.map((s) => {
+      const good = s.ok === s.bars;
+      const off = s.off.slice(0, 3).map((o) => `${o.day}: NSE ${o.nse} → replay ${o.replay}, Kite ${o.kite} <i>(${OUT[o.code]})</i>`).join("<br>");
+      return `<tr><td>#${s.idx}<div class="off">${s.from} → ${s.to}</div></td><td>${s.bars}</td><td>${s.depth}</td>
+        <td><span class="pill ${good ? "ok" : "bad"}">${s.ok} / ${s.bars}</span></td>
+        <td>${s.mism ? `${s.mismHit} / ${s.mism}` : "–"}</td>
+        <td class="off">${off}${s.off.length > 3 ? `<br>… ${s.off.length - 3} more` : ""}</td></tr>`;
+    }).join("");
+  renderSteps();
+}
+
+function renderTabs() {
+  $("tabs").innerHTML = SCENARIOS.map((s) => `<button data-s="${s.id}" class="${scenario && scenario.id === s.id ? "on" : ""}">${s.title}</button>`).join("");
+}
+function renderSteps() {
+  if (!scenario) { $("blurb").textContent = "Pick a walkthrough. Each starts from a known state; press its steps in order."; $("steps").innerHTML = ""; return; }
+  $("blurb").textContent = scenario.blurb;
+  $("steps").innerHTML = scenario.steps.map((st, k) =>
+    `<button data-step="${k}" class="${k === stepAt ? "primary" : k < stepAt ? "done" : ""}" ${k > stepAt ? "disabled" : ""}>${k + 1}. ${st.label}</button>`).join("");
+}
+
+$("inst").innerHTML = Object.keys(DATA).map((k) => `<option>${k}</option>`).join("");
+$("inst").onchange = (e) => { scenario = null; renderTabs(); dispatch({ op: "load", inst: e.target.value }); };
+$("tabs").onclick = (e) => {
+  const id = e.target.dataset.s; if (!id) return;
+  scenario = SCENARIOS.find((s) => s.id === id); stepAt = 0; renderTabs();
+  dispatch({ op: "load", inst: scenario.inst });
+};
+$("steps").onclick = (e) => {
+  const k = e.target.dataset.step; if (k === undefined) return;
+  for (const op of scenario.steps[+k].ops) state = Chain.reduce(state, op, DATA);
+  state.changed = scenario.steps[+k].label;
+  stepAt = +k + 1; render();
+};
+$("stages").onchange = (e) => {
+  const { ex, k } = e.target.dataset; if (!ex) return;
+  let v = e.target.type === "checkbox" ? e.target.checked : e.target.value;
+  if (k === "tick") v = +v;
+  if (k === "r" || k === "b") { try { v = Chain.toFrac(v); } catch { return; } }
+  dispatch({ op: "set", ex, patch: { [k]: v } });
+};
+renderTabs(); render();
+</script>
+</body>
+</html>
