@@ -899,6 +899,14 @@ class EndedInstrument:
 
 
 @dataclass(frozen=True)
+class ListedAction:
+    """One of NSE's listed splits and bonuses, as a superseded Cited Action names it."""
+
+    ex_date: date
+    subject: str
+
+
+@dataclass(frozen=True)
 class SupersededCitedAction:
     """The Cited Actions of one Symbol and Ex-Date that NSE's listed splits and bonuses
     within seven days supersede (``adjust.superseded``)."""
@@ -906,8 +914,8 @@ class SupersededCitedAction:
     symbol: str
     ex_date: date
     subjects: tuple[str, ...]
-    # The listed actions, as (Ex-Date, subject), by Ex-Date.
-    listed: tuple[tuple[date, str], ...]
+    # By Ex-Date.
+    listed: tuple[ListedAction, ...]
     cited_factor: Fraction
     listed_factor: Fraction
 
@@ -927,7 +935,9 @@ class SupersededCitedAction:
     def listed_record(self) -> dict[str, Any]:
         """The listed actions and both factors, as ``record`` states them."""
         return {
-            "listed": [{"ex_date": d.isoformat(), "subject": s} for d, s in self.listed],
+            "listed": [
+                {"ex_date": a.ex_date.isoformat(), "subject": a.subject} for a in self.listed
+            ],
             "cited_factor": str(self.cited_factor),
             "listed_factor": str(self.listed_factor),
         }
@@ -946,7 +956,7 @@ def superseded_cited_actions(conn: psycopg.Connection) -> list[SupersededCitedAc
             symbol=symbol,
             ex_date=ex_date,
             subjects=tuple(subjects),
-            listed=tuple(zip(listed_days, listed_subjects, strict=True)),
+            listed=tuple(ListedAction(*a) for a in zip(listed_days, listed_subjects, strict=True)),
             cited_factor=Fraction(cited_n, cited_d),
             listed_factor=Fraction(listed_n, listed_d),
         )
@@ -990,7 +1000,7 @@ def _superseded_cited_action(symbol: str, found: Supersession) -> SupersededCite
         symbol=symbol,
         ex_date=found.ex_date,
         subjects=tuple(a.subject for a in found.cited),
-        listed=tuple((a.ex_date, a.subject) for a in found.listed),
+        listed=tuple(ListedAction(a.ex_date, a.subject) for a in found.listed),
         cited_factor=found.cited_factor,
         listed_factor=found.listed_factor,
     )

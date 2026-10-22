@@ -291,7 +291,8 @@ def test_a_rebuild_reports_a_cited_action_nse_lists_later(fresh_database_url: st
 
     assert (rebuilt.superseded_cited_actions, rebuilt.cited_anomalies) == (1, 0)
     assert error is None
-    assert details["superseded_cited_actions"] == [
+    assert details["superseded_cited_actions"] == {"agree": 1, "anomalies": 0}
+    assert details["superseded_cited_action_records"] == [
         {
             "symbol": "KARDA",
             "ex_date": "2020-07-02",
@@ -301,7 +302,6 @@ def test_a_rebuild_reports_a_cited_action_nse_lists_later(fresh_database_url: st
             "listed_factor": "1/5",
         }
     ]
-    assert details["cited_anomalies"] == 0
 
 
 def test_a_rebuild_reports_a_cited_action_nse_lists_later_with_another_factor_as_an_anomaly(
@@ -355,3 +355,30 @@ def test_a_rebuild_reports_a_cited_action_a_manual_link_brings_within_reach_of_n
 
     assert (apart.superseded_cited_actions, apart.cited_anomalies) == (0, 0)
     assert (joined.anomalies, joined.superseded_cited_actions, joined.cited_anomalies) == (0, 1, 0)
+
+
+def test_a_rebuild_skips_and_warns_of_a_cited_action_whose_symbol_named_no_instrument_yet(
+    fresh_database_url: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Inserted past the price check, which would refuse it: DHARAN's first row is on 6 July.
+    with app_connection(fresh_database_url) as conn:
+        karda_rows(conn)
+        eod(conn, [(date(2020, 7, 6), "DHARAN", "BE", KARDA_NEW, "58.50")])
+        conn.execute(
+            "INSERT INTO corporate_actions (symbol, series, ex_date, subject, kind,"
+            " factor_numerator, factor_denominator, nse_list, citation)"
+            " VALUES ('DHARAN', 'BE', %s, %s, 'split', 1, 5, NULL, %s)",
+            (KARDA_EX_DATE, KARDA_SPLIT, KARDA_CIRCULAR),
+        )
+        conn.commit()
+
+        with caplog.at_level(logging.WARNING, logger="tradeline.rebuild_instruments"):
+            rebuilt = rebuild_instruments(conn)
+
+    assert rebuilt.superseded_cited_actions == 0
+    (warning,) = [
+        r
+        for r in caplog.records
+        if r.getMessage() == "a Cited Action's Symbol named no Instrument by its Ex-Date"
+    ]
+    assert (warning.symbol, warning.ex_date) == ("DHARAN", "2020-07-02")  # type: ignore[attr-defined]

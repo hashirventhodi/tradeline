@@ -122,8 +122,8 @@ def test_a_rebuild_records_its_counts_in_the_run_history(
         "link_candidates": 0,
         "stale_months": 0,
         "obsolete_universe_keys": 0,
-        "superseded_cited_actions": [],
-        "cited_anomalies": 0,
+        "superseded_cited_actions": {"agree": 0, "anomalies": 0},
+        "superseded_cited_action_records": [],
     }
 
 

@@ -431,4 +431,4 @@ def test_a_cited_action_nses_list_prices_differently_is_reported_and_fails_nothi
         )
 
     assert result.succeeded
-    assert rebuild.details["cited_anomalies"] == 1
+    assert rebuild.details["superseded_cited_actions"] == {"agree": 0, "anomalies": 1}

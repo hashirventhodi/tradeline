@@ -121,8 +121,8 @@ def test_the_rebuild_recorded_its_counts_in_the_run_details(conn: psycopg.Connec
         "link_candidates": 1,
         "stale_months": 0,
         "obsolete_universe_keys": 0,
-        "superseded_cited_actions": [],
-        "cited_anomalies": 0,
+        "superseded_cited_actions": {"agree": 0, "anomalies": 0},
+        "superseded_cited_action_records": [],
     }
 
 

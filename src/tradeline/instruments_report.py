@@ -43,13 +43,13 @@ class InstrumentsReport:
     # The last day of the Raw Series the Instruments were built from; None before a build.
     last_day: date | None
     anomalies: tuple[Anomaly, ...]
+    superseded_cited: tuple[queries.SupersededCitedAction, ...]
     ended: tuple[queries.EndedInstrument, ...]
     # By reason, then key.
     without_candles: tuple[queries.EndReason, ...]
     link_candidates: tuple[LinkCandidate, ...]
     stale: tuple[queries.StaleUniverseMonth, ...]
     obsolete_keys: tuple[queries.ObsoleteUniverseKey, ...] = ()
-    superseded_cited: tuple[queries.SupersededCitedAction, ...] = ()
 
     def text(self) -> str:
         """The human-readable report."""
@@ -65,7 +65,7 @@ class InstrumentsReport:
                 s.symbol,
                 s.cited_factor,
                 s.listed_factor,
-                "; ".join(f"{day} {subject}" for day, subject in s.listed),
+                "; ".join(f"{a.ex_date} {a.subject}" for a in s.listed),
                 "" if s.agrees else "ANOMALY",
             )
             for s in self.superseded_cited

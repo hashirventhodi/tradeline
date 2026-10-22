@@ -100,8 +100,9 @@ class InstrumentRebuildResult:
             "links": self.links,
             "anomalies": self.anomalies,
             "link_candidates": self.link_candidates,
-            "superseded_cited_actions": self.superseded_cited_actions,
-            "cited_anomalies": self.cited_anomalies,
+            "superseded_cited_actions": _agree_and_anomalies(
+                self.superseded_cited_actions, self.cited_anomalies
+            ),
         }
 
 
@@ -116,7 +117,7 @@ def rebuild_instruments(
         # Read through the new Instruments, before they are committed.
         superseded = _superseded_cited_actions(conn)
         _replace_supersessions(conn, superseded)
-        cited_anomalies = [found for found in superseded if not found.agrees]
+        cited_anomalies = [s for s in superseded if not s.agrees]
         conn.commit()
         links = Counter(link.kind for i in built.instruments for link in i.links)
         run.rows_seen = len(evidence.spans)
@@ -132,18 +133,17 @@ def rebuild_instruments(
             "link_candidates": len(built.link_candidates),
             "stale_months": stale,
             "obsolete_universe_keys": len(queries.obsolete_universe_keys(conn)),
-            "superseded_cited_actions": [found.record() for found in superseded],
-            "cited_anomalies": len(cited_anomalies),
+            "superseded_cited_actions": _agree_and_anomalies(len(superseded), len(cited_anomalies)),
+            "superseded_cited_action_records": [s.record() for s in superseded],
         }
         for anomaly in built.anomalies:
             log.warning(
                 "instrument history split",
                 extra={"kind": anomaly.kind, "symbol": anomaly.symbol, "detail": anomaly.detail},
             )
-        for found in cited_anomalies:
+        for differs in cited_anomalies:
             log.warning(
-                "NSE's list prices a Cited Action's change differently",
-                extra=found.record(),
+                "NSE's list prices a Cited Action's change differently", extra=differs.record()
             )
     return InstrumentRebuildResult(
         spans=len(evidence.spans),
@@ -368,16 +368,35 @@ def _replace(conn: psycopg.Connection, built: InstrumentBuild) -> None:
     )
 
 
+def _agree_and_anomalies(superseded: int, anomalies: int) -> dict[str, int]:
+    """Superseded Cited Actions counted as the ``instruments`` report counts them."""
+    return {"agree": superseded - anomalies, "anomalies": anomalies}
+
+
 def _superseded_cited_actions(conn: psycopg.Connection) -> list[queries.SupersededCitedAction]:
     """Every stored Cited Action NSE's list supersedes, by Ex-Date then Symbol: each Symbol's
-    of one Ex-Date together. No two Symbols' are ever one Instrument's on one Ex-Date: each
-    had its close that day (the price check), and an Instrument has one Symbol a day."""
+    of one Ex-Date together. No two Symbols' are ever one Instrument's on one Ex-Date, and
+    each Symbol has named an Instrument by then: each had its close that day (the price
+    check), and an Instrument has one Symbol a day. One stored past the check whose Symbol
+    had not is logged and left out."""
     days = conn.execute(
         "SELECT DISTINCT symbol, ex_date FROM corporate_actions WHERE citation IS NOT NULL"
         " ORDER BY ex_date, symbol"
     ).fetchall()
-    found = (queries.cited_supersession(conn, symbol, ex_date) for symbol, ex_date in days)
-    return [f for f in found if f is not None]
+    superseded = []
+    for symbol, ex_date in days:
+        try:
+            supersession = queries.cited_supersession(conn, symbol, ex_date)
+        except queries.NoInstrument:
+            # Only a row stored past the price check; the rebuild still stands.
+            log.warning(
+                "a Cited Action's Symbol named no Instrument by its Ex-Date",
+                extra={"symbol": symbol, "ex_date": ex_date.isoformat()},
+            )
+            continue
+        if supersession is not None:
+            superseded.append(supersession)
+    return superseded
 
 
 def _replace_supersessions(
@@ -394,8 +413,8 @@ def _replace_supersessions(
                 f.symbol,
                 f.ex_date,
                 list(f.subjects),
-                [day for day, _ in f.listed],
-                [subject for _, subject in f.listed],
+                [a.ex_date for a in f.listed],
+                [a.subject for a in f.listed],
                 f.cited_factor.numerator,
                 f.cited_factor.denominator,
                 f.listed_factor.numerator,

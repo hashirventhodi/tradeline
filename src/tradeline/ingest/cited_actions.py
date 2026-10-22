@@ -17,8 +17,8 @@ lists (ADR 0006, amended by #37):
   Ex-Date has a listed split or bonus within ``SUPERSEDED_WITHIN`` are
   reported as superseded (``queries.cited_supersession``), and, where the
   listed factor differs from theirs, as an anomaly. They are stored all the
-  same: the Adjusted Series never applies a superseded row (``adjust.adjust``),
-  whichever arrived first. Every Instruments rebuild reports the same over
+  same: the Adjusted Series never applies a superseded Cited Action
+  (``adjust.adjust``), whichever arrived first. Every Instruments rebuild reports the same over
   all stored rows, through the same check, so a row NSE lists later is
   reported without this command.
 
@@ -80,10 +80,10 @@ def ingest_cited_actions(
     """Check each Symbol's rows of one Ex-Date against the price and NSE's lists; store those
     the price agrees with."""
     refused: list[dict[str, Any]] = []
-    superseding: list[dict[str, Any]] = []
+    superseded_days: list[dict[str, Any]] = []
     anomalies: list[dict[str, Any]] = []
     with record_ingest_run(conn, command=COMMAND, source=SOURCE) as run:
-        run.details = {"refused": refused, "superseded": superseding, "anomalies": anomalies}
+        run.details = {"refused": refused, "superseded": superseded_days, "anomalies": anomalies}
         by_day: dict[tuple[str, date], list[CitedAction]] = defaultdict(list)
         for row in rows:
             by_day[(row.symbol, row.ex_date)].append(row)
@@ -99,7 +99,7 @@ def ingest_cited_actions(
             if found is not None:
                 record = _day(symbol, ex_date, cited) | found.listed_record()
                 log.warning("cited corporate action superseded by NSE's list", extra=record)
-                superseding.append(record)
+                superseded_days.append(record)
                 if not found.agrees:
                     log.warning("NSE's list prices the change differently", extra=record)
                     anomalies.append(record)
@@ -111,7 +111,7 @@ def ingest_cited_actions(
         rows_seen=len(rows),
         rows_written=run.rows_written,
         refused=sum(len(r["lines"]) for r in refused),
-        superseded=sum(len(r["lines"]) for r in superseding),
+        superseded=sum(len(r["lines"]) for r in superseded_days),
         anomalies=len(anomalies),
     )
 
