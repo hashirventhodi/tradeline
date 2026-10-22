@@ -943,6 +943,13 @@ class SupersededCitedAction:
         }
 
 
+def agree_and_anomalies(superseded: Iterable[SupersededCitedAction]) -> dict[str, int]:
+    """Superseded Cited Actions counted as every report states them: those NSE's list prices
+    as they do, and the anomalies."""
+    agrees = [s.agrees for s in superseded]
+    return {"agree": sum(agrees), "anomalies": len(agrees) - sum(agrees)}
+
+
 def superseded_cited_actions(conn: psycopg.Connection) -> list[SupersededCitedAction]:
     """The stored Cited Actions NSE's list superseded at the last rebuild, oldest Ex-Date
     first."""
@@ -985,9 +992,10 @@ def cited_supersession(
 
     The actions read are those of the Instrument the Symbol named on the
     Ex-Date, the reach the Adjusted Series uses, with ``cited``, any not stored
-    yet, beside them. The Symbol must have named an Instrument by the Ex-Date;
-    a stored Cited Action's always has, since its price check read the
-    Symbol's close that day.
+    yet, beside them. A Symbol that named no Instrument by the Ex-Date is
+    refused with ``NoInstrument``. A stored Cited Action's has, since its price
+    check read the Symbol's close that day, unless the row was stored past the
+    check.
     """
     for found in superseded([*corporate_actions(conn, symbol, as_of=ex_date), *cited]):
         if found.ex_date == ex_date:

@@ -108,10 +108,7 @@ class InstrumentsReport:
         return {
             "last_day": None if self.last_day is None else self.last_day.isoformat(),
             "anomalies": dict(sorted(Counter(a.kind for a in self.anomalies).items())),
-            "superseded_cited_actions": {
-                "agree": sum(s.agrees for s in self.superseded_cited),
-                "anomalies": sum(not s.agrees for s in self.superseded_cited),
-            },
+            "superseded_cited_actions": queries.agree_and_anomalies(self.superseded_cited),
             "ended": len(self.ended),
             "without_candles": {
                 reason: len(members)

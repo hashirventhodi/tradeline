@@ -334,7 +334,7 @@ def test_a_rebuild_reports_a_cited_action_a_manual_link_brings_within_reach_of_n
     fresh_database_url: str,
 ) -> None:
     # NSE files the split under DHARAN, the name KARDA took after it; nothing joins the two
-    # until the Operator cites the rename in a manual link.
+    # until the Operator cites the rename in a manual link, and nothing once it is removed.
     with app_connection(fresh_database_url) as conn:
         karda_rows(conn)
         ingest_cited_actions(conn, [karda_split()])
@@ -352,9 +352,16 @@ def test_a_rebuild_reports_a_cited_action_a_manual_link_brings_within_reach_of_n
             conn,
             manual_links=[ManualLink("KARDA", "DHARAN", date(2020, 7, 6), "NSE/CML/2020/99999")],
         )
+        joined_report = instruments_report(conn)
+        removed = rebuild_instruments(conn)
+        removed_report = instruments_report(conn)
 
     assert (apart.superseded_cited_actions, apart.cited_anomalies) == (0, 0)
     assert (joined.anomalies, joined.superseded_cited_actions, joined.cited_anomalies) == (0, 1, 0)
+    assert [(s.symbol, s.ex_date) for s in joined_report.superseded_cited] == [
+        ("KARDA", KARDA_EX_DATE)
+    ]
+    assert (removed.superseded_cited_actions, removed_report.superseded_cited) == (0, ())
 
 
 def test_a_rebuild_skips_and_warns_of_a_cited_action_whose_symbol_named_no_instrument_yet(

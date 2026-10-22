@@ -88,10 +88,17 @@ class InstrumentRebuildResult:
     links: int
     anomalies: int
     link_candidates: int
-    # Stored Cited Actions NSE's list supersedes, by Symbol and Ex-Date; and those of them
-    # the listed actions price differently.
-    superseded_cited_actions: int
-    cited_anomalies: int
+    # The stored Cited Actions NSE's list supersedes, by Ex-Date then Symbol.
+    superseded_cited: tuple[queries.SupersededCitedAction, ...]
+
+    @property
+    def superseded_cited_actions(self) -> int:
+        return len(self.superseded_cited)
+
+    @property
+    def cited_anomalies(self) -> int:
+        """The superseded Cited Actions the listed actions price differently."""
+        return sum(not s.agrees for s in self.superseded_cited)
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -100,9 +107,7 @@ class InstrumentRebuildResult:
             "links": self.links,
             "anomalies": self.anomalies,
             "link_candidates": self.link_candidates,
-            "superseded_cited_actions": _agree_and_anomalies(
-                self.superseded_cited_actions, self.cited_anomalies
-            ),
+            "superseded_cited_actions": queries.agree_and_anomalies(self.superseded_cited),
         }
 
 
@@ -115,7 +120,7 @@ def rebuild_instruments(
         stale = _record_stale_months(conn, built, found_by=run.id)
         _replace(conn, built)
         # Read through the new Instruments, before they are committed.
-        superseded = _superseded_cited_actions(conn)
+        superseded = _find_superseded_cited_actions(conn)
         _replace_supersessions(conn, superseded)
         cited_anomalies = [s for s in superseded if not s.agrees]
         conn.commit()
@@ -133,7 +138,7 @@ def rebuild_instruments(
             "link_candidates": len(built.link_candidates),
             "stale_months": stale,
             "obsolete_universe_keys": len(queries.obsolete_universe_keys(conn)),
-            "superseded_cited_actions": _agree_and_anomalies(len(superseded), len(cited_anomalies)),
+            "superseded_cited_actions": queries.agree_and_anomalies(superseded),
             "superseded_cited_action_records": [s.record() for s in superseded],
         }
         for anomaly in built.anomalies:
@@ -151,8 +156,7 @@ def rebuild_instruments(
         links=sum(links.values()),
         anomalies=len(built.anomalies),
         link_candidates=len(built.link_candidates),
-        superseded_cited_actions=len(superseded),
-        cited_anomalies=len(cited_anomalies),
+        superseded_cited=tuple(superseded),
     )
 
 
@@ -368,12 +372,7 @@ def _replace(conn: psycopg.Connection, built: InstrumentBuild) -> None:
     )
 
 
-def _agree_and_anomalies(superseded: int, anomalies: int) -> dict[str, int]:
-    """Superseded Cited Actions counted as the ``instruments`` report counts them."""
-    return {"agree": superseded - anomalies, "anomalies": anomalies}
-
-
-def _superseded_cited_actions(conn: psycopg.Connection) -> list[queries.SupersededCitedAction]:
+def _find_superseded_cited_actions(conn: psycopg.Connection) -> list[queries.SupersededCitedAction]:
     """Every stored Cited Action NSE's list supersedes, by Ex-Date then Symbol: each Symbol's
     of one Ex-Date together. No two Symbols' are ever one Instrument's on one Ex-Date, and
     each Symbol has named an Instrument by then: each had its close that day (the price
