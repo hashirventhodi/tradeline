@@ -155,6 +155,9 @@ class Gap:
     def summary(self) -> dict[str, Any]:
         return {"instrument": self.instrument, "trade_date": self.trade_date.isoformat()}
 
+    def text(self) -> str:
+        return f"  gap {self.trade_date} {self.instrument}"
+
 
 @dataclass(frozen=True)
 class IntegrityReport:
@@ -218,9 +221,9 @@ class IntegrityReport:
             ),
             "unexplained_large_moves": len(unexplained),
             "listed_unexplained_large_moves": [m.summary() for m in unexplained[:MAX_LISTED]],
-            "unresolved_records": [_record_summary(r) for r in self.unresolved_records],
-            "unmatched_records": [_record_summary(r) for r in self.unmatched_records],
-            "duplicate_records": [_record_summary(r) for r in self.duplicate_records],
+            "unresolved_records": [r.summary() for r in self.unresolved_records],
+            "unmatched_records": [r.summary() for r in self.unmatched_records],
+            "duplicate_records": [r.summary() for r in self.duplicate_records],
             "gaps": len(self.gaps),
             "gaps_by_instrument": dict(sorted(Counter(g.instrument for g in self.gaps).items())),
             "listed_gaps": [g.summary() for g in self.gaps[:MAX_LISTED]],
@@ -255,36 +258,20 @@ class IntegrityReport:
         ]
         lines += [m.text() for m in unexplained[:MAX_LISTED]]
         lines += _more(unexplained)
+        lines += [r.text(f"{r.symbol} named no Instrument") for r in self.unresolved_records]
+        lines += [r.text("matches no Large Move") for r in self.unmatched_records]
         lines += [
-            f"  record line {r.line} ({r.symbol} {r.trade_date}): {r.symbol} named no Instrument"
-            for r in self.unresolved_records
-        ]
-        lines += [
-            f"  record line {r.line} ({r.symbol} {r.trade_date}): matches no Large Move"
-            for r in self.unmatched_records
-        ]
-        lines += [
-            f"  record line {r.line} ({r.symbol} {r.trade_date}): names the Instrument and day"
-            " of an earlier record; not read"
+            r.text("names the Instrument and day of an earlier record; not read")
             for r in self.duplicate_records
         ]
         lines.append(f"Gaps (never failures): {len(self.gaps)}")
-        lines += [f"  gap {g.trade_date} {g.instrument}" for g in self.gaps[:MAX_LISTED]]
+        lines += [g.text() for g in self.gaps[:MAX_LISTED]]
         lines += _more(self.gaps)
         return "\n".join(lines) + "\n"
 
 
 def _more(listed: tuple[object, ...]) -> list[str]:
     return [f"  ... and {len(listed) - MAX_LISTED} more"] if len(listed) > MAX_LISTED else []
-
-
-def _record_summary(record: LargeMoveRecord) -> dict[str, Any]:
-    return {
-        "line": record.line,
-        "symbol": record.symbol,
-        "trade_date": record.trade_date.isoformat(),
-        "reason": record.reason,
-    }
 
 
 def integrity(

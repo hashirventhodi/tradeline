@@ -235,32 +235,32 @@ class RequestedRange:
         return self.start <= day <= self.end
 
 
-def candle_requests(
-    conn: psycopg.Connection, symbol: str, *, series: str, interval: str = "day"
-) -> list[CandleRequest]:
-    """Every range asked of Kite for ``symbol`` in ``series``, in the order asked.
+def candle_requests(conn: psycopg.Connection, symbol: str, *, series: str) -> list[CandleRequest]:
+    """Every range of daily candles asked of Kite for ``symbol`` in ``series``, in the order
+    asked; Kite Parity reads only the daily ones.
 
     One per request, so a range longer than Kite serves at once is several,
     and a re-run asks, and is recorded, again."""
     rows = conn.execute(
         "SELECT ingest_run_id, symbol, series, interval, range_start, range_end"
-        " FROM candle_requests WHERE (symbol, series, interval) = (%s, %s, %s)"
+        " FROM candle_requests WHERE (symbol, series, interval) = (%s, %s, 'day')"
         " ORDER BY requested_at, range_start",
-        (symbol, series, interval),
+        (symbol, series),
     ).fetchall()
     return [CandleRequest(*row) for row in rows]
 
 
 def requested_candle_ranges(
-    conn: psycopg.Connection, symbol: str, *, series: str, interval: str = "day"
+    conn: psycopg.Connection, symbol: str, *, series: str
 ) -> list[RequestedRange]:
-    """The days ever asked of Kite for ``symbol`` in ``series``, merged, oldest first.
+    """The days ever asked of Kite for daily candles of ``symbol`` in ``series``, merged,
+    oldest first.
 
     Overlapping and adjoining requests read as one range; whether Kite
     returned bars for them does not matter."""
     merged: list[RequestedRange] = []
     for request in sorted(
-        candle_requests(conn, symbol, series=series, interval=interval),
+        candle_requests(conn, symbol, series=series),
         key=lambda r: (r.start, r.end),
     ):
         if merged and request.start <= merged[-1].end + timedelta(days=1):

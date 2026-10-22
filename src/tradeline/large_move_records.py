@@ -31,7 +31,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Literal, get_args
+from typing import Any, Literal, get_args
 
 from tradeline.reviewed_csv import FirstLines, Line, parse_date, read_lines, require_header
 
@@ -50,6 +50,18 @@ class LargeMoveRecord:
     citation: str
     # The row's line in the file, for naming it in a report.
     line: int
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "line": self.line,
+            "symbol": self.symbol,
+            "trade_date": self.trade_date.isoformat(),
+            "reason": self.reason,
+        }
+
+    def text(self, problem: str) -> str:
+        """The record named in a report, with what is wrong with it."""
+        return f"  record line {self.line} ({self.symbol} {self.trade_date}): {problem}"
 
 
 def load_large_move_records(path: Path) -> list[LargeMoveRecord]:

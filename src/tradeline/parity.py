@@ -89,8 +89,9 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_HALF_EVEN, Decimal
 from enum import StrEnum
+from functools import cached_property
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 import psycopg
 
@@ -100,7 +101,7 @@ from tradeline.instruments import LISTING_SERIES
 from tradeline.trading_calendar import load_trading_calendar
 
 Kind = Literal["missing", "extra", "close"]
-KINDS: tuple[Kind, ...] = ("missing", "extra", "close")
+KINDS: tuple[Kind, ...] = get_args(Kind)
 HALF_TICK = Decimal("0.025")
 RUPEE = Decimal(1)
 HUNDRED = Decimal(100)
@@ -122,7 +123,7 @@ class Reason(StrEnum):
     SPECIAL_SESSION = "special_session"
     # A missing bar on a day no range candle ingest asked Kite for covers.
     NOT_FETCHED = "not_fetched"
-    # Kite's close is a x NSE's - b over the mismatch's whole stretch (``_additive``).
+    # Kite's close is a x NSE's - b over the mismatch's whole stretch (``_Stretch.additive``).
     ADDITIVE_ADJUSTMENT = "additive_adjustment"
     # Kite's close is NSE's times the stretch's factor rounded to the rupee, half to even.
     COARSE_ROUNDING = "coarse_rounding"
@@ -194,27 +195,34 @@ class ParityReport:
     close_tolerance: Decimal
     max_unexplained_pct: Decimal
     rows: int
-    # Every difference of each kind, explained or not.
-    missing: tuple[Difference, ...]
-    extra: tuple[Difference, ...]
-    close_mismatches: tuple[Difference, ...]
+    # Every difference of each kind, explained or not, by kind.
+    of_kind: Mapping[Kind, tuple[Difference, ...]]
     # Instrument-days stored under two Kite names with different values; not differences.
     candle_disagreements: tuple[queries.CandleDisagreement, ...] = ()
     # Candles from before their Instrument's Listing Age starts; not differences.
     pre_listing_candles: tuple[PreListingCandle, ...] = ()
 
-    def of_kind(self, kind: Kind) -> tuple[Difference, ...]:
-        return {"missing": self.missing, "extra": self.extra, "close": self.close_mismatches}[kind]
+    @property
+    def missing(self) -> tuple[Difference, ...]:
+        return self.of_kind["missing"]
+
+    @property
+    def extra(self) -> tuple[Difference, ...]:
+        return self.of_kind["extra"]
+
+    @property
+    def close_mismatches(self) -> tuple[Difference, ...]:
+        return self.of_kind["close"]
 
     @property
     def differences(self) -> int:
         """Every difference of the three kinds, explained or not."""
-        return sum(len(self.of_kind(kind)) for kind in KINDS)
+        return sum(len(self.of_kind[kind]) for kind in KINDS)
 
     @property
     def unexplained(self) -> tuple[Difference, ...]:
         """The differences no Parity Reason explains: missing, then extra, then close."""
-        return tuple(d for kind in KINDS for d in self.of_kind(kind) if d.reason is None)
+        return tuple(d for kind in KINDS for d in self.of_kind[kind] if d.reason is None)
 
     @property
     def unexplained_pct(self) -> Decimal:
@@ -229,16 +237,16 @@ class ParityReport:
     def by_kind(self) -> dict[str, dict[str, int]]:
         """Each kind's differences: in all, under each of its reasons, and unexplained."""
         return {
-            kind: {"total": len(self.of_kind(kind))}
-            | {reason.value: _count(self.of_kind(kind), reason) for reason in REASONS[kind]}
-            | {"unexplained": _count(self.of_kind(kind), None)}
+            kind: {"total": len(self.of_kind[kind])}
+            | {reason.value: _count(self.of_kind[kind], reason) for reason in REASONS[kind]}
+            | {"unexplained": _count(self.of_kind[kind], None)}
             for kind in KINDS
         }
 
     @property
     def by_reason(self) -> dict[str, int]:
         """The differences under each Parity Reason, of any kind, then the unexplained."""
-        every = [d for kind in KINDS for d in self.of_kind(kind)]
+        every = [d for kind in KINDS for d in self.of_kind[kind]]
         return {reason.value: _count(every, reason) for reason in Reason} | {
             "unexplained": _count(every, None)
         }
@@ -387,9 +395,26 @@ class _Stretch:
     rows: tuple[_Row, ...]
     factor: Decimal
 
+    @cached_property
+    def additive(self) -> bool:
+        """Whether one least-squares fit of Kite's close as a x NSE's - b puts every one of
+        the stretch's compared bars within half a tick of it; worked out once per stretch.
+
+        A stretch's factor alone leaving mismatches is given: one is being classified. A
+        stretch whose NSE closes are all one price has no fit."""
+        points = [(_of(r.eod_close), _of(r.candle_close)) for r in self.rows]
+        mean_x = sum((x for x, _ in points), Decimal(0)) / len(points)
+        mean_y = sum((y for _, y in points), Decimal(0)) / len(points)
+        spread = sum(((x - mean_x) ** 2 for x, _ in points), Decimal(0))
+        if not spread:
+            return False
+        a = sum(((x - mean_x) * (y - mean_y) for x, y in points), Decimal(0)) / spread
+        b = a * mean_x - mean_y
+        return all(abs(y - (a * x - b)) <= HALF_TICK for x, y in points)
+
 
 @dataclass(frozen=True)
-class _Found:
+class _Unclassified:
     """A difference before it is classified, with what a Parity Reason's rule may read."""
 
     kind: Kind
@@ -400,7 +425,7 @@ class _Found:
 
 
 # A Parity Reason's rule: whether it explains a difference.
-_Rule = Callable[[_Found], bool]
+_Rule = Callable[[_Unclassified], bool]
 
 
 def _rules(
@@ -412,22 +437,19 @@ def _rules(
     requested ranges, NSE's rows in other series) loads it here, once."""
     listed = _listed_series(conn, [r for r in rows if not r.has_eod])
 
-    def series_move(found: _Found) -> bool:
-        row = found.row
+    def series_move(difference: _Unclassified) -> bool:
+        row = difference.row
         return bool(listed[(row.instrument, row.trade_date)] - {row.series})
 
     special_sessions = load_trading_calendar(Path(settings.trading_calendar)).special_sessions
 
-    def special_session(found: _Found) -> bool:
-        return found.row.trade_date in special_sessions
+    def special_session(difference: _Unclassified) -> bool:
+        return difference.row.trade_date in special_sessions
 
-    additive: dict[int, bool] = {}  # by id of a stretch, which lives as long as the run
-
-    def additive_adjustment(found: _Found) -> bool:
-        stretch = _of(found.stretch)
-        if id(stretch) not in additive:
-            additive[id(stretch)] = _additive(stretch, settings.additive_min_bars)
-        return additive[id(stretch)]
+    def additive_adjustment(difference: _Unclassified) -> bool:
+        # One fit over the mismatch's whole stretch, of at least ``additive_min_bars`` bars.
+        stretch = _of(difference.stretch)
+        return len(stretch.rows) >= settings.additive_min_bars and stretch.additive
 
     return {
         Reason.SERIES_MOVE: series_move,
@@ -438,29 +460,10 @@ def _rules(
     }
 
 
-def _coarse_rounding(found: _Found) -> bool:
+def _coarse_rounding(difference: _Unclassified) -> bool:
     """Kite's close is the expected close rounded to the rupee, half to even. Only the
     rupee is recognised: another tick needs evidence and ADR 0018 to agree it."""
-    return found.row.candle_close == _of(found.expected).quantize(RUPEE, ROUND_HALF_EVEN)
-
-
-def _additive(stretch: _Stretch, min_bars: int) -> bool:
-    """Whether one least-squares fit of Kite's close as a x NSE's - b puts every one of the
-    stretch's compared bars, at least ``min_bars`` of them, within half a tick of it.
-
-    A stretch's factor alone leaving mismatches is given: one is being classified. A
-    stretch whose NSE closes are all one price has no fit."""
-    if len(stretch.rows) < min_bars:
-        return False
-    points = [(_of(r.eod_close), _of(r.candle_close)) for r in stretch.rows]
-    mean_x = sum((x for x, _ in points), Decimal(0)) / len(points)
-    mean_y = sum((y for _, y in points), Decimal(0)) / len(points)
-    spread = sum(((x - mean_x) ** 2 for x, _ in points), Decimal(0))
-    if not spread:
-        return False
-    a = sum(((x - mean_x) * (y - mean_y) for x, y in points), Decimal(0)) / spread
-    b = a * mean_x - mean_y
-    return all(abs(y - (a * x - b)) <= HALF_TICK for x, y in points)
+    return difference.row.candle_close == _of(difference.expected).quantize(RUPEE, ROUND_HALF_EVEN)
 
 
 def _listed_series(
@@ -515,8 +518,8 @@ def _not_fetched(conn: psycopg.Connection, rows: Sequence[_Row]) -> _Rule:
         for instrument, series in wanted
     }
 
-    def rule(found: _Found) -> bool:
-        row = found.row
+    def rule(difference: _Unclassified) -> bool:
+        row = difference.row
         ranges = requested[(row.instrument, row.series)]
         return not any(r.covers(row.trade_date) for r in ranges)
 
@@ -557,7 +560,7 @@ def parity(
     tolerance = Decimal(str(settings.close_tolerance))
     rules = _rules(conn, settings, rows)
 
-    def classified(differences: Sequence[_Found]) -> tuple[Difference, ...]:
+    def classified(differences: Sequence[_Unclassified]) -> tuple[Difference, ...]:
         return tuple(_classify(d, rules) for d in differences)
 
     return ParityReport(
@@ -566,26 +569,30 @@ def parity(
         close_tolerance=tolerance,
         max_unexplained_pct=Decimal(str(settings.max_unexplained_pct)),
         rows=len(rows),
-        missing=classified([_Found("missing", r) for r in rows if not r.has_candle]),
-        extra=classified([_Found("extra", r) for r in rows if not r.has_eod]),
-        close_mismatches=classified(_close_mismatches(conn, rows, tolerance)),
+        of_kind={
+            "missing": classified([_Unclassified("missing", r) for r in rows if not r.has_candle]),
+            "extra": classified([_Unclassified("extra", r) for r in rows if not r.has_eod]),
+            "close": classified(_close_mismatches(conn, rows, tolerance)),
+        },
         candle_disagreements=_candle_disagreements(conn, rows, start, end),
         pre_listing_candles=pre_listing,
     )
 
 
-def _classify(found: _Found, rules: Mapping[Reason, _Rule]) -> Difference:
+def _classify(difference: _Unclassified, rules: Mapping[Reason, _Rule]) -> Difference:
     """The difference under the first of its kind's Parity Reasons that explains it."""
-    reason = next((r for r in REASONS[found.kind] if rules[r](found)), None)
-    row = found.row
+    reason = next((r for r in REASONS[difference.kind] if rules[r](difference)), None)
+    row = difference.row
     return Difference(
-        kind=found.kind,
+        kind=difference.kind,
         symbol=row.symbol,
         series=row.series,
         trade_date=row.trade_date,
         candle_close=row.candle_close,
         eod_close=row.eod_close,
-        expected_close=None if found.expected is None else found.expected.quantize(Decimal("0.01")),
+        expected_close=None
+        if difference.expected is None
+        else difference.expected.quantize(Decimal("0.01")),
         reason=reason,
     )
 
@@ -678,7 +685,7 @@ def _refuse_symbols_without_candles(conn: psycopg.Connection, names: list[str]) 
 
 def _close_mismatches(
     conn: psycopg.Connection, rows: list[_Row], tolerance: Decimal
-) -> list[_Found]:
+) -> list[_Unclassified]:
     # Rows with both closes, grouped into the stretches between Ex-Dates.
     # An Instrument's Ex-Dates are those filed under any of its Symbols.
     grouped: dict[tuple[str, str, int], list[_Row]] = defaultdict(list)
@@ -690,10 +697,10 @@ def _close_mismatches(
             ex_dates[row.instrument] = sorted(
                 {action.ex_date for action in queries.corporate_actions(conn, row.instrument)}
             )
-        after = bisect.bisect_right(ex_dates[row.instrument], row.trade_date)
-        grouped[(row.instrument, row.series, after)].append(row)
+        stretch_index = bisect.bisect_right(ex_dates[row.instrument], row.trade_date)
+        grouped[(row.instrument, row.series, stretch_index)].append(row)
 
-    mismatches: list[_Found] = []
+    mismatches: list[_Unclassified] = []
     for stretch_rows in grouped.values():
         # A zero close rounded away and shows no factor; a stretch of only those has none.
         ratios = [_ratio(r) for r in stretch_rows if r.candle_close]
@@ -703,7 +710,7 @@ def _close_mismatches(
         for r in stretch_rows:
             expected = _of(r.eod_close) * stretch.factor
             if abs(_of(r.candle_close) - expected) > tolerance * expected + HALF_TICK:
-                mismatches.append(_Found("close", r, stretch=stretch, expected=expected))
+                mismatches.append(_Unclassified("close", r, stretch=stretch, expected=expected))
     mismatches.sort(key=lambda d: (d.row.symbol, d.row.series, d.row.trade_date))
     return mismatches
 

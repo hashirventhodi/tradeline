@@ -195,6 +195,10 @@ _Avoid_: Excuse, known issue, exception
 A close-to-close change of more than 1.5 times, either way, in an Instrument's Adjusted Series across its listing series. Unless a split or bonus on that day explains it, it must be explained by a reviewed record with its reason and source, because an unexplained one may be a split or bonus the Adjusted Series lacks.
 _Avoid_: Jump, spike, outlier
 
+**Ever-member**:
+An Instrument that has been in the Universe in any stored month, under any version of the Universe Rule. The Integrity Check reads the Large Moves and gaps of every ever-member, not only of today's Universe, since a backtest reads the Instruments of every past month.
+_Avoid_: Constituent, current member, universe history
+
 **Trading Calendar**:
 The days NSE was open for equity trading: every weekday but the holidays NSE announced, and every Special Session.
 
