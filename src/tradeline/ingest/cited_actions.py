@@ -15,11 +15,11 @@ lists (ADR 0006, amended by #37):
   more; a price band or an odd print is not.
 - **NSE's list wins.** Rows for which the Instrument their Symbol named on the
   Ex-Date has a listed split or bonus within ``SUPERSEDED_WITHIN`` are
-  reported as superseded (``supersession``), and, where the listed factor
-  differs from theirs, as an anomaly. They are stored all the same: the
-  Adjusted Series never applies a superseded row (``adjust.adjust``),
+  reported as superseded (``queries.cited_supersession``), and, where the
+  listed factor differs from theirs, as an anomaly. They are stored all the
+  same: the Adjusted Series never applies a superseded row (``adjust.adjust``),
   whichever arrived first. Every Instruments rebuild reports the same over
-  all stored rows (``stored_supersessions``), so a row NSE lists later is
+  all stored rows, through the same check, so a row NSE lists later is
   reported without this command.
 
 A row passing the price check is stored with its citation and no NSE list,
@@ -42,7 +42,7 @@ from typing import Any
 import psycopg
 
 from tradeline import queries
-from tradeline.adjust import CorporateAction, Supersession, superseded
+from tradeline.adjust import CorporateAction
 from tradeline.cited_actions import CitedAction
 from tradeline.ingest import COMMAND, record_ingest_run
 from tradeline.instruments import LISTING_SERIES
@@ -95,12 +95,9 @@ def ingest_cited_actions(
                 log.warning("cited corporate action refused", extra=record)
                 refused.append(record)
                 continue
-            found = supersession(conn, symbol, ex_date, checked)
+            found = queries.cited_supersession(conn, symbol, ex_date, checked)
             if found is not None:
-                listed = _superseded(symbol, found).record()
-                record = _day(symbol, ex_date, cited) | {
-                    k: listed[k] for k in ("listed", "cited_factor", "listed_factor")
-                }
+                record = _day(symbol, ex_date, cited) | found.listed_record()
                 log.warning("cited corporate action superseded by NSE's list", extra=record)
                 superseding.append(record)
                 if not found.agrees:
@@ -116,49 +113,6 @@ def ingest_cited_actions(
         refused=sum(len(r["lines"]) for r in refused),
         superseded=sum(len(r["lines"]) for r in superseding),
         anomalies=len(anomalies),
-    )
-
-
-def supersession(
-    conn: psycopg.Connection,
-    symbol: str,
-    ex_date: date,
-    cited: Sequence[CorporateAction] = (),
-) -> Supersession | None:
-    """How NSE's list supersedes the Cited Actions of ``symbol`` on ``ex_date``, if it does.
-
-    The actions are those of the Instrument the Symbol named on the Ex-Date, the
-    reach the Adjusted Series uses, with ``cited``, any not stored yet, beside them.
-    """
-    for found in superseded([*queries.corporate_actions(conn, symbol, as_of=ex_date), *cited]):
-        if found.ex_date == ex_date:
-            return found
-    return None
-
-
-def stored_supersessions(conn: psycopg.Connection) -> list[queries.SupersededCitedAction]:
-    """Every stored Cited Action NSE's list supersedes, by Ex-Date then Symbol, as the
-    Instruments stand now: each Symbol's of one Ex-Date together."""
-    days = conn.execute(
-        "SELECT DISTINCT symbol, ex_date FROM corporate_actions WHERE citation IS NOT NULL"
-        " ORDER BY ex_date, symbol"
-    ).fetchall()
-    found = []
-    for symbol, ex_date in days:
-        supersedes = supersession(conn, symbol, ex_date)
-        if supersedes is not None:
-            found.append(_superseded(symbol, supersedes))
-    return found
-
-
-def _superseded(symbol: str, found: Supersession) -> queries.SupersededCitedAction:
-    return queries.SupersededCitedAction(
-        symbol=symbol,
-        ex_date=found.ex_date,
-        subjects=tuple(a.subject for a in found.cited),
-        listed=tuple((a.ex_date, a.subject) for a in found.listed),
-        cited_factor=found.cited_factor,
-        listed_factor=found.listed_factor,
     )
 
 

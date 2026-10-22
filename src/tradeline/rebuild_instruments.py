@@ -34,8 +34,8 @@ dated after a window leaves the rows in it grouped as they were, so an
 ordinary rename makes no earlier month stale.
 
 Through the new Instruments, before they are committed, every stored Cited
-Action is checked against NSE's lists (``ingest.cited_actions.supersession``,
-as ``ingest cited-actions`` checks a new one): those a listed split or bonus
+Action is checked against NSE's lists (``queries.cited_supersession``, as
+``ingest cited-actions`` checks a new one): those a listed split or bonus
 within seven days supersedes replace the last rebuild's
 (``cited_action_supersessions``), and each whose listed factor differs is
 logged as an anomaly. A Cited Action becomes superseded when NSE lists its
@@ -61,11 +61,9 @@ from datetime import date
 from typing import Any
 
 import psycopg
-from psycopg.types.json import Jsonb
 
 from tradeline import queries
 from tradeline.ingest import record_ingest_run
-from tradeline.ingest.cited_actions import stored_supersessions
 from tradeline.instruments import (
     LISTING_SERIES,
     Evidence,
@@ -92,8 +90,8 @@ class InstrumentRebuildResult:
     link_candidates: int
     # Stored Cited Actions NSE's list supersedes, by Symbol and Ex-Date; and those of them
     # the listed actions price differently.
-    superseded_cited_actions: int = 0
-    cited_anomalies: int = 0
+    superseded_cited_actions: int
+    cited_anomalies: int
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -116,9 +114,9 @@ def rebuild_instruments(
         stale = _record_stale_months(conn, built, found_by=run.id)
         _replace(conn, built)
         # Read through the new Instruments, before they are committed.
-        superseding = stored_supersessions(conn)
-        _replace_supersessions(conn, superseding)
-        cited_anomalies = [found for found in superseding if not found.agrees]
+        superseded = _superseded_cited_actions(conn)
+        _replace_supersessions(conn, superseded)
+        cited_anomalies = [found for found in superseded if not found.agrees]
         conn.commit()
         links = Counter(link.kind for i in built.instruments for link in i.links)
         run.rows_seen = len(evidence.spans)
@@ -134,7 +132,7 @@ def rebuild_instruments(
             "link_candidates": len(built.link_candidates),
             "stale_months": stale,
             "obsolete_universe_keys": len(queries.obsolete_universe_keys(conn)),
-            "superseded_cited_actions": [found.record() for found in superseding],
+            "superseded_cited_actions": [found.record() for found in superseded],
             "cited_anomalies": len(cited_anomalies),
         }
         for anomaly in built.anomalies:
@@ -144,7 +142,7 @@ def rebuild_instruments(
             )
         for found in cited_anomalies:
             log.warning(
-                "NSE's list prices a cited corporate action's change differently",
+                "NSE's list prices a Cited Action's change differently",
                 extra=found.record(),
             )
     return InstrumentRebuildResult(
@@ -153,7 +151,7 @@ def rebuild_instruments(
         links=sum(links.values()),
         anomalies=len(built.anomalies),
         link_candidates=len(built.link_candidates),
-        superseded_cited_actions=len(superseding),
+        superseded_cited_actions=len(superseded),
         cited_anomalies=len(cited_anomalies),
     )
 
@@ -370,26 +368,39 @@ def _replace(conn: psycopg.Connection, built: InstrumentBuild) -> None:
     )
 
 
+def _superseded_cited_actions(conn: psycopg.Connection) -> list[queries.SupersededCitedAction]:
+    """Every stored Cited Action NSE's list supersedes, by Ex-Date then Symbol: each Symbol's
+    of one Ex-Date together. No two Symbols' are ever one Instrument's on one Ex-Date: each
+    had its close that day (the price check), and an Instrument has one Symbol a day."""
+    days = conn.execute(
+        "SELECT DISTINCT symbol, ex_date FROM corporate_actions WHERE citation IS NOT NULL"
+        " ORDER BY ex_date, symbol"
+    ).fetchall()
+    found = (queries.cited_supersession(conn, symbol, ex_date) for symbol, ex_date in days)
+    return [f for f in found if f is not None]
+
+
 def _replace_supersessions(
-    conn: psycopg.Connection, superseding: Sequence[queries.SupersededCitedAction]
+    conn: psycopg.Connection, superseded: Sequence[queries.SupersededCitedAction]
 ) -> None:
     conn.execute("DELETE FROM cited_action_supersessions")
-    # Row by row: each row's subjects are an array of their own length.
+    # Row by row: each row's arrays are of their own length.
     conn.cursor().executemany(
-        "INSERT INTO cited_action_supersessions (symbol, ex_date, subjects, listed,"
-        " cited_numerator, cited_denominator, listed_numerator, listed_denominator)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+        "INSERT INTO cited_action_supersessions (symbol, ex_date, subjects, listed_ex_dates,"
+        " listed_subjects, cited_numerator, cited_denominator, listed_numerator,"
+        " listed_denominator) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
         [
             (
                 f.symbol,
                 f.ex_date,
                 list(f.subjects),
-                Jsonb(f.record()["listed"]),
+                [day for day, _ in f.listed],
+                [subject for _, subject in f.listed],
                 f.cited_factor.numerator,
                 f.cited_factor.denominator,
                 f.listed_factor.numerator,
                 f.listed_factor.denominator,
             )
-            for f in superseding
+            for f in superseded
         ],
     )

@@ -7,8 +7,9 @@ CREATE TABLE cited_action_supersessions (
     symbol             text NOT NULL,
     ex_date            date NOT NULL,
     subjects           text[] NOT NULL,
-    -- NSE's listed actions within seven days: [{"ex_date": ..., "subject": ...}].
-    listed             jsonb NOT NULL,
+    -- NSE's listed actions within seven days, the two arrays in step.
+    listed_ex_dates    date[] NOT NULL,
+    listed_subjects    text[] NOT NULL,
     cited_numerator    bigint NOT NULL,
     cited_denominator  bigint NOT NULL,
     listed_numerator   bigint NOT NULL,
