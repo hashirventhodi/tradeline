@@ -17,6 +17,15 @@ series.
 - **extra**: there is a candle and NSE has no end-of-day row;
 - **close**: both exist and the closes disagree beyond the tolerance.
 
+A candle dated before its Instrument's Listing Age starts (the view
+``instrument_listing_age``, ADR 0017) is a **Pre-listing Candle**: the
+Instrument was not trading on NSE that day, so the candle cannot be its own.
+Kite files history by instrument token, and a token can carry an earlier
+security's bars (MAZDOCK's carries Farmax India's, docs/research.md, #34).
+Such a candle is listed, with its count, but neither compared nor counted as
+a row, and never attributed to another Instrument. A Symbol in no Instrument
+has no Listing Age, so none of its candles is one.
+
 Kite's candles are not raw prices: Kite adjusts its whole history, as of the
 day it is fetched, for splits, bonuses, and large dividends (docs/research.md,
 ADR 0006). Between two Ex-Dates that factor is one constant, so the closes
@@ -84,6 +93,29 @@ class Discrepancy:
 
 
 @dataclass(frozen=True)
+class PreListingCandle:
+    """A candle dated before its Instrument's Listing Age starts: never compared."""
+
+    instrument: str
+    symbol: str
+    series: str
+    trade_date: date
+    close: Decimal
+    # The day the Instrument's Listing Age starts (ADR 0017).
+    listing_age_from: date
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "instrument": self.instrument,
+            "symbol": self.symbol,
+            "series": self.series,
+            "trade_date": self.trade_date.isoformat(),
+            "close": str(self.close),
+            "listing_age_from": self.listing_age_from.isoformat(),
+        }
+
+
+@dataclass(frozen=True)
 class ReconcileReport:
     start: date
     end: date
@@ -95,6 +127,8 @@ class ReconcileReport:
     close_mismatches: tuple[Discrepancy, ...]
     # Instrument-days stored under two Kite names with different values; not discrepancies.
     candle_disagreements: tuple[queries.CandleDisagreement, ...] = ()
+    # Candles from before their Instrument's Listing Age starts; not discrepancies.
+    pre_listing_candles: tuple[PreListingCandle, ...] = ()
 
     @property
     def discrepancies(self) -> int:
@@ -137,6 +171,10 @@ class ReconcileReport:
             "candle_disagreements": len(self.candle_disagreements),
             "listed_candle_disagreements": [
                 _disagreement_summary(d) for d in self.candle_disagreements[:MAX_LISTED]
+            ],
+            "pre_listing_candles": len(self.pre_listing_candles),
+            "listed_pre_listing_candles": [
+                d.summary() for d in self.pre_listing_candles[:MAX_LISTED]
             ],
         }
 
@@ -192,6 +230,20 @@ class ReconcileReport:
             )
             if count > MAX_LISTED:
                 lines.append(f"... {count - MAX_LISTED} more not listed")
+        if self.pre_listing_candles:
+            count = len(self.pre_listing_candles)
+            lines.append("")
+            lines.append(
+                f"{count} pre-listing candle{'s' if count != 1 else ''}"
+                " (dated before its Instrument's Listing Age starts; not compared):"
+            )
+            lines.extend(
+                f"  {c.instrument} {c.series} {c.trade_date}: {c.symbol} {c.close},"
+                f" Listing Age from {c.listing_age_from}"
+                for c in self.pre_listing_candles[:MAX_LISTED]
+            )
+            if count > MAX_LISTED:
+                lines.append(f"... {count - MAX_LISTED} more not listed")
         return "\n".join(lines) + "\n"
 
 
@@ -219,6 +271,20 @@ class _Row:
     eod_close: Decimal | None
     has_candle: bool
     has_eod: bool
+    # The day the Instrument's Listing Age starts; None for a Symbol in no Instrument.
+    listing_age_from: date | None
+
+    @property
+    def pre_listing(self) -> bool:
+        """A candle from before the Instrument was trading on NSE, with no row to meet.
+
+        A day NSE has a row for is compared, whatever the last rebuild made of it."""
+        return (
+            self.has_candle
+            and not self.has_eod
+            and self.listing_age_from is not None
+            and self.trade_date < self.listing_age_from
+        )
 
 
 def reconcile(
@@ -240,9 +306,17 @@ def reconcile(
     names = None if symbols is None else sorted(set(symbols))
     if names is not None:
         _refuse_symbols_without_candles(conn, names)
-    rows = _rows(conn, start, end, names)
-    if not rows:
+    found = _rows(conn, start, end, names)
+    if not found:
         raise ValueError(f"no candles or end-of-day rows to reconcile from {start} to {end}")
+    rows = [r for r in found if not r.pre_listing]
+    pre_listing = tuple(_pre_listing(r) for r in found if r.pre_listing)
+    if not rows:
+        count = len(pre_listing)
+        raise ValueError(
+            f"nothing to reconcile from {start} to {end}: only {count}"
+            f" pre-listing candle{'s' if count != 1 else ''}"
+        )
 
     tolerance = Decimal(str(settings.close_tolerance))
     missing = tuple(_discrepancy("missing", r) for r in rows if not r.has_candle)
@@ -257,18 +331,32 @@ def reconcile(
         extra=extra,
         close_mismatches=_close_mismatches(conn, rows, tolerance),
         candle_disagreements=_candle_disagreements(conn, rows, start, end),
+        pre_listing_candles=pre_listing,
+    )
+
+
+def _pre_listing(row: _Row) -> PreListingCandle:
+    return PreListingCandle(
+        instrument=row.instrument,
+        symbol=row.symbol,
+        series=row.series,
+        trade_date=row.trade_date,
+        close=_of(row.candle_close),
+        listing_age_from=_of(row.listing_age_from),
     )
 
 
 def _candle_disagreements(
     conn: psycopg.Connection, rows: list[_Row], start: date, end: date
 ) -> tuple[queries.CandleDisagreement, ...]:
-    """Each compared Instrument's days stored under two Kite names that differ."""
+    """Each compared Instrument's days stored under two Kite names that differ, from
+    the day its Listing Age starts: a Pre-listing Candle's day is not the Instrument's."""
+    listing = {r.instrument: r.listing_age_from or start for r in rows if r.has_candle}
     found = [
         d
-        for instrument in sorted({r.instrument for r in rows if r.has_candle})
+        for instrument in sorted(listing)
         for d in queries.instrument_daily_candles(
-            conn, instrument, start=start, end=end, as_of=date.max
+            conn, instrument, start=max(start, listing[instrument]), end=end, as_of=date.max
         ).disagreements
     ]
     return tuple(found)
@@ -308,8 +396,9 @@ def _rows(conn: psycopg.Connection, start: date, end: date, names: list[str] | N
         "  WHERE b.trade_date BETWEEN %(start)s AND %(end)s"
         ")"
         " SELECT instrument, coalesce(e.symbol, k.symbol), series, trade_date, k.close, e.close,"
-        "  k.instrument IS NOT NULL, e.instrument IS NOT NULL"
+        "  k.instrument IS NOT NULL, e.instrument IS NOT NULL, la.listing_age_from"
         " FROM k FULL JOIN e USING (instrument, series, trade_date)"
+        " LEFT JOIN instrument_listing_age la ON la.instrument_key = instrument"
         " ORDER BY instrument, series, trade_date",
         {"names": names, "start": start, "end": end},
     ).fetchall()
@@ -366,9 +455,9 @@ def _ratio(row: _Row) -> Decimal:
     return _of(row.candle_close) / _of(row.eod_close)
 
 
-def _of(value: Decimal | None) -> Decimal:
+def _of[T](value: T | None) -> T:
     if value is None:
-        raise ValueError("a close was expected")
+        raise ValueError("a value was expected")
     return value
 
 

@@ -36,7 +36,8 @@ every Symbol the Instrument had, its most recent row (under any Symbol) gives
 the series and ISIN checks, and its listing date is the Instrument's
 (``instruments.listed_on``). Under ``listing_age_from = "earliest_evidence"``
 (ADR 0017) Listing Age counts from the earlier of that date and the
-Instrument's first row in any listing series, since NSE's master gives a
+Instrument's first row in any listing series (the view
+``instrument_listing_age``), since NSE's master gives a
 security's last admission to the main board, which can follow years of
 trading on NSE.
 The member's Symbol is that of its most recent row in the window, the Symbol
@@ -362,8 +363,8 @@ def _instrument_candidates(
         "  COALESCE(l.isin, (SELECT isin FROM symbols s WHERE s.symbol = l.symbol"
         "   AND s.series = %(series)s)),"
         "  (SELECT count(*) FROM calendar c WHERE c.trade_date >= CASE %(listing_age_from)s"
-        "   WHEN 'earliest_evidence' THEN LEAST(ins.listed_on, (SELECT min(f.first_day)"
-        "    FROM instrument_intervals f WHERE f.instrument_key = ins.key))"
+        "   WHEN 'earliest_evidence' THEN (SELECT la.listing_age_from"
+        "    FROM instrument_listing_age la WHERE la.instrument_key = ins.key)"
         "   ELSE ins.listed_on END),"
         "  st.instrument_key"
         " FROM stats st JOIN latest l USING (instrument_key)"

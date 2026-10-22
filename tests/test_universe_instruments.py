@@ -178,6 +178,22 @@ def test_listing_age_counts_from_the_first_row_when_the_listing_date_comes_after
         assert queries.resolve_symbol(conn, "RELIANCE", as_of=END).key == "RELIANCE@2025-04-21"
 
 
+def test_an_instruments_listing_age_starts_at_the_earlier_of_its_listing_date_and_first_row(
+    fresh_database_url: str,
+) -> None:
+    # The one statement of it that the Universe and reconcile both read.
+    load(fresh_database_url, master=Playback(FIXTURES, EOD_FIXTURES, edit=admitted_late))
+    with app_connection(fresh_database_url) as conn:
+        starts: dict[str, date] = dict(
+            conn.execute("SELECT instrument_key, listing_age_from FROM instrument_listing_age")
+        )
+
+    # RELIANCE's first row, 17 March, comes before its moved listing date.
+    assert starts["RELIANCE@2025-04-21"] == date(2025, 3, 17)
+    # ZOMATO's listing date comes before its first row.
+    assert starts["ZOMATO@2021-07-23"] == date(2021, 7, 23)
+
+
 def dump(conn: psycopg.Connection, rule: UniverseRule) -> bytes:
     return repr(
         queries.universe_membership(conn, MAY, rule_version=rule.version, as_of=MAY)
