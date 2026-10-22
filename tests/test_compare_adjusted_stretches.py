@@ -30,4 +30,4 @@ def test_mismatches_either_side_of_an_ex_date_are_two_stretches(database_url: st
         (date(2024, 8, 16), date(2024, 8, 16), 1),
         (date(2024, 8, 19), date(2024, 8, 19), 1),
     ]
-    assert all(s.factor > Decimal(1) for s in reliance.stretches)
+    assert all(s.factor is not None and s.factor > Decimal(1) for s in reliance.stretches)

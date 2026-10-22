@@ -1,0 +1,24 @@
+#!/bin/sh
+# A commit message is a subject, then a blank line, then the body (git's own
+# convention, and what `git log --oneline` and GitHub read as the title). Two
+# commits went out with the body run into the subject (#33's retro). Enabled by
+# `make hooks`. Lines git strips (starting with #) are not counted.
+#
+# The subject's cap is generous: the repo's longest is 104 characters, and a
+# run-in body is hundreds.
+max=120
+lines=$(grep -v '^#' "$1")
+subject=$(printf '%s\n' "$lines" | sed -n 1p)
+second=$(printf '%s\n' "$lines" | sed -n 2p)
+if [ -z "$subject" ]; then
+    echo "commit-msg: the subject (first line) is empty" >&2
+    exit 1
+fi
+if [ ${#subject} -gt $max ]; then
+    echo "commit-msg: the subject is ${#subject} characters, over $max; is the body run into it?" >&2
+    exit 1
+fi
+if [ -n "$second" ]; then
+    echo "commit-msg: the second line must be blank, between the subject and the body" >&2
+    exit 1
+fi

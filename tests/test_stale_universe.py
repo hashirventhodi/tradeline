@@ -195,6 +195,7 @@ def test_a_late_link_that_only_renames_a_stored_members_instrument_is_reported_n
     # ETERNAL's rows stay grouped as they were, under ZOMATO's key once joined.
     stored = store(split, [(SHORT, MAY)])
     (eternal,) = [m for m in stored if m.symbol == "ETERNAL"]
+    assert eternal.instrument is not None
 
     rebuild_instruments(split, manual_links=[RENAME])
     rebuild = queries.ingest_runs(split, source="instrument_links")[0]

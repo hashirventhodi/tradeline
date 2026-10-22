@@ -3,6 +3,7 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -12,7 +13,7 @@ from tradeline.dates import IST
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def json_lines(text: str) -> list[dict[str, object]]:
+def json_lines(text: str) -> list[dict[str, Any]]:
     return [json.loads(line) for line in text.splitlines()]
 
 
@@ -312,7 +313,7 @@ def test_ingest_minute_candles_loads_the_configured_rules_universe_for_the_month
     (finished,) = [line for line in lines if line["msg"] == "ingest run finished"]
     assert finished["source"] == "kite_candles_minute"
     assert finished["rows_written"] == 4 * 375
-    assert finished["universe"]["month"] == "2024-08-01"  # type: ignore[index]
+    assert finished["universe"]["month"] == "2024-08-01"
     assert lines[-1]["msg"] == "ingest candles finished"
     assert lines[-1]["symbols_loaded"] == 2
 
@@ -515,8 +516,8 @@ def test_sectors_then_verify_universe_print_the_report_and_log_its_summary(
     )
     summary = checked[-1]
     assert summary["msg"] == "verify-universe finished"
-    assert summary["report"]["universe_only"] == ["ABDL"]  # type: ignore[index]
-    assert summary["report"]["index_only"] == ["HDFCBANK"]  # type: ignore[index]
+    assert summary["report"]["universe_only"] == ["ABDL"]
+    assert summary["report"]["index_only"] == ["HDFCBANK"]
 
 
 def test_verify_universe_for_a_month_not_computed_fails_with_a_json_error(

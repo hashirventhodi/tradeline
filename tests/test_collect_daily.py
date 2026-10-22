@@ -58,6 +58,7 @@ from tradeline.config import UniverseRule
 from tradeline.db import app_connection
 from tradeline.ingest.eod import ingest_eod
 from tradeline.ingest.news import Feed
+from tradeline.manual_links import load_manual_links
 from tradeline.secrets import MissingSecret
 from tradeline.sources.kite import KiteSession
 from tradeline.transport import PlaybackTransport, Request, Response
@@ -73,7 +74,7 @@ FEEDS = (
     Feed("et_markets", "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms"),
     Feed("et_stocks", "https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms"),
 )
-MANUAL_LINKS = REPO_ROOT / "manual_links.csv"  # one row, RUCHI to PATANJALI
+MANUAL_LINKS = REPO_ROOT / "manual_links.csv"  # the repo's, as the configured rebuild reads it
 SOURCES = {
     "nse_equity_master",
     "nse_eod",
@@ -214,7 +215,8 @@ def test_the_instruments_are_rebuilt_after_end_of_day_and_corporate_actions_and_
     assert rebuild.finished_at <= candles.started_at
     assert runs["nse_symbol_changes"].rows_seen == 11  # the trimmed list
     assert rebuild.details["symbol_changes"] == 11
-    assert rebuild.details["manual_links"] == 33  # the repo's file, read on every rebuild
+    # The repo's file, read on every rebuild: every row, however many it holds.
+    assert rebuild.details["manual_links"] == len(load_manual_links(MANUAL_LINKS))
     assert rebuild.details["instruments"] == 8  # the eight symbols of July and August
     # A week either side of the day: an ISIN change explained by an action within
     # EX_DATE_SLACK of it finds the action stored, even one going ex days later.

@@ -171,7 +171,7 @@ def test_no_action_after_the_as_of_date_applies_and_no_bar_after_it_returns(
         conn, "GUJGASLTD", start=FIRST, end=before, as_of=before
     )
 
-    assert (bar.close, bar.volume, bar.factor) == (D("669.25"), 23_450, 1)
+    assert (bar.close, bar.volume, bar.factor) == (D("669.25"), 23_450, Fraction(1))
     with pytest.raises(ValueError, match="after the as-of date"):
         queries.adjusted_daily_candles(conn, KEY, start=FIRST, end=LAST, as_of=before)
 
