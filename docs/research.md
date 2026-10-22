@@ -316,6 +316,8 @@ manual link is unmatched.
 - **Explained by inference, not citation** (#33): the 21 SME and 71 fund ISIN
   changes (as classes), and TIDEWATER's and KARDA's four-fold changes (not
   explained). None touches an ever-member or an EQ Universe month.
+  Researched in "Fund, SME, TIDEWATER and KARDA ISIN changes (#33)" below:
+  all are now cited.
 - **MAZDOCK's 8 candles from 2017 and 2018** (#34), before its 2020 listing: an
   earlier instrument under a reused Kite token is likely but unconfirmed.
 - **A stored member's key can be renamed under it.** The SUBEX link renamed
@@ -467,6 +469,244 @@ reason, not in place of it.
 | RCOM@2006-03-06 | **RCOM** | 2022-05-24 | series moved | Our rows continue in BE from 2022-05-25; Kite gives a token for EQ only |
 | RELINFRA@1995-02-08 | **RELINFRA** | 2025-06-04 | series moved | Our rows continue in BE from 2025-06-05; Kite gives a token for EQ only |
 | STRTECH@2000-12-08 | **STRTECH**, STLTECH (renamed, #13's 38) | 2026-05-13 | series moved | Our rows continue in BE from 2026-05-14; Kite gives a token for EQ only |
+
+## Fund, SME, TIDEWATER and KARDA ISIN changes (#33)
+
+Researched on 2026-10-22 against the #29 database (the last rebuild's 104
+`unexplained_isin_change` anomalies) and live NSE responses: the Corporate
+Action API the repo calls (`www.nseindia.com/api/corporates-corporateActions`,
+built by `corporate_actions_url` in `src/tradeline/sources/nse.py`), NSE's
+circular search (`www.nseindia.com/api/circulars?fromDate=..&toDate=..`), the
+circulars themselves at `nsearchives.nseindia.com/content/circulars/<dept><number>.pdf`,
+and company filings through NSE's announcements API. Requests went through the
+repo's own `NseSession` (browser User-Agent, homepage cookie first) over
+`LiveTransport`. No code, config or stored data was changed; nothing was
+ingested. All 94 changes in scope have a primary source, and none was a
+reissue without a split except HDFCLIQUID.
+
+| Class | Count | Status | Source |
+|---|---|---|---|
+| Fund (INF) ISIN changes, face-value splits of ETF units | 70 | **Cited** | An NSE "Change in ISIN" circular naming each new ISIN (31 batches, below); 66 also in NSE's Corporate Action API under `index=mf` |
+| Fund (INF) ISIN change with no split (HDFCLIQUID, 2025-02-28) | 1 | **Cited** | NSE/CML/66863: change of scheme name and ISIN |
+| SME (SM, ST) splits and bonuses | 19 | **Cited** | NSE's Corporate Action API under `index=sme` |
+| SME splits not in that API (JSLL, GICL) | 2 | **Cited** | NSE circulars NSE/CML/68416, 70656, 70874 and the companies' filings |
+| TIDEWATER (2016-03-17): split Rs 10 to Rs 5 plus a 1:1 bonus | 1 | **Cited** | NSE/CML/31924, NSE/CML/31978, NSE/CMPT/31946, NSE/CML/32044 |
+| KARDA (2020-07-03): split Rs 10 to Rs 2 | 1 | **Cited** | NSE/CML/44773, NSE/CML/44835, NCL/CMPT/44827 |
+
+None of these is an EQ ever-member, so nothing here changes a stored
+Universe month. The other ten "other equity" changes in #29's table
+(relistings, VERTOZ, CCAVENUE) were not part of this research.
+
+### SME actions are served under `index=sme`
+
+The repo asks only for `index=equities`. The same endpoint answers other
+`index` values. All of these returned HTTP 200 (requested on 2026-10-22):
+
+| Request (`/api/corporates-corporateActions?...`) | Returned |
+|---|---|
+| `index=equities&from_date=01-01-2023&to_date=31-01-2023` | 49 records, EQ and other main-board series |
+| `index=sme&from_date=01-01-2023&to_date=31-01-2023` | 6 records, all series SM (GOLDSTAR's split and bonus among them) |
+| `index=SME&...`, `index=emerge&...` (same dates) | `{"data":[],"msg":"no data found"}` |
+| `index=sme&from_date=01-01-<year>&to_date=31-12-<year>`, 2015 to 2026 | 7 to 274 records a year, 1,650 distinct (Symbol, Ex-Date, subject) |
+| `index=sme&symbol=GOLDSTAR&from_date=01-01-2015&to_date=31-10-2026` | 8 records; the same query with `index=equities` returns `[]` |
+| `index=mf&from_date=01-12-2019&to_date=31-12-2019` | 140 records, series MF (ETF and fund unit actions) |
+| `index=etf&...`, `index=debt&...` (same dates) | `{"data":[],"msg":"no data found"}` |
+
+The value is lower-case `sme`. The records differ from the equity ones in two
+ways that matter to ingest:
+
+- **The `isin` field is not an ISIN.** It holds a number (GOLDSTAR's split:
+  `"isin":"386040"`, its bonus `"386046"`), so the builder could match an SME
+  action only by Symbol, never by the old or new ISIN.
+- **Subjects are in upper case** ("FACE VALUE SPLIT (SUB-DIVISION) - FROM RS
+  10/- PER SHARE TO RE 1/- PER SHARE", "BONUS 4:5"). Run over all 1,650,
+  `adjust.interpret` gives 25 splits and 153 bonuses, and leaves one
+  adjusting subject without a factor: TOUCHWOOD's "BONUS 1.5:1" (ex
+  2019-08-22), which `looks_adjusting` would flag.
+
+**The 21.** Each SME change was checked against the `index=sme` records by
+the builder's own rule (an adjusting action under the Symbol whose Ex-Date is
+within `EX_DATE_SLACK`, seven days, of both the old ISIN's last row and the
+new one's first). 19 of the 21 are explained; the price change on the
+Ex-Date matches the factor in each. In 8 the fall shows on the old ISIN's
+last row, the Ex-Date, a day or three before the new ISIN's first row
+(SHRENIK 942.40 to 205.70 on 2018-07-09, new ISIN from 2018-07-10), which is
+why #29 saw no fall "on the new ISIN" for some.
+
+| Symbol | New ISIN from | Action in `index=sme` (Ex-Date: subject) | Status |
+|---|---|---|---|
+| SHRENIK | 2018-07-10 | 2018-07-09: split Rs 10 to Rs 2 | Cited |
+| AIRAN | 2018-08-16 | 2018-08-14: split Rs 10 to Rs 2 | Cited |
+| MCL | 2019-05-03 | 2019-05-02: split Rs 10 to Rs 5 | Cited |
+| VCL | 2022-03-30 | 2022-03-28: split Rs 10 to Rs 2 | Cited |
+| DUGLOBAL | 2022-07-01 | 2022-06-30: split Rs 10 to Rs 2 | Cited |
+| GOLDSTAR | 2023-01-23 | 2023-01-20: split Rs 10 to Re 1 and bonus 4:5 (factor 1/18; 161.90 to 9.45) | Cited |
+| LATTEYS | 2023-02-10 | 2023-02-10: split Rs 10 to Rs 2 | Cited |
+| SECL | 2023-05-04 | 2023-05-03: split Rs 10 to Re 1 | Cited |
+| CLOUD | 2023-05-12 | 2023-05-12: split Rs 10 to Rs 5 and bonus 1:1 | Cited |
+| ISHAN | 2024-01-25 | 2024-01-25: split Rs 10 to Re 1 and bonus 2:1 (factor 1/30) | Cited |
+| CELLECOR | 2024-08-09 | 2024-08-09: split Rs 10 to Re 1 | Cited |
+| KCK | 2024-10-30 | 2024-10-30: split Rs 10 to Rs 2 | Cited |
+| ENSER | 2025-02-07 | 2025-02-07: split Rs 10 to Rs 2 | Cited |
+| PRITIKA | 2025-02-17 | 2025-02-14: split Rs 10 to Rs 5 | Cited |
+| COOLCAPS | 2025-07-04 | 2025-07-04: split Rs 10 to Rs 2 and bonus 1:1 | Cited |
+| MOS | 2025-08-08 | 2025-08-08: split Rs 10 to Rs 2 | Cited |
+| DHARIWAL | 2026-02-06 | 2026-02-06: split Rs 10 to Rs 2 | Cited |
+| PSRAJ | 2026-07-24 | 2026-07-24: split Rs 10 to Rs 2 | Cited |
+| ORIANA | 2026-09-18 | 2026-09-18: split Rs 10 to Rs 2 | Cited |
+| JSLL | 2025-06-12 | Not in `index=sme` (by year, by month, or with `symbol=JSLL`) nor `index=equities`. Split Rs 10 to Rs 2, record date 2025-06-12: NSE/CML/68231 (Face Value Split, 2025-05-28) and NSE/CML/68416 (Change in ISIN to INE0J5801029, effective 2025-06-12); the company's board outcome of 2025-04-21 (24,860,146 shares of Rs 10 into 124,300,730 of Rs 2, `nsearchives.nseindia.com/corporate/JEENASIKHO_21042025132621_OutcomeJSLLSigned.pdf`) and record-date notice (`JEENASIKHO_24052025183909_Record_Date_Notice.pdf`). 2,250.95 to 429.90. | Cited |
+| GICL | 2025-10-15 | Not in `index=sme` nor `index=equities`. Split Rs 10 to Rs 5 (NSE/CML/70527; NSE/CML/70656, Change in ISIN to INE947T01022 effective 2025-10-15) and bonus 1:1 with the same record date, 2025-10-15 (NSE/CML/70874: 5,59,77,294 bonus shares, distinctive numbers 55,977,295 to 111,954,588, i.e. one for each existing share). The company's filings say the same (`GICL_28082025152224_BM_Outcome_28-08-2025.pdf`, `GICL_30092025162120_Intimation_Record_Date_corrected.pdf`). Factor 1/4; 173.70 to 46.50. | Cited |
+
+So ingesting `index=sme` would explain 19 of the 21 under the current rule,
+with no manual link. JSLL and GICL would remain anomalies until NSE lists
+their actions (both in 2025; that year's `index=sme` list has 92 records
+against 274 for 2024, and is not known to be complete). Whether ingesting `index=sme`
+also changes SME Adjusted Series is a question for the ingest, not answered
+here.
+
+### Fund (INF) ISIN changes are unit splits, each with an NSE circular
+
+The 71 are not reissued units. 70 are face-value splits (sub-divisions) of
+ETF units. NSE announces each with a "Face Value Split" circular and a
+"Change in ISIN" circular from its Listing department, plus an early pay-in
+circular from the clearing corporation. Every one of the 71 new ISINs
+appears in the text of a "Change in ISIN" circular, which was downloaded
+and searched for it; the circular gives the symbol, the new ISIN, the date
+it takes effect and the sub-division ("Sub-Division from Rs. 10/- to Re.
+1/-"). The price falls about ten-fold (a hundred-fold for the Rs 100 to Re 1
+gold ETFs) on the Ex-Date, the old ISIN's last row, a day before the new
+ISIN's first (NIFTYBEES 1,292.54 on 2019-12-18, 130.20 on 2019-12-19 under
+INF732E01011, 130.34 on 2019-12-20 under INF204KB14I2).
+
+The same splits are in NSE's Corporate Action API under `index=mf`
+(requested by half-year, 2015 to 2026). Under the builder's rule, 66 of the
+71 match one there. The five that do not:
+
+- **KOTAKGOLD 2015-04-15**: in `index=mf`, but filed under today's Symbol
+  and ISIN (GOLD1, INF174KA1HJ8, ex 2015-04-13, Rs 100 to Rs 10), neither of
+  which this change carries, so the rule cannot reach it.
+- **IGOLD 2016-06-10, ICICIGOLD 2018-11-16, ICICIBANKN 2022-09-02**: not in
+  `index=mf`. Each has its circulars (below).
+- **HDFCLIQUID 2025-02-28**: not a split. NSE/CML/66863 changes the scheme's
+  name (to "HDFC Nifty 1D Rate Liquid ETF - Growth") and its ISIN from
+  INF179KC1HE2 to INF179KC1JG3 from 2025-02-28, and `index=mf` lists it as
+  "Change In Fundamental Attribute". The price is unchanged (999.99,
+  1,000.34). This one is a true same-unit ISIN change, of the kind ADR 0016's
+  same-Symbol manual link exists for.
+
+| New ISIN from | Fund house | Symbols | Split | Face Value Split circular | Change in ISIN circular | Status |
+|---|---|---|---|---|---|---|
+| 2015-04-15 | Kotak | KOTAKGOLD | Rs 100 to Rs 10 | NSE/CML/29389 | NSE/CML/29412 | Cited |
+| 2016-06-10 | ICICI Prudential | IGOLD | Rs 100 to Rs 10 | NSE/CML/32517 | NSE/CML/32526 | Cited |
+| 2017-07-28 | Kotak | KOTAKNIFTY | Rs 10 to Re 1 | NSE/CML/35394 | NSE/CML/35452 | Cited |
+| 2018-11-16 | ICICI Prudential | ICICIGOLD, ICICINXT50 | Rs 10 to Re 1 | NSE/CML/39361, 39363 | NSE/CML/39383, 39385 | Cited |
+| 2019-12-20 | Reliance Nippon Life (Nippon India) | NIFTYBEES, BANKBEES, PSUBNKBEES, GOLDBEES, NETFNV20, HNGSNGBEES | Rs 10 to Re 1; GOLDBEES Rs 100 to Re 1 | NSE/CML/42873 | NSE/CML/42888 | Cited |
+| 2020-07-27 | Axis | AXISGOLD, AXISNIFTY | Rs 100 to Re 1; Rs 100 to Rs 10 | NSE/CML/45054 | NSE/CML/45074 | Cited |
+| 2021-02-19 | HDFC | HDFCMFGETF, HDFCNIFETF, HDFCSENETF | ten-for-one; HDFCMFGETF Rs 100 to Re 1 | NSE/CML/47320 | NSE/CML/47344 | Cited |
+| 2021-02-19 | UTI | UTIBANKETF, UTISXN50 | Rs 10 to Re 1 | NSE/CML/47279 | NSE/CML/47347 | Cited |
+| 2021-03-26 | UTI | GOLDSHARE, UTINEXT50 | Rs 100 to Re 1; Rs 10 to Re 1 | NSE/CML/47665 | NSE/CML/47721 | Cited |
+| 2021-06-18 | Motilal Oswal | MON100 (N100 in the circular) | Rs 10 to Re 1 | NSE/CML/48556 | NSE/CML/48595 | Cited |
+| 2021-07-23 | Kotak | KOTAKGOLD | Rs 10 to Re 1 | NSE/CML/48928 | NSE/CML/48964 | Cited |
+| 2021-10-29 | ICICI Prudential | ICICI500 | Rs 10 to Re 1 | NSE/CML/50053 | NSE/CML/50106 | Cited |
+| 2021-11-26 | Aditya Birla Sun Life | ABSLBANETF, ABSLNN50ET, BSLGOLDETF, BSLNIFTY, BSLSENETFG | Rs 10 to Re 1; BSLGOLDETF Rs 10 to Re 0.10 | NSE/CML/50329 | NSE/CML/50382 | Cited |
+| 2021-12-17 | Quantum | QGOLDHALF | Rs 100 to Rs 2 | NSE/CML/50496 | NSE/CML/50529 | Cited |
+| 2022-01-07 | SBI | SETFGOLD | Rs 100 to Re 1 | NSE/CML/50859 | NSE/CML/50905 | Cited |
+| 2022-08-12 | Motilal Oswal | MOLOWVOL, MOMOMENTUM | Rs 10 to Rs 2 | NSE/CML/53206 | NSE/CML/53260 | Cited |
+| 2022-09-02 | ICICI Prudential | ICICIBANKN, ICICITECH | Rs 10 to Re 1 | NSE/CML/53404 | NSE/CML/53470 | Cited |
+| 2023-09-25 | UTI | UTINIFTETF | Rs 10 to Re 1 | NSE/CML/58455 | NSE/CML/58523 | Cited |
+| 2023-10-20 | HDFC | HDFCLOWVOL, HDFCMID150, HDFCMOMENT, HDFCNEXT50, HDFCNIF100 | ten-for-one | NSE/CML/58972 | NSE/CML/59009 | Cited |
+| 2024-02-02 | HDFC | HDFCNIFBAN, HDFCNIFIT, HDFCPVTBAN, HDFCSENSEX | ten-for-one | NSE/CML/60421 | NSE/CML/60492 | Cited |
+| 2024-03-01 | ICICI Prudential | AUTOIETF, LOWVOLIETF, NV20IETF, PVTBANIETF | Rs 10 to Re 1 | NSE/CML/60740 | NSE/CML/60870 | Cited |
+| 2024-05-10 | ICICI Prudential | ALPL30IETF, FMCGIETF, MIDCAPIETF, MIDSELIETF, NIF100IETF, QUAL30IETF | Rs 10 to Re 1 | NSE/CML/61766 | NSE/CML/61914 | Cited |
+| 2025-02-28 | HDFC | HDFCLIQUID | none: name and ISIN change | | NSE/CML/66863 | Cited |
+| 2026-02-06 | Groww | GROWWGOLD, GROWWSLVR | Rs 10 to Re 1 | NSE/CML/72553 | NSE/CML/72617 | Cited |
+| 2026-02-13 | Quantum | QNIFTY | Rs 10 to Re 1 | NSE/CML/72620 | NSE/CML/72718 | Cited |
+| 2026-02-27 | Kotak | BANKNIFTY1, CONS, MIDCAP, NV20, SILVER1 | Rs 10 to Re 1 | NSE/CML/72916 | NSE/CML/72980 | Cited |
+| 2026-03-06 | LIC | LICMFGOLD | Rs 100 to Re 1 | NSE/CML/73020 | NSE/CML/73115 | Cited |
+| 2026-04-30 | Invesco | IVZINGOLD | Rs 100 to Re 1 | NSE/CML/73816 | NSE/CML/73909 | Cited |
+| 2026-07-03 | DSP | HEALTHADD, MIDQ50ADD | Rs 10 to Re 1 | NSE/CML/74765 | NSE/CML/74912 | Cited |
+| 2026-07-10 | Kotak | PSUBANK | Rs 10 to Re 1 | NSE/CML/74911 | NSE/CML/75102 | Cited |
+| 2026-07-31 | Invesco | IVZINNIFTY | Rs 10 to Re 1 | NSE/CML/75236 | NSE/CML/75432 | Cited |
+| 2026-08-28 | DSP | GOLDADD, SILVERADD | Rs 10 to Re 1 | NSE/CML/75678 | NSE/CML/75868 | Cited |
+
+The "Change in ISIN" circulars were each read for the new ISIN. The
+"Face Value Split" circulars are cited by their titles in NSE's circular
+search; the ratios in the Split column are from the Change in ISIN
+circulars' remarks and the `index=mf` subjects, of which a sample was read
+against each other (NSE/CML/42888, 29412, 32526, 39383, 48595, 48964, 53470,
+73115, 75102). The circulars for the clearing side (NSE/CMPT/29422,
+32519, 39366, 39367; NCL/CMPT/42889, 45052, 45053, 47323, 47324, 47359 to
+47361, 47685, 47686, 48597, 48962, 50088, 50377, 50556, 50930, 53198,
+53447) say the same and were not read. AMC notices were not needed and not
+searched.
+
+### TIDEWATER and KARDA
+
+Neither has any record in NSE's Corporate Action API under `index=equities`,
+for any date (`symbol=TIDEWATER`, 2015 to 2017, and `symbol=KARDA`, 2019 to
+2021, both return `[]`; the full lists for March 2016 and June to July 2020,
+262 and 249 records, omit them too). Both are explained by NSE circulars.
+
+- **TIDEWATER, 2016-03-17: a split from Rs 10 to Rs 5 and a 1:1 bonus, both
+  ex 2016-03-16. Cited.** NSE/CML/31924 (2016-03-08) changes the face value
+  from Rs 10 to Rs 5 from 2016-03-16. NSE/CML/31978 (2016-03-15, ref
+  201/2016) changes the ISIN to INE484C01022 from 2016-03-17, the record
+  date, "Sub-Division of Equity Shares from Rs. 10/- to Rs. 5/-", effective
+  for trades from the Ex-Date, 2016-03-16. NSE/CMPT/31946 (2016-03-11) sets
+  that Ex-Date for the split. NSE/CML/32044 (2016-03-22) admits 1,742,400
+  "Equity shares of Rs. 5/- each issued under Bonus" (allotted 2016-03-18,
+  distinctive numbers 1,742,401 to 3,484,800, under INE484C01022), one for
+  each of the 1,742,400 shares after the split. The close falls from
+  29,339.80 (2016-03-15) to 7,117.75 (2016-03-16), a factor of 4.12 against
+  the 4 of split and bonus together. The bonus's own Ex-Date is not in a
+  circular that was read; that it is 2016-03-16 is inferred from the price.
+- **KARDA, 2020-07-03: a split from Rs 10 to Rs 2, ex 2020-07-02. Cited.**
+  NSE/CML/44773 (2020-06-25, ref 0521/2020) changes the face value from Rs
+  10 to Rs 2 from 2020-07-02. NSE/CML/44835 (2020-07-01, ref 0537/2020)
+  changes the ISIN to INE278R01026 from 2020-07-03, "Sub-Division from Rs.
+  10/- to Rs. 2/-", effective for trades from the Ex-Date, 2020-07-02.
+  NCL/CMPT/44827 (2020-06-30) sets that Ex-Date in the trade-for-trade
+  market (KARDA was in BE) and states the ratio: one old share for five new.
+  The close falls from 275.65 to 57.90 on 2020-07-02, which is a fifth of
+  the old close plus BE's 5 percent band.
+
+A manual link would join either history without the factor, the reason
+CCAVENUE has none (above); NSE's Corporate Action list supplies the factor
+for neither.
+
+### Unresolved
+
+- **Not decided here:** whether to ingest `index=sme` and `index=mf`, and
+  how. The SME records carry no ISIN, MF records are filed under today's
+  Symbol and ISIN (KOTAKGOLD's 2015 split under GOLD1, INF174KA1HJ8), and
+  TOUCHWOOD's "BONUS 1.5:1" has no factor under `adjust.interpret`.
+- **Not in any NSE list**, though each is cited by circular: JSLL's and
+  GICL's 2025 SME actions; IGOLD's (2016), ICICIGOLD's (2018) and
+  ICICIBANKN's (2022) unit splits; TIDEWATER's split and bonus; KARDA's
+  split. Ingesting either API leaves these as anomalies.
+- **HDFCLIQUID** is the only one of the 94 with no price factor, so the only
+  one a same-Symbol manual link (ADR 0016) could join without leaving an
+  unadjusted fall in the Adjusted Series.
+- **TIDEWATER's bonus Ex-Date** is inferred from the price; the circular
+  read gives only the allotment date (2016-03-18).
+
+### Queries
+
+The changes and their dates, with `psql` on the #29 database:
+
+```sql
+SELECT symbol, on_date, detail FROM instrument_anomalies
+WHERE kind = 'unexplained_isin_change' ORDER BY on_date, symbol;
+```
+
+For each, the old ISIN's last row before `on_date` was taken from
+`eod_bhavcopy` by Symbol and old ISIN. The NSE records were fetched with
+`NseSession(LiveTransport()).get(url)` for the URLs above, and matched with
+`adjust.interpret` and the builder's rule: an action of kind split or bonus,
+filed under the Symbol or carrying the old or new ISIN, with an Ex-Date
+within seven days of both the old ISIN's last row and the new one's first.
+Circulars were listed per batch with `api/circulars` from 25 days before the
+new ISIN's first day to 3 days after, filtered on their subject.
 
 ## Listing dates later than an Instrument's first row (#32)
 
@@ -694,3 +934,4 @@ Within the agreed ₹5,000 to ₹12,000 band with headroom for a paid data upgra
 - Alpha Arena: protos.com coverage, iweaver.ai season 1 results
 - US reference: docs.alpaca.markets market data plans, massive.com pricing (via third-party guides)
 - Listing dates (#32): NSE circulars NSE/CML/46245 and 46277 (SUBEX), 57743 (NESTLEIND), 41893, 58560 and 60618 (FORCEMOT), 45904 and 48190 (CAMS), 28696 and 28574 (SHAKTIPUMP), 57699, 73797, 75748 and 41915, at nsearchives.nseindia.com/content/circulars/CML<number>.pdf or .zip, found through nseindia.com/api/circulars; Nestlé India's Regulation 30 disclosure of the NSE listing (nestle.in, special announcements); CAMS's press release filing of 2021-05-07 (nsearchives.nseindia.com/corporate/CAMS_07052021180955_Pressrelease.pdf); NSE's "Securities Available for Trading" page (nseindia.com/static/products-services/equity-market-securities-available-for-trading); NSE's About Equities page for the capital market segment's opening on 1994-11-03 (nseindia.com/static/products-services/about-equity-market); NSE's data description (archives.nseindia.com/content/press/Data_details_CM.pdf); archived copies of NSE's EQUITY_L.csv at web.archive.org (snapshots 20150102124557, 20150310012511, 20181219143033, 20210516062344, 20220102154932, 20230428005156, 20250726163846)
+- ISIN changes (#33): NSE's Corporate Action API (nseindia.com/api/corporates-corporateActions with `index=equities`, `sme` and `mf`); NSE circulars NSE/CML/29389, 29412, 31924, 31978, 32044, 32517, 32526, 35394, 35452, 39361, 39363, 39383, 39385, 42873, 42888, 44773, 44835, 45054, 45074, 47279, 47320, 47344, 47347, 47665, 47721, 48556, 48595, 48928, 48964, 50053, 50106, 50329, 50382, 50496, 50529, 50859, 50905, 53206, 53260, 53404, 53470, 58455, 58523, 58972, 59009, 60421, 60492, 60740, 60870, 61766, 61914, 66863, 68231, 68416, 70527, 70656, 70874, 72553, 72617, 72620, 72718, 72916, 72980, 73020, 73115, 73816, 73909, 74765, 74911, 74912, 75102, 75236, 75432, 75678, 75868, NSE/CMPT/31946 and NCL/CMPT/44827, at nsearchives.nseindia.com/content/circulars/, found through nseindia.com/api/circulars; Jeena Sikho Lifecare's and Globe International Carriers' filings at nsearchives.nseindia.com/corporate/, found through nseindia.com/api/corporate-announcements
