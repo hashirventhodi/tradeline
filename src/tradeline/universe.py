@@ -14,10 +14,11 @@ the ``lookback_trading_days`` trading days before M. A symbol is eligible when:
   so a symbol moved to trade-for-trade (BE) or listed on SME is not;
 - its ISIN does not begin with ``excluded_isin_prefix`` (INF: ETFs and other
   fund units, which NSE trades in series EQ);
-- at least ``min_listing_trading_days`` trading days of Listing Age fall from
-  its listing date to the day before M. The listing date is the equity master's; a symbol
-  the master no longer lists (one since delisted) falls back to its first
-  end-of-day row, which is exact once history is loaded back to its listing.
+- its Listing Age, the trading days from its listing date to the day before
+  M, is at least ``min_listing_trading_days``. The listing date is the equity
+  master's; a symbol the master no longer lists (one since delisted) falls
+  back to its first end-of-day row, which is exact once history is loaded
+  back to its listing.
 
 Eligible symbols are ranked by traded value in the rule's series over the
 window, descending, ties broken by symbol ascending, and the top ``top_n`` are

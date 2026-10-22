@@ -47,7 +47,7 @@ BY_SYMBOL = UniverseRule(
     min_presence_percent=90,
 )
 BY_INSTRUMENT = replace(BY_SYMBOL, rank_by="instrument")
-EARLIEST = replace(BY_INSTRUMENT, listing_age_from="earliest_evidence")
+EARLIEST_EVIDENCE = replace(BY_INSTRUMENT, listing_age_from="earliest_evidence")
 
 # Window traded value over 28 March to 30 April 2025, from the untrimmed files.
 RELIANCE = Decimal("402258396718.85")
@@ -170,10 +170,10 @@ def test_listing_age_counts_from_the_first_row_when_the_listing_date_comes_after
     load(fresh_database_url, master=Playback(FIXTURES, EOD_FIXTURES, edit=admitted_late))
     with app_connection(fresh_database_url) as conn:
         by_listing_date = {s.symbol: s for s in standings(conn, BY_INSTRUMENT, month=MAY)}
-        compute_universe(conn, EARLIEST, month=MAY)
+        compute_universe(conn, EARLIEST_EVIDENCE, month=MAY)
 
         assert by_listing_date["RELIANCE"].excluded == "listed 8 trading days, fewer than 21"
-        assert (1, "RELIANCE", RELIANCE) in members(conn, EARLIEST)
+        assert (1, "RELIANCE", RELIANCE) in members(conn, EARLIEST_EVIDENCE)
         # The key keeps NSE's date.
         assert queries.resolve_symbol(conn, "RELIANCE", as_of=END).key == "RELIANCE@2025-04-21"
 
