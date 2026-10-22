@@ -1,4 +1,4 @@
-"""``reconcile``: Kite's daily candles against NSE's end-of-day files.
+"""Kite Parity: Kite's daily candles against NSE's end-of-day files (ADR 0018).
 
 For every Instrument and series that has candles stored, each trading day in
 the range is compared on presence and close, an end-of-day row and a candle
@@ -9,13 +9,19 @@ Instrument all the same. Of two candles of one Instrument-day under different
 Kite names, the one under the more recent name is compared
 (``queries.instrument_daily_candles``), and where the two differ the day is
 reported as a **candle disagreement**, listed but not counted as a
-discrepancy: the compared candle is the one Kite serves today. A Symbol in no Instrument (none
-rebuilt yet) stands for its own. Series moves are compared as before, per
-series.
+difference: the compared candle is the one Kite serves today. A Symbol in no
+Instrument (none rebuilt yet) stands for its own. Each series is compared on
+its own; a candle on a day NSE lists its Instrument only in another listing
+series is an extra, explained as a series move.
 
 - **missing**: NSE has an end-of-day row and there is no candle;
 - **extra**: there is a candle and NSE has no end-of-day row;
 - **close**: both exist and the closes disagree beyond the tolerance.
+
+Each difference is then given the first Parity Reason that explains it, tried
+in the order ``REASONS`` lists for its kind, or is **unexplained**. A Parity
+Reason is a rule over data we hold, never a list of dates, and a new one needs
+ADR 0018 to agree it first.
 
 A candle dated before its Instrument's Listing Age starts (the view
 ``instrument_listing_age``, ADR 0017) is a **Pre-listing Candle**: the
@@ -51,10 +57,10 @@ rows and are never close mismatches, like a stretch too short to show a bad
 close. Only the close is compared; a zero open, high or low is
 ``compare-adjusted``'s to find.
 
-The run passes when all discrepancies together, close mismatches as well as
-missing and extra rows, are under ``max_discrepancy_pct`` of the rows
-compared, a row being one (Instrument, series, day) present on either side; a
-run exactly at the threshold fails. Nothing is written: reconcile is a read.
+The run passes when unexplained differences, of all three kinds, are under
+``max_unexplained_pct`` of the rows compared, a row being one (Instrument,
+series, day) present on either side; a run exactly at the threshold fails.
+Nothing is written: parity is a read.
 """
 
 from __future__ import annotations
@@ -62,26 +68,52 @@ from __future__ import annotations
 import bisect
 import statistics
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
+from enum import StrEnum
 from typing import Any, Literal
 
 import psycopg
 
 from tradeline import queries
 from tradeline.config import Config
+from tradeline.instruments import LISTING_SERIES
 
 Kind = Literal["missing", "extra", "close"]
+KINDS: tuple[Kind, ...] = ("missing", "extra", "close")
 HALF_TICK = Decimal("0.025")
 HUNDRED = Decimal(100)
-# Every discrepancy is counted; this many of each kind are listed in a summary.
+# Every difference is counted; this many unexplained ones are listed in a summary.
 MAX_LISTED = 100
 
 
+class Reason(StrEnum):
+    """A Parity Reason: a stated, checkable cause of a difference (ADR 0018).
+
+    Each is a member, with its rule in ``_rules`` and its place in
+    ``REASONS``. Still to come: additive adjustment and coarse rounding (#52),
+    not fetched (#53), and a Special Session (#55).
+    """
+
+    # A candle on a day NSE lists its Instrument in another listing series and
+    # not in the candle's: Kite's token carrying on through BE or BZ days.
+    SERIES_MOVE = "series_move"
+
+
+# Each kind's Parity Reasons, in the order they are tried; the first that applies is
+# recorded. ADR 0018's order: missing, a Special Session then not fetched; extra, a
+# series move; close, an additive adjustment over its stretch then coarse rounding.
+REASONS: Mapping[Kind, tuple[Reason, ...]] = {
+    "missing": (),
+    "extra": (Reason.SERIES_MOVE,),
+    "close": (),
+}
+
+
 @dataclass(frozen=True)
-class Discrepancy:
+class Difference:
     kind: Kind
     symbol: str
     series: str
@@ -90,6 +122,8 @@ class Discrepancy:
     eod_close: Decimal | None
     # NSE's close times Kite's factor for the stretch; only for a close mismatch.
     expected_close: Decimal | None = None
+    # The Parity Reason that explains it; None where it is unexplained.
+    reason: Reason | None = None
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -100,6 +134,7 @@ class Discrepancy:
             "candle_close": _text(self.candle_close),
             "eod_close": _text(self.eod_close),
             "expected_close": _text(self.expected_close),
+            "reason": None if self.reason is None else self.reason.value,
         }
 
 
@@ -127,37 +162,60 @@ class PreListingCandle:
 
 
 @dataclass(frozen=True)
-class ReconcileReport:
+class ParityReport:
     start: date
     end: date
     close_tolerance: Decimal
-    max_discrepancy_pct: Decimal
+    max_unexplained_pct: Decimal
     rows: int
-    missing: tuple[Discrepancy, ...]
-    extra: tuple[Discrepancy, ...]
-    close_mismatches: tuple[Discrepancy, ...]
-    # Instrument-days stored under two Kite names with different values; not discrepancies.
+    # Every difference of each kind, explained or not.
+    missing: tuple[Difference, ...]
+    extra: tuple[Difference, ...]
+    close_mismatches: tuple[Difference, ...]
+    # Instrument-days stored under two Kite names with different values; not differences.
     candle_disagreements: tuple[queries.CandleDisagreement, ...] = ()
-    # Candles from before their Instrument's Listing Age starts; not discrepancies.
+    # Candles from before their Instrument's Listing Age starts; not differences.
     pre_listing_candles: tuple[PreListingCandle, ...] = ()
 
-    @property
-    def discrepancies(self) -> int:
-        """Every discrepancy of the three kinds: missing, extra, and close mismatches."""
-        return len(self.missing) + len(self.extra) + len(self.close_mismatches)
+    def of_kind(self, kind: Kind) -> tuple[Difference, ...]:
+        return {"missing": self.missing, "extra": self.extra, "close": self.close_mismatches}[kind]
 
     @property
-    def discrepancy_pct(self) -> Decimal:
-        return HUNDRED * self.discrepancies / self.rows
+    def differences(self) -> int:
+        """Every difference of the three kinds, explained or not."""
+        return sum(len(self.of_kind(kind)) for kind in KINDS)
 
     @property
-    def reconciliation_pct(self) -> Decimal:
-        return HUNDRED - self.discrepancy_pct
+    def unexplained(self) -> tuple[Difference, ...]:
+        """The differences no Parity Reason explains: missing, then extra, then close."""
+        return tuple(d for kind in KINDS for d in self.of_kind(kind) if d.reason is None)
+
+    @property
+    def unexplained_pct(self) -> Decimal:
+        return HUNDRED * len(self.unexplained) / self.rows
 
     @property
     def passed(self) -> bool:
-        """Discrepancies strictly under the threshold."""
-        return self.discrepancy_pct < self.max_discrepancy_pct
+        """Unexplained differences strictly under the threshold."""
+        return self.unexplained_pct < self.max_unexplained_pct
+
+    @property
+    def by_kind(self) -> dict[str, dict[str, int]]:
+        """Each kind's differences: in all, under each of its reasons, and unexplained."""
+        return {
+            kind: {"total": len(self.of_kind(kind))}
+            | {reason.value: _count(self.of_kind(kind), reason) for reason in REASONS[kind]}
+            | {"unexplained": _count(self.of_kind(kind), None)}
+            for kind in KINDS
+        }
+
+    @property
+    def by_reason(self) -> dict[str, int]:
+        """The differences under each Parity Reason, of any kind, then the unexplained."""
+        every = [d for kind in KINDS for d in self.of_kind(kind)]
+        return {reason.value: _count(every, reason) for reason in Reason} | {
+            "unexplained": _count(every, None)
+        }
 
     def summary(self) -> dict[str, Any]:
         """The machine-readable report: same data, same output, key for key."""
@@ -165,20 +223,15 @@ class ReconcileReport:
             "start": self.start.isoformat(),
             "end": self.end.isoformat(),
             "close_tolerance": str(self.close_tolerance),
-            "max_discrepancy_pct": str(self.max_discrepancy_pct),
+            "max_unexplained_pct": str(self.max_unexplained_pct),
             "rows": self.rows,
-            "discrepancies": self.discrepancies,
-            "missing": len(self.missing),
-            "extra": len(self.extra),
-            "close_mismatches": len(self.close_mismatches),
-            "discrepancy_pct": _pct(self.discrepancy_pct),
-            "reconciliation_pct": _pct(self.reconciliation_pct),
+            "differences": self.differences,
+            "unexplained": len(self.unexplained),
+            "unexplained_pct": _pct(self.unexplained_pct),
             "passed": self.passed,
-            "listed": [
-                d.summary()
-                for kind in (self.missing, self.extra, self.close_mismatches)
-                for d in kind[:MAX_LISTED]
-            ],
+            "by_kind": self.by_kind,
+            "by_reason": self.by_reason,
+            "listed_unexplained": [d.summary() for d in self.unexplained[:MAX_LISTED]],
             "candle_disagreements": len(self.candle_disagreements),
             "listed_candle_disagreements": [
                 _disagreement_summary(d) for d in self.candle_disagreements[:MAX_LISTED]
@@ -191,18 +244,16 @@ class ReconcileReport:
 
     def text(self) -> str:
         """The human-readable report."""
+        unexplained = self.unexplained
         lines = [
-            f"reconcile {self.start} to {self.end}: {self.rows} rows,"
-            f" {self.discrepancies} discrepancies ({len(self.missing)} missing,"
+            f"parity {self.start} to {self.end}: {self.rows} rows,"
+            f" {self.differences} differences ({len(self.missing)} missing,"
             f" {len(self.extra)} extra, {len(self.close_mismatches)} close),"
-            f" {_pct(self.reconciliation_pct)}% reconciled,"
-            f" must be under {self.max_discrepancy_pct}%: {'PASS' if self.passed else 'FAIL'}",
+            f" {len(unexplained)} unexplained ({_pct(self.unexplained_pct)}%),"
+            f" must be under {self.max_unexplained_pct}%: {'PASS' if self.passed else 'FAIL'}",
+            "by reason: " + ", ".join(f"{name} {n}" for name, n in self.by_reason.items()),
         ]
-        listed = [
-            d
-            for kind in (self.missing, self.extra, self.close_mismatches)
-            for d in kind[:MAX_LISTED]
-        ]
+        listed = unexplained[:MAX_LISTED]
         if listed:
             header = ("kind", "symbol", "series", "date", "candle", "eod", "expected")
             cells = [header] + [
@@ -219,14 +270,15 @@ class ReconcileReport:
             ]
             widths = [max(len(row[i]) for row in cells) for i in range(len(header))]
             lines.append("")
+            lines.append("unexplained:")
             lines.extend(
                 "  ".join(
                     cell.ljust(width) for cell, width in zip(row, widths, strict=True)
                 ).rstrip()
                 for row in cells
             )
-        if listed and len(listed) < self.discrepancies:
-            lines.append(f"... {self.discrepancies - len(listed)} more not listed")
+        if len(listed) < len(unexplained):
+            lines.append(f"... {len(unexplained) - len(listed)} more not listed")
         if self.candle_disagreements:
             count = len(self.candle_disagreements)
             lines.append("")
@@ -256,6 +308,10 @@ class ReconcileReport:
             if count > MAX_LISTED:
                 lines.append(f"... {count - MAX_LISTED} more not listed")
         return "\n".join(lines) + "\n"
+
+
+def _count(differences: Sequence[Difference], reason: Reason | None) -> int:
+    return sum(1 for d in differences if d.reason == reason)
 
 
 def _disagreement_summary(d: queries.CandleDisagreement) -> dict[str, Any]:
@@ -298,14 +354,82 @@ class _Row:
         )
 
 
-def reconcile(
+@dataclass(frozen=True)
+class _Stretch:
+    """One Instrument and series's compared bars between two Ex-Dates, with Kite's factor."""
+
+    rows: tuple[_Row, ...]
+    factor: Decimal
+
+
+@dataclass(frozen=True)
+class _Found:
+    """A difference before it is classified, with what a Parity Reason's rule may read."""
+
+    kind: Kind
+    row: _Row
+    # The close mismatch's stretch and NSE's close times its factor; None otherwise.
+    stretch: _Stretch | None = None
+    expected: Decimal | None = None
+
+
+# A Parity Reason's rule: whether it explains a difference.
+_Rule = Callable[[_Found], bool]
+
+
+def _rules(
+    conn: psycopg.Connection, settings: Config.Parity, rows: Sequence[_Row]
+) -> Mapping[Reason, _Rule]:
+    """The rule of each Parity Reason, built once per run from the data it reads.
+
+    A rule needing data beyond the compared rows (the Trading Calendar, the
+    requested ranges, NSE's rows in other series) loads it here, once."""
+    listed = _listed_series(conn, [r for r in rows if not r.has_eod])
+
+    def series_move(found: _Found) -> bool:
+        row = found.row
+        return bool(listed[(row.instrument, row.trade_date)] - {row.series})
+
+    return {Reason.SERIES_MOVE: series_move}
+
+
+def _listed_series(
+    conn: psycopg.Connection, extras: Sequence[_Row]
+) -> defaultdict[tuple[str, date], set[str]]:
+    """The listing series NSE lists each extra's Instrument in on the extra's day.
+
+    An end-of-day row belongs to the Instrument its Symbol named that day, so
+    a row under any of the Instrument's Symbols counts, as in ``_rows``."""
+    listed: defaultdict[tuple[str, date], set[str]] = defaultdict(set)
+    if not extras:
+        return listed
+    found = conn.execute(
+        "SELECT DISTINCT x.instrument, x.trade_date, b.series"
+        " FROM unnest(%(instruments)s::text[], %(days)s::date[]) AS x(instrument, trade_date)"
+        " JOIN eod_bhavcopy b ON b.trade_date = x.trade_date"
+        " LEFT JOIN symbol_instruments m ON m.symbol = b.symbol"
+        "  AND names_on(m.after, m.through, b.trade_date)"
+        " WHERE coalesce(m.instrument_key, b.symbol) = x.instrument"
+        "  AND b.series = ANY(%(series)s)",
+        {
+            "instruments": [r.instrument for r in extras],
+            "days": [r.trade_date for r in extras],
+            "series": list(LISTING_SERIES),
+        },
+    ).fetchall()
+    for instrument, trade_date, series in found:
+        listed[(instrument, trade_date)].add(series)
+    return listed
+
+
+def parity(
     conn: psycopg.Connection,
-    settings: Config.Reconcile,
+    settings: Config.Parity,
     *,
     start: date,
     end: date,
     symbols: Sequence[str] | None = None,
-) -> ReconcileReport:
+) -> ParityReport:
     """Compare stored candles with end-of-day rows from ``start`` to ``end`` inclusive.
 
     Every instrument with candles is compared unless ``symbols`` narrows it; a
@@ -319,30 +443,49 @@ def reconcile(
         _refuse_symbols_without_candles(conn, names)
     found = _rows(conn, start, end, names)
     if not found:
-        raise ValueError(f"no candles or end-of-day rows to reconcile from {start} to {end}")
+        raise ValueError(f"no candles or end-of-day rows to compare from {start} to {end}")
     rows = [r for r in found if not r.pre_listing]
     pre_listing = tuple(_pre_listing(r) for r in found if r.pre_listing)
     if not rows:
         count = len(pre_listing)
         raise ValueError(
-            f"nothing to reconcile from {start} to {end}: only {count}"
+            f"nothing to compare from {start} to {end}: only {count}"
             f" pre-listing candle{'s' if count != 1 else ''}"
         )
 
     tolerance = Decimal(str(settings.close_tolerance))
-    missing = tuple(_discrepancy("missing", r) for r in rows if not r.has_candle)
-    extra = tuple(_discrepancy("extra", r) for r in rows if not r.has_eod)
-    return ReconcileReport(
+    rules = _rules(conn, settings, rows)
+
+    def classified(differences: Sequence[_Found]) -> tuple[Difference, ...]:
+        return tuple(_classify(d, rules) for d in differences)
+
+    return ParityReport(
         start=start,
         end=end,
         close_tolerance=tolerance,
-        max_discrepancy_pct=Decimal(str(settings.max_discrepancy_pct)),
+        max_unexplained_pct=Decimal(str(settings.max_unexplained_pct)),
         rows=len(rows),
-        missing=missing,
-        extra=extra,
-        close_mismatches=_close_mismatches(conn, rows, tolerance),
+        missing=classified([_Found("missing", r) for r in rows if not r.has_candle]),
+        extra=classified([_Found("extra", r) for r in rows if not r.has_eod]),
+        close_mismatches=classified(_close_mismatches(conn, rows, tolerance)),
         candle_disagreements=_candle_disagreements(conn, rows, start, end),
         pre_listing_candles=pre_listing,
+    )
+
+
+def _classify(found: _Found, rules: Mapping[Reason, _Rule]) -> Difference:
+    """The difference under the first of its kind's Parity Reasons that explains it."""
+    reason = next((r for r in REASONS[found.kind] if rules[r](found)), None)
+    row = found.row
+    return Difference(
+        kind=found.kind,
+        symbol=row.symbol,
+        series=row.series,
+        trade_date=row.trade_date,
+        candle_close=row.candle_close,
+        eod_close=row.eod_close,
+        expected_close=None if found.expected is None else found.expected.quantize(Decimal("0.01")),
+        reason=reason,
     )
 
 
@@ -434,10 +577,10 @@ def _refuse_symbols_without_candles(conn: psycopg.Connection, names: list[str]) 
 
 def _close_mismatches(
     conn: psycopg.Connection, rows: list[_Row], tolerance: Decimal
-) -> tuple[Discrepancy, ...]:
+) -> list[_Found]:
     # Rows with both closes, grouped into the stretches between Ex-Dates.
     # An Instrument's Ex-Dates are those filed under any of its Symbols.
-    stretches: dict[tuple[str, str, int], list[_Row]] = defaultdict(list)
+    grouped: dict[tuple[str, str, int], list[_Row]] = defaultdict(list)
     ex_dates: dict[str, list[date]] = {}
     for row in rows:
         if row.candle_close is None or not row.eod_close:  # NSE can state no close
@@ -446,24 +589,22 @@ def _close_mismatches(
             ex_dates[row.instrument] = sorted(
                 {action.ex_date for action in queries.corporate_actions(conn, row.instrument)}
             )
-        stretch = bisect.bisect_right(ex_dates[row.instrument], row.trade_date)
-        stretches[(row.instrument, row.series, stretch)].append(row)
+        after = bisect.bisect_right(ex_dates[row.instrument], row.trade_date)
+        grouped[(row.instrument, row.series, after)].append(row)
 
-    mismatches: list[Discrepancy] = []
-    for stretch_rows in stretches.values():
+    mismatches: list[_Found] = []
+    for stretch_rows in grouped.values():
         # A zero close rounded away and shows no factor; a stretch of only those has none.
         ratios = [_ratio(r) for r in stretch_rows if r.candle_close]
         if not ratios:
             continue
-        factor = statistics.median(ratios)
+        stretch = _Stretch(rows=tuple(stretch_rows), factor=statistics.median(ratios))
         for r in stretch_rows:
-            expected = _of(r.eod_close) * factor
+            expected = _of(r.eod_close) * stretch.factor
             if abs(_of(r.candle_close) - expected) > tolerance * expected + HALF_TICK:
-                mismatches.append(
-                    _discrepancy("close", r, expected=expected.quantize(Decimal("0.01")))
-                )
-    mismatches.sort(key=lambda d: (d.symbol, d.series, d.trade_date))
-    return tuple(mismatches)
+                mismatches.append(_Found("close", r, stretch=stretch, expected=expected))
+    mismatches.sort(key=lambda d: (d.row.symbol, d.row.series, d.row.trade_date))
+    return mismatches
 
 
 def _ratio(row: _Row) -> Decimal:
@@ -474,18 +615,6 @@ def _of[T](value: T | None) -> T:
     if value is None:
         raise ValueError("a value was expected")
     return value
-
-
-def _discrepancy(kind: Kind, row: _Row, *, expected: Decimal | None = None) -> Discrepancy:
-    return Discrepancy(
-        kind=kind,
-        symbol=row.symbol,
-        series=row.series,
-        trade_date=row.trade_date,
-        candle_close=row.candle_close,
-        eod_close=row.eod_close,
-        expected_close=expected,
-    )
 
 
 def _text(value: Decimal | None) -> str | None:

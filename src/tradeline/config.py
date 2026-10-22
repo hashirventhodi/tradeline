@@ -107,15 +107,15 @@ class Config:
         feeds: dict[str, str] = field(default_factory=dict)
 
     @dataclass(frozen=True)
-    class Reconcile:
+    class Parity:
         # A candle's close differs from the end-of-day close when it is further
         # from it, once Kite's own adjustment factor is taken out, than this
         # fraction of the price plus half of Kite's 5 paisa tick.
         close_tolerance: float = 0.001
-        # ``reconcile`` passes only when missing, extra, and close-mismatched
-        # rows together are under this percentage of the rows compared; a run
-        # exactly at it fails (Phase 1: under 0.1).
-        max_discrepancy_pct: float = 0.1
+        # Kite Parity passes only when the differences no Parity Reason
+        # explains are under this percentage of the rows compared; a run
+        # exactly at it fails (Phase 1: under 0.1, ADR 0018).
+        max_unexplained_pct: float = 0.1
 
     @dataclass(frozen=True)
     class Integrity:
@@ -147,7 +147,7 @@ class Config:
 
     logging: Logging = field(default_factory=Logging)
     universe: UniverseRule = field(default_factory=UniverseRule)
-    reconcile: Reconcile = field(default_factory=Reconcile)
+    parity: Parity = field(default_factory=Parity)
     news: News = field(default_factory=News)
     instruments: Instruments = field(default_factory=Instruments)
     corporate_actions: CorporateActions = field(default_factory=CorporateActions)
@@ -158,11 +158,23 @@ def default_config_path() -> Path:
     return Path(os.environ.get(CONFIG_PATH_VAR, DEFAULT_CONFIG_PATH))
 
 
+# Sections that were removed, each with what replaced it, so an old file is told where
+# its settings went rather than only that the section is unknown.
+RETIRED_SECTIONS = {
+    "reconcile": "[reconcile] is retired; Kite Parity's settings are in [parity]"
+    " (close_tolerance, max_unexplained_pct) and the Integrity Check's in [integrity],"
+    " ADR 0018",
+}
+
+
 def load_config(path: Path) -> Config:
     if not path.exists():
         raise ConfigError(f"config file {path} does not exist")
     with path.open("rb") as f:
         raw = tomllib.load(f)
+    for section, message in RETIRED_SECTIONS.items():
+        if section in raw:
+            raise ConfigError(f"{path}: {message}")
     return _build(Config, raw, prefix="")
 
 
