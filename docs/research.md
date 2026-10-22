@@ -1404,6 +1404,125 @@ UPERGANGES 5, PRAKASH 3, BEPL 2 and GOLDINFRA 1.
 - **Later moves.** A Large Move after 2026-10-19, or a new ever-member's
   earlier one, fails the check until a record is added.
 
+## Ten-year Integrity Check and Kite Parity (#59)
+
+Run on 2026-10-22 on the #29 database, with #17's code (ADR 0018), the
+reviewed Trading Calendar (#57) and the Large Move records (#58), against
+live Kite responses. The range is #13's and #29's, 2016-10-21 to 2026-10-20.
+
+| Step | Result | Runtime |
+|---|---|---|
+| `migrate` | 0025 (`candle_requests`). | under 1 s |
+| `ingest candles --interval day --from 2016-10-21 --to 2026-10-20`, once per Symbol already holding candles (464) | 928 requests, each recorded: 464 (Symbol, series) pairs, merged to one range each. 1,007,665 bars seen, **1,435 written** (expected 0; BAFNAPH, below). 823 (Symbol, series) pairs without a token, skipped and not recorded. 0 anomalies. | 5 min |
+| `integrity` | **Pass.** Below. | 22 s |
+| `parity` | **Fail: 2.09 percent** unexplained against 0.1. Below. | 2 min 19 s |
+
+### The re-fetch wrote BAFNAPH's history
+
+A named Symbol is fetched under every series it has a token for. BAFNAPH
+had candles only for July and August 2024 (#13's 998 missing), and its BE
+token returned 1,435 bars more, from 2020-03-02. The spec put fetching its
+history out of scope, but the bars are kept: their requests are recorded,
+so without them every one of those days would read as a bar Kite was asked
+for and did not return. BAFNAPH is now compared like any other Instrument,
+which is why "not fetched" is 0 below.
+
+### Integrity
+
+`tradeline integrity --from 2016-10-21 --to 2026-10-20`: PASS.
+
+- 2,478 trading days, 0 day failures; the calendar covers the range.
+- 517 ever-members; 37 Large Moves in the range, all explained by records
+  (21 demerger, 13 market, 1 rights, 1 dividend, 1 resumed). 0 unexplained,
+  0 unresolved, 0 unmatched and 0 duplicate records. #58's other six moves
+  fall before 2016-10-21.
+- 2,667 gaps across 18 Instruments, reported and never failed: FCEL 449,
+  HDIL 334, RCOM 295, LYCOS 241, JPASSOCIAT 227, FRETAIL 218, RELCAPITAL
+  194, SINTEX 180, EROSMEDIA 108, SREINFRA 103, RELINFRA 79, FORCEMOT 76,
+  MEP 61, ABAN 50, PIPAVAVDOC 27, IBREALEST 12, SUBEX 10, PRAKASH 3.
+
+### Parity beside #29
+
+`tradeline parity --from 2016-10-21 --to 2026-10-20`: 1,008,709 rows
+compared, 44,755 differences, 21,069 unexplained (**2.09 percent**): FAIL.
+
+| Kind | Parity Reason | #29 (reconcile) | #59 |
+|---|---|---|---|
+| extra | series move | 13,596 | 14,033 |
+| extra | unexplained | 8 (MAZDOCK) | 0 (MAZDOCK's 8 are Pre-listing Candles, #34) |
+| missing | Special Session | 1,044 (muhurat) | 1,044 |
+| missing | not fetched | 998 (BAFNAPH) | 0 (BAFNAPH fetched, above) |
+| missing | unexplained | 8 | 8 |
+| close | additive adjustment | about 29,670 | 5,238 |
+| close | coarse rounding | (with the above) | 3,371 |
+| close | unexplained | | 21,061 |
+| | **total** | **45,324 (4.50 percent)** | **44,755; unexplained 21,069 (2.09 percent)** |
+
+Series moves rose by 437 with BAFNAPH's BE history in the comparison.
+
+- **Missing, unexplained (8).** The same single days as #29: CEBBCO
+  2018-12-03 to 2018-12-05, DWARKESH 2019-01-08, SUBEX 2019-01-08, FORCEMOT
+  2019-08-19, IIFLWAM 2019-10-04 and MCDOWELL-N 2019-11-08. NSE has a row,
+  and Kite has no bar inside a requested range. Cause not found.
+- **Close, unexplained (21,061),** in 274 stretches of 45 Instruments. Every
+  stretch has at least five bars, so none fails the additive rule for being
+  short. Each fails it on the half-tick limit:
+
+| Max distance from the least-squares fit, per stretch | Unexplained closes |
+|---|---|
+| at most 3 paisa | 6,817 |
+| over 3, at most 5 paisa | 4,109 |
+| over 5, at most 10 paisa | 7,906 |
+| over 10 paisa | 2,229 |
+
+  - **Additive, then rounded to Kite's tick (about 18,930).** One a and b
+    hold across consecutive stretches, often for years: GNFC a = 0.932,
+    b = 43.33 (1,742 closes); BANKBARODA 0.936, 7.11 (1,668); CANBK 0.187,
+    3.01 (1,641); ASHOKLEY 0.500, 2.48 (1,149). The same holds for HINDPETRO,
+    VEDL, MPHASIS, M&MFIN, BPCL, TECHM, TATASTEEL, HEROMOTOCO, POWERGRID,
+    NMDC, IOC and GAIL. Kite's closes there are on a 5 paisa tick, or a
+    10 paisa one (MPHASIS, TECHM). A price rounded to a 5 paisa tick can be
+    2.5 paisa from the true line, and a least-squares line drawn through
+    rounded prices is itself a little off it, so the largest gap lands just
+    above 2.5 paisa (2.7 to 3.1 paisa for CANBK, TATASTEEL, BANKBARODA,
+    ASHOKLEY). On a 10 paisa tick it reaches about 10 paisa (MPHASIS,
+    TECHM). The rule as written (ADR 0018) cannot pass these.
+  - **Additive with coarser rounding (about 2,080).** OFSS (1,531, up to
+    51 paisa), BSE, NIITTECH, GODFRYPHLP, TATAINVEST, MCX and NAUKRI: fits
+    off by 27 to 57 paisa, on a 10 paisa tick or coarser. These look like
+    additive history rounded to the rupee or half-rupee, a combination of
+    two reasons the rules apply one at a time.
+  - **Single days and one short run (about 55).** One to three bars in 16
+    Instruments (34 closes, up to ₹6 off: DMART, SBILIFE, PNBHOUSING,
+    AUBANK, TEJASNET, DIXON, HINDZINC and others), and 20 SHANKARA closes
+    about ₹6 off in one stretch. Cause not found.
+
+### Outcome
+
+The Integrity Check passes: nothing in NSE's data as we hold it is lost or
+unexplained. Kite Parity fails at 2.09 percent, and nearly all of that is
+one cause, Kite's additive adjustment rounded to its own tick, which the
+half-tick limit was set too tight to recognise. Even a limit of one 10 paisa
+tick would explain about 18,800 of the 21,061 and leave about 2,240
+unexplained (0.22 percent), still a fail.
+
+### Unresolved
+
+- **The additive rule's limit.** Half a tick from a least-squares fit does
+  not allow for Kite's rounding of the adjusted price. A rule that does,
+  for example a fit within one of Kite's ticks, or one a and b shared
+  across an Instrument's consecutive stretches, needs ADR 0018 to agree
+  it. It is not given here.
+- **Additive history rounded coarser** (OFSS, BSE, MCX, TATAINVEST,
+  GODFRYPHLP, NIITTECH, NAUKRI): a follow-up decides whether one reason may
+  combine the additive fit with rupee rounding.
+- **The 8 missing single days and about 55 isolated close mismatches**:
+  causes not found.
+- **Fetching every series of a named Symbol** filled BAFNAPH's BE history
+  on a run meant to write nothing. A re-fetch meant only to record requests
+  would need the (Symbol, series) pairs already held, which `ingest candles`
+  cannot be asked for today.
+
 ## US-market findings (for reference; not the chosen market)
 
 Alpaca offers free paper trading with IEX data and ₹99-equivalent full SIP data; Massive (formerly Polygon) runs 29 to 199 dollars a month; SEC EDGAR is free. These made the US the easier engineering choice. The Operator chose Indian equities, which cost more in friction (no sandbox, daily login, static IP) but is the market they trade.
