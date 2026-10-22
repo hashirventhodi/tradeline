@@ -24,8 +24,10 @@ import pytest
 from playback import (
     Candle,
     CandleEdit,
+    Edit,
     Playback,
     affine_prices,
+    bhavcopy_series,
     drop_bar,
     kite_candles,
     shift_close,
@@ -58,9 +60,9 @@ def untouched(request: Request, candles: list[Candle]) -> list[Candle]:
     return candles
 
 
-def load(url: str, edit: CandleEdit = untouched) -> None:
+def load(url: str, edit: CandleEdit = untouched, eod: Edit | None = None) -> None:
     with app_connection(url) as conn:
-        ingest_eod(conn, PlaybackTransport(FIXTURES / "ingest_eod"), start=START, end=END)
+        ingest_eod(conn, Playback(FIXTURES / "ingest_eod", edit=eod), start=START, end=END)
         ingest_corporate_actions(
             conn,
             PlaybackTransport(FIXTURES / "ingest_corporate_actions"),
@@ -200,7 +202,7 @@ def test_with_no_parity_reason_yet_every_difference_is_unexplained_and_counted_b
     assert (summary["differences"], summary["unexplained"]) == (2, 2)
     assert summary["by_kind"] == {
         "missing": {"total": 1, "unexplained": 1},
-        "extra": {"total": 0, "unexplained": 0},
+        "extra": {"total": 0, "series_move": 0, "unexplained": 0},
         "close": {
             "total": 1,
             "additive_adjustment": 0,
@@ -209,6 +211,7 @@ def test_with_no_parity_reason_yet_every_difference_is_unexplained_and_counted_b
         },
     }
     assert summary["by_reason"] == {
+        "series_move": 0,
         "additive_adjustment": 0,
         "coarse_rounding": 0,
         "unexplained": 2,
@@ -217,6 +220,46 @@ def test_with_no_parity_reason_yet_every_difference_is_unexplained_and_counted_b
         ("missing", None),
         ("close", None),
     ]
+
+
+def test_a_candle_on_a_day_nse_lists_the_instrument_only_in_be_is_a_series_move(
+    fresh_database_url: str,
+) -> None:
+    # NSE lists INFY in BE on 15 July 2024; Kite's EQ token carries on that day.
+    load(fresh_database_url, eod=bhavcopy_series(date(2024, 7, 15), "INFY", "BE"))
+
+    report = run(fresh_database_url)
+
+    assert report.extra == (
+        Difference(
+            kind="extra",
+            symbol="INFY",
+            series="EQ",
+            trade_date=date(2024, 7, 15),
+            candle_close=Decimal("1670.9"),
+            eod_close=None,
+            reason=Reason.SERIES_MOVE,
+        ),
+    )
+    assert report.unexplained == ()
+    assert report.passed
+    summary = report.summary()
+    assert summary["by_kind"]["extra"] == {"total": 1, "series_move": 1, "unexplained": 0}
+    assert summary["by_reason"]["series_move"] == 1
+
+
+def test_a_candle_on_a_day_nse_lists_the_instrument_in_no_series_stays_unexplained(
+    fresh_database_url: str,
+) -> None:
+    load(fresh_database_url, eod=bhavcopy_series(date(2024, 7, 15), "INFY", None))
+
+    report = run(fresh_database_url)
+
+    assert [(d.kind, d.symbol, d.trade_date, d.reason) for d in report.unexplained] == [
+        ("extra", "INFY", date(2024, 7, 15), None)
+    ]
+    assert (report.by_reason["series_move"], report.by_reason["unexplained"]) == (0, 1)
+    assert not report.passed
 
 
 def test_an_empty_database_cannot_pass(fresh_database_url: str) -> None:
@@ -411,7 +454,7 @@ def test_the_command_exits_zero_on_clean_fixtures_with_a_summary_and_a_table(
         "passed": True,
         "by_kind": {
             "missing": {"total": 0, "unexplained": 0},
-            "extra": {"total": 0, "unexplained": 0},
+            "extra": {"total": 0, "series_move": 0, "unexplained": 0},
             "close": {
                 "total": 0,
                 "additive_adjustment": 0,
@@ -419,7 +462,12 @@ def test_the_command_exits_zero_on_clean_fixtures_with_a_summary_and_a_table(
                 "unexplained": 0,
             },
         },
-        "by_reason": {"additive_adjustment": 0, "coarse_rounding": 0, "unexplained": 0},
+        "by_reason": {
+            "series_move": 0,
+            "additive_adjustment": 0,
+            "coarse_rounding": 0,
+            "unexplained": 0,
+        },
         "listed_unexplained": [],
         "candle_disagreements": 0,
         "listed_candle_disagreements": [],
@@ -464,7 +512,10 @@ def test_the_command_exits_non_zero_above_the_configured_threshold(
         }
     ]
     assert "1 unexplained (0.5814%), must be under 0.1%: FAIL" in strict_table
-    assert "by reason: additive_adjustment 0, coarse_rounding 0, unexplained 1" in strict_table
+    assert (
+        "by reason: series_move 0, additive_adjustment 0, coarse_rounding 0, unexplained 1"
+        in strict_table
+    )
     assert "missing  INFY" in strict_table
 
 

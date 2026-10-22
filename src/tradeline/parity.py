@@ -10,8 +10,9 @@ Kite names, the one under the more recent name is compared
 (``queries.instrument_daily_candles``), and where the two differ the day is
 reported as a **candle disagreement**, listed but not counted as a
 difference: the compared candle is the one Kite serves today. A Symbol in no
-Instrument (none rebuilt yet) stands for its own. Series moves are compared as
-before, per series.
+Instrument (none rebuilt yet) stands for its own. Each series is compared on
+its own; a candle on a day NSE lists its Instrument only in another listing
+series is an extra, explained as a series move.
 
 - **missing**: NSE has an end-of-day row and there is no candle;
 - **extra**: there is a candle and NSE has no end-of-day row;
@@ -88,6 +89,7 @@ import psycopg
 
 from tradeline import queries
 from tradeline.config import Config
+from tradeline.instruments import LISTING_SERIES
 
 Kind = Literal["missing", "extra", "close"]
 KINDS: tuple[Kind, ...] = ("missing", "extra", "close")
@@ -102,10 +104,12 @@ class Reason(StrEnum):
     """A Parity Reason: a stated, checkable cause of a difference (ADR 0018).
 
     Each is a member, with its rule in ``_rules`` and its place in
-    ``REASONS``: a series move (#51), additive adjustment and coarse rounding
-    (#52), not fetched (#53), and a Special Session (#55).
+    ``REASONS``. Still to come: not fetched (#53) and a Special Session (#55).
     """
 
+    # A candle on a day NSE lists its Instrument in another listing series and
+    # not in the candle's: Kite's token carrying on through BE or BZ days.
+    SERIES_MOVE = "series_move"
     # Kite's close is a x NSE's - b over the mismatch's whole stretch (``_additive``).
     ADDITIVE_ADJUSTMENT = "additive_adjustment"
     # Kite's close is NSE's times the stretch's factor rounded to the rupee, half to even.
@@ -117,7 +121,7 @@ class Reason(StrEnum):
 # series move; close, an additive adjustment over its stretch then coarse rounding.
 REASONS: Mapping[Kind, tuple[Reason, ...]] = {
     "missing": (),
-    "extra": (),
+    "extra": (Reason.SERIES_MOVE,),
     "close": (Reason.ADDITIVE_ADJUSTMENT, Reason.COARSE_ROUNDING),
 }
 
@@ -394,6 +398,12 @@ def _rules(
 
     A rule needing data beyond the compared rows (the Trading Calendar, the
     requested ranges, NSE's rows in other series) loads it here, once."""
+    listed = _listed_series(conn, [r for r in rows if not r.has_eod])
+
+    def series_move(found: _Found) -> bool:
+        row = found.row
+        return bool(listed[(row.instrument, row.trade_date)] - {row.series})
+
     additive: dict[int, bool] = {}  # by id of a stretch, which lives as long as the run
 
     def additive_adjustment(found: _Found) -> bool:
@@ -403,6 +413,7 @@ def _rules(
         return additive[id(stretch)]
 
     return {
+        Reason.SERIES_MOVE: series_move,
         Reason.ADDITIVE_ADJUSTMENT: additive_adjustment,
         Reason.COARSE_ROUNDING: _coarse_rounding,
     }
@@ -431,6 +442,35 @@ def _additive(stretch: _Stretch, min_bars: int) -> bool:
     a = sum(((x - mean_x) * (y - mean_y) for x, y in points), Decimal(0)) / spread
     b = a * mean_x - mean_y
     return all(abs(y - (a * x - b)) <= HALF_TICK for x, y in points)
+
+
+def _listed_series(
+    conn: psycopg.Connection, extras: Sequence[_Row]
+) -> defaultdict[tuple[str, date], set[str]]:
+    """The listing series NSE lists each extra's Instrument in on the extra's day.
+
+    An end-of-day row belongs to the Instrument its Symbol named that day, so
+    a row under any of the Instrument's Symbols counts, as in ``_rows``."""
+    listed: defaultdict[tuple[str, date], set[str]] = defaultdict(set)
+    if not extras:
+        return listed
+    found = conn.execute(
+        "SELECT DISTINCT x.instrument, x.trade_date, b.series"
+        " FROM unnest(%(instruments)s::text[], %(days)s::date[]) AS x(instrument, trade_date)"
+        " JOIN eod_bhavcopy b ON b.trade_date = x.trade_date"
+        " LEFT JOIN symbol_instruments m ON m.symbol = b.symbol"
+        "  AND names_on(m.after, m.through, b.trade_date)"
+        " WHERE coalesce(m.instrument_key, b.symbol) = x.instrument"
+        "  AND b.series = ANY(%(series)s)",
+        {
+            "instruments": [r.instrument for r in extras],
+            "days": [r.trade_date for r in extras],
+            "series": list(LISTING_SERIES),
+        },
+    ).fetchall()
+    for instrument, trade_date, series in found:
+        listed[(instrument, trade_date)].add(series)
+    return listed
 
 
 def parity(

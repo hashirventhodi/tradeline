@@ -254,3 +254,33 @@ def bhavcopy_as_of(day: date, recorded: date) -> tuple[Ask, Edit]:
         return moved.getvalue()
 
     return ask, edit
+
+
+def bhavcopy_series(day: date, symbol: str, series: str | None) -> Edit:
+    """NSE's end-of-day file for ``day`` with ``symbol``'s row moved to ``series``, or
+    left out where ``series`` is None, as a day NSE lists it elsewhere or not at all.
+
+    The file must be in UDiFF, where the series follows the Symbol. Every other
+    body is served as recorded.
+    """
+    url = bhavcopy_url(day)
+
+    def edit(request: Request, body: bytes) -> bytes:
+        if request.url != url:
+            return body
+        with zipfile.ZipFile(io.BytesIO(body)) as archive:
+            (name,) = archive.namelist()
+            rows = archive.read(name).decode().split("\n")
+        kept = []
+        for row in rows:
+            if f",{symbol}," not in row:
+                kept.append(row)
+            elif series is not None:
+                before, after = row.split(f",{symbol},", 1)
+                kept.append(f"{before},{symbol},{series},{after.split(',', 1)[1]}")
+        moved = io.BytesIO()
+        with zipfile.ZipFile(moved, "w") as archive:
+            archive.writestr(name, "\n".join(kept))
+        return moved.getvalue()
+
+    return edit
