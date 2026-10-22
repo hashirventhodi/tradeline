@@ -150,7 +150,7 @@ An Instrument's daily prices and volumes exactly as NSE's official end-of-day fi
 _Avoid_: Unadjusted prices, raw candles (the broker's candles are the broker's own adjusted view)
 
 **Corporate Action**:
-An event NSE lists for a Symbol that takes effect on an Ex-Date, and so for the Instrument that Symbol named that day: a split, bonus, rights issue, dividend, demerger, or meeting. Splits and bonuses change the Adjusted Series; rights issues and dividends are flagged on it; the rest are recorded only.
+An event NSE lists for a Symbol, or states in a circular a reviewed row cites, that takes effect on an Ex-Date, and so for the Instrument that Symbol named that day: a split, bonus, rights issue, dividend, demerger, or meeting. Splits and bonuses change the Adjusted Series; rights issues and dividends are flagged on it; the rest are recorded only.
 _Avoid_: CA, event, announcement (an announcement is a filing, which may or may not describe a Corporate Action)
 
 **Ex-Date**:

@@ -1,6 +1,7 @@
 ---
 status: accepted
 date: 2026-10-21
+amended: 2026-10-22
 ---
 # An Instrument is joined only by official, dated links, and splits on doubt
 
@@ -31,3 +32,7 @@ Anything else splits the history and is reported as an anomaly: an unexplained I
 ## Amendment (2026-10-21, #32): the key's date is not Listing Age
 
 NSE's equity-master listing date is the security's last admission to dealings on the main board, and can come years after its first trading day on NSE (NESTLEIND's is 2023-08-01, the day it moved from "permitted to trade" to listed). The key keeps that date: it is an identity, reproduced by every rebuild, and re-keying would change stored memberships and manual links. Listing Age no longer counts from it (ADR 0017).
+
+## Amendment (2026-10-22, #37): a circular-cited split or bonus explains an ISIN change
+
+A split or bonus supplied by a cited NSE circular (ADR 0006, amended by #37) counts as one NSE lists: a new ISIN under the same Symbol on its Ex-Date is joined by the same rule. The same-Symbol manual links it makes redundant are removed, so one cited row both joins and adjusts. A manual link stays for an ISIN change no split or bonus explains (YESBANK, HDFCLIQUID), or one whose action does not qualify (TIDEWATER).

@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-10-21
-amended: 2026-10-21
+amended: 2026-10-22
 ---
 # Price history comes from Kite and NSE only, with our own corporate-action adjustment
 
@@ -18,3 +18,14 @@ The original text called Kite's candles "raw and unadjusted". They are not: Kite
 - Adjusted prices are rounded to the 5 paisa tick with ties to the even tick, the rule that reproduces Kite's bars exactly above Rs 250. Below Rs 250, where NSE's tick has been 1 paisa since June 2024, the broker's rounding is unverified and the same rule is applied until evidence says otherwise.
 
 Alternatives rejected: adjusting Kite's bars a second time (double-counts every action Kite applied); storing the adjusted series (an audit cannot then tell raw from derived, and a new action would require rewriting history).
+
+## Amendment (2026-10-22, #37): a split or bonus NSE's lists omit may come from a cited NSE circular
+
+Some splits and bonuses are in none of NSE's Corporate Action lists, though NSE announced each by circular: KARDA's 2020 split, JSLL's and GICL's 2025 SME splits, three ICICI ETF unit splits, and KOTAKGOLD's 2015 split, which the fund-unit list files under today's Symbol GOLD1, a Symbol that did not name the Instrument then. Joined by a manual link alone (ADR 0016), each left an unadjusted 4x to 10x fall in its Adjusted Series. So:
+
+- **A reviewed, checked-in row citing NSE circulars may supply a split or bonus** that no NSE list has. The circulars must state both the ratio and the Ex-Date. An Ex-Date inferred from prices does not qualify (TIDEWATER's 2016 bonus, whose Ex-Date no circular read states, stays unadjusted and is flagged with #15's kinds). Only the exchange's own circulars count: a company filing gives the record date, not the Ex-Date.
+- **The row states NSE's subject wording, never a factor.** The factor is derived from it by the same reading as a listed action, and the row is stored in `corporate_actions` with its source and citation, append-only like the rest.
+- **It must agree with the price.** A row whose factor differs by more than 20 percent from the previous close over the Ex-Date close, read across the Instrument's series, is refused, and so is a row without both closes. A wrong ratio or Ex-Date is out by a factor of two or more; a price band or an odd print (TIDEWATER fell 4.12-fold against a factor of 4) is not.
+- **NSE's list wins.** If an NSE list has an adjusting action for the same Instrument with an Ex-Date within seven days of the row's, the row is not applied and is reported as superseded, so a split NSE files as two actions and a row files as one is never counted twice. A different combined factor on that date is reported as an anomaly.
+
+Alternatives rejected: leaving the series discontinuous and flagged (the official source exists and the arithmetic is the same); widening the Symbol window so KOTAKGOLD reaches GOLD1's record (a reused Symbol would then attach another security's action); a factor column on the manual links (it mixes identity with adjustment, and a bonus with no ISIN change has no link).
