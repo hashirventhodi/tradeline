@@ -526,6 +526,32 @@ def universe_membership(
     return [UniverseMember(*row) for row in rows]
 
 
+@dataclass(frozen=True)
+class EverMember:
+    """A Symbol stored in some Universe month, under any rule version, and its Instrument now.
+
+    ``instrument`` is the stored key when the last rebuild still has it, else the
+    Instrument the Symbol named on the day before the month (``resolve_symbol``'s
+    rule): a rule ranking Symbols stores no key, and a later rebuild can retire
+    one (``obsolete_universe_keys``). None when no Instrument answers for it.
+    """
+
+    symbol: str
+    instrument: str | None
+
+
+def universe_ever_members(conn: psycopg.Connection) -> list[EverMember]:
+    """Every distinct (Symbol, Instrument) of every stored Universe month, by Instrument key
+    (those with none last), then Symbol."""
+    rows = conn.execute(
+        "SELECT DISTINCT m.symbol, CASE WHEN EXISTS"
+        "  (SELECT 1 FROM instruments i WHERE i.key = m.instrument_key) THEN m.instrument_key"
+        f"  ELSE ({_named_by('m.symbol', 'm.month - 1')}) END AS instrument"
+        " FROM universe_membership m ORDER BY instrument, m.symbol"
+    ).fetchall()
+    return [EverMember(*row) for row in rows]
+
+
 def universe_rule_versions(conn: psycopg.Connection) -> list[UniverseRuleVersion]:
     """Every Universe Rule version recorded, oldest first."""
     rows = conn.execute(

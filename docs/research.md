@@ -1210,6 +1210,90 @@ delisting or suspension (2018 and 2020), and searching the text.
 - **How such candles are reported** is #34's second checkbox, for the
   Operator.
 
+## The Trading Calendar (#57)
+
+Researched on 2026-10-22 against NSE's circulars and checked against the #29
+database (end-of-day files 2015-01-01 to 2026-10-19). The circular search
+`nseindia.com/api/circulars` was read with `dept=CMTR` (which also returns
+some NSE/MSD circulars) and with `dept=MSD`, for December 2014 to October
+2026: 1,855 and 662 circulars. Every subject naming a holiday, muhurat, live
+or Special Session, Saturday or Sunday, budget or election was read, and the
+PDFs at `nsearchives.nseindia.com/content/circulars/<dept><number>.pdf` were
+fetched and read for each row of `trading_calendar.csv`.
+
+### Sources
+
+- **Holidays.** The Capital Market segment's annual "Trading holidays for the
+  calendar year" circular: NSE/CMTR/28337 (2015), 31297 (2016), 33746
+  (2017), 36475 (2018), 39612 (2019), 42877 (2020), 46623 (2021), 50560
+  (2022), 54757 (2023), 59722 (2024), 65587 (2025) and 71775 (2026). Only
+  the weekday holidays are rows; each circular also lists those falling on a
+  weekend.
+- **Holidays added or moved later**: NSE/CMTR/40536 (2019-04-29,
+  Parliamentary Elections), NSE/MSD/42319 (2019-10-21, Maharashtra Assembly
+  Elections), NSE/CMTR/57285 (Bakri Id moved from 2023-06-28 to 2023-06-29),
+  NSE/CMTR/60338 (2024-01-22, a public holiday under the Negotiable
+  Instruments Act), NSE/CMTR/61518 (2024-05-20, Parliamentary Elections),
+  NSE/CMTR/64960 (2024-11-20, Maharashtra Assembly Elections) and
+  NSE/CMTR/72260 (2026-01-15, Maharashtra Municipal Corporation Elections).
+- **Muhurat sessions**, each cited with the annual circular that names its
+  day: NSE/CMTR/31047 (2015-11-11), 33424 (2016-10-30), 35993 (2017-10-19),
+  39216 (2018-11-07), 42403 and its revised timings 42483 (2019-10-27; 42403
+  is a scanned PDF with no text), 46230 (2020-11-14), 50050 (2021-11-04),
+  54023 (2022-10-24), 59124 (2023-11-12), 64628 (2024-11-01), 70319
+  (2025-10-21) and 76941 (2026-11-08).
+- **Union Budget sessions**: NSE/CMTR/28939 (Saturday 2015-02-28), 43290
+  (Saturday 2020-02-01), 65729 and NSE/MSD/66381 (Saturday 2025-02-01), and
+  NSE/CMTR/72349 (Sunday 2026-02-01).
+- **Saturday sessions of 2024**: NSE/MSD/59999 announced 2024-01-20 as a
+  live session with an intraday switch to the DR site, and NSE/MSD/60340
+  held it on the primary site at regular timings instead. NSE/MSD/60677
+  (2024-03-02) and 61893 (2024-05-18) were held with the switch to DR.
+
+The calendar has 170 holidays and 19 Special Sessions. A weekday muhurat
+(2015, 2017, 2018, 2021, 2022, 2024, 2025) is a Special Session, not a
+holiday, though the annual circular lists its day among the holidays as
+"Diwali Laxmi Pujan*": NSE published an end-of-day file for each. NSE's
+extended live sessions on weekdays (NSE/CMTR/32304 and the "Extended LIVE
+TRADING session" circulars) and its weekday live sessions from the DR site are normal trading days, so they
+are not rows. Mock trading sessions publish no file and are not rows.
+
+### Circulars and files
+
+Every one of the 166 weekdays without a file from 2015-01-01 to 2026-10-19
+is a holiday a circular names, and every one of the 11 weekend files is a
+Special Session a circular announced. #13's 167 weekdays ran to 2026-10-20,
+Dussehra. No file is lost and none was re-ingested.
+
+No circular and file disagree once the later circulars are read. Three
+days would disagree with the annual circular alone:
+
+- **2023-06-28 and 2023-06-29.** NSE/CMTR/54757 made 2023-06-28 the Bakri Id
+  holiday; NSE/CMTR/57285 moved it to 2023-06-29 the day before, after
+  Maharashtra's notification. The files agree with the move: 2023-06-28 has
+  a file and 2023-06-29 has none.
+- **2024-01-22** is in no annual circular. NSE/CMTR/60338 declared it on the
+  Friday before (2024-01-19), when the Saturday 2024-01-20 session had
+  already been called; the files have 2024-01-20 and not 2024-01-22.
+
+The election holidays (2019-04-29, 2019-10-21, 2024-05-20, 2024-11-20,
+2026-01-15) are likewise absent from their annual circulars and named in a
+later one.
+
+### Outcome
+
+`tradeline integrity --from 2015-01-01 --to 2026-10-19` on the #29 database,
+on 2026-10-22: PASS, 2,923 trading days checked, 0 day failures. The
+calendar covers the rest of 2026 from NSE/CMTR/71775 and 76941: holidays
+2026-10-20, 2026-11-10, 2026-11-24 and 2026-12-25, and the muhurat session
+on Sunday 2026-11-08.
+
+### Unresolved
+
+- **Later changes to 2026.** A holiday NSE adds or moves after 2026-10-22,
+  or a session it calls, is not in the calendar; the file check names such a
+  day once its file is ingested (or found missing).
+
 ## US-market findings (for reference; not the chosen market)
 
 Alpaca offers free paper trading with IEX data and ₹99-equivalent full SIP data; Massive (formerly Polygon) runs 29 to 199 dollars a month; SEC EDGAR is free. These made the US the easier engineering choice. The Operator chose Indian equities, which cost more in friction (no sandbox, daily login, static IP) but is the market they trade.
@@ -1246,3 +1330,4 @@ Within the agreed ₹5,000 to ₹12,000 band with headroom for a paid data upgra
 - US reference: docs.alpaca.markets market data plans, massive.com pricing (via third-party guides)
 - Listing dates (#32): NSE circulars NSE/CML/46245 and 46277 (SUBEX), 57743 (NESTLEIND), 41893, 58560 and 60618 (FORCEMOT), 45904 and 48190 (CAMS), 28696 and 28574 (SHAKTIPUMP), 57699, 73797, 75748 and 41915, at nsearchives.nseindia.com/content/circulars/CML<number>.pdf or .zip, found through nseindia.com/api/circulars; Nestlé India's Regulation 30 disclosure of the NSE listing (nestle.in, special announcements); CAMS's press release filing of 2021-05-07 (nsearchives.nseindia.com/corporate/CAMS_07052021180955_Pressrelease.pdf); NSE's "Securities Available for Trading" page (nseindia.com/static/products-services/equity-market-securities-available-for-trading); NSE's About Equities page for the capital market segment's opening on 1994-11-03 (nseindia.com/static/products-services/about-equity-market); NSE's data description (archives.nseindia.com/content/press/Data_details_CM.pdf); archived copies of NSE's EQUITY_L.csv at web.archive.org (snapshots 20150102124557, 20150310012511, 20181219143033, 20210516062344, 20220102154932, 20230428005156, 20250726163846)
 - ISIN changes (#33): NSE's Corporate Action API (nseindia.com/api/corporates-corporateActions with `index=equities`, `sme` and `mf`); NSE circulars NSE/CML/29389, 29412, 31924, 31978, 32044, 32517, 32526, 35394, 35452, 39361, 39363, 39383, 39385, 42873, 42888, 44773, 44835, 45054, 45074, 47279, 47320, 47344, 47347, 47665, 47721, 48556, 48595, 48928, 48964, 50053, 50106, 50329, 50382, 50496, 50529, 50859, 50905, 53206, 53260, 53404, 53470, 58455, 58523, 58972, 59009, 60421, 60492, 60740, 60870, 61766, 61914, 66863, 68231, 68416, 70527, 70656, 70874, 72553, 72617, 72620, 72718, 72916, 72980, 73020, 73115, 73816, 73909, 74765, 74911, 74912, 75102, 75236, 75432, 75678, 75868, NSE/CMPT/31946 and NCL/CMPT/44827, at nsearchives.nseindia.com/content/circulars/, found through nseindia.com/api/circulars; Jeena Sikho Lifecare's and Globe International Carriers' filings at nsearchives.nseindia.com/corporate/, found through nseindia.com/api/corporate-announcements
+- Trading Calendar (#57): NSE's circular search (nseindia.com/api/circulars, `dept=CMTR` and `dept=MSD`, December 2014 to October 2026); NSE circulars NSE/CMTR/28337, 28939, 31047, 31297, 33424, 33746, 35993, 36475, 39216, 39612, 40536, 42403, 42483, 42877, 43290, 46230, 46623, 50050, 50560, 54023, 54757, 57285, 59124, 59722, 60338, 61518, 64628, 64960, 65587, 65729, 70319, 71775, 72260, 72349, 76941 and NSE/MSD/42319, 59999, 60340, 60677, 61893, 66381, at nsearchives.nseindia.com/content/circulars/<dept><number>.pdf (57285 and 60338 are .zip)

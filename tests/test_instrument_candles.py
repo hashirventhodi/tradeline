@@ -50,7 +50,11 @@ NSE = FIXTURES_DIR / "instruments"
 START, END = date(2025, 4, 7), date(2025, 4, 11)
 ETERNAL = "ZOMATO@2021-07-23"
 ETERNAL_TOKEN = "1304833"
-SETTINGS = Config.Parity(close_tolerance=0.001, max_unexplained_pct=0.1)
+SETTINGS = Config.Parity(
+    close_tolerance=0.001,
+    max_unexplained_pct=0.1,
+    trading_calendar=str(FIXTURES_DIR / "trading_calendar.csv"),
+)
 # Kite's candles as recorded: (day, close).
 KITE_CLOSES = [
     (date(2025, 4, 7), "209.63"),

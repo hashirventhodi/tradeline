@@ -21,7 +21,10 @@ series is an extra, explained as a series move.
 Each difference is then given the first Parity Reason that explains it, tried
 in the order ``REASONS`` lists for its kind, or is **unexplained**. A Parity
 Reason is a rule over data we hold, never a list of dates, and a new one needs
-ADR 0018 to agree it first.
+ADR 0018 to agree it first. A missing candle on a day the Trading Calendar
+(``parity.trading_calendar``, the file the Integrity Check reads) lists as a
+Special Session is explained as one; a calendar that does not load refuses
+the run, as it refuses the Integrity Check.
 
 A close mismatch is tried first as an **additive adjustment**: Kite adjusts
 some older histories by subtracting as well as scaling (GNFC, OFSS), which no
@@ -83,6 +86,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_HALF_EVEN, Decimal
 from enum import StrEnum
+from pathlib import Path
 from typing import Any, Literal
 
 import psycopg
@@ -90,6 +94,7 @@ import psycopg
 from tradeline import queries
 from tradeline.config import Config
 from tradeline.instruments import LISTING_SERIES
+from tradeline.trading_calendar import load_trading_calendar
 
 Kind = Literal["missing", "extra", "close"]
 KINDS: tuple[Kind, ...] = ("missing", "extra", "close")
@@ -104,12 +109,14 @@ class Reason(StrEnum):
     """A Parity Reason: a stated, checkable cause of a difference (ADR 0018).
 
     Each is a member, with its rule in ``_rules`` and its place in
-    ``REASONS``. Still to come: not fetched (#53) and a Special Session (#55).
+    ``REASONS``. Still to come: not fetched (#53).
     """
 
     # A candle on a day NSE lists its Instrument in another listing series and
     # not in the candle's: Kite's token carrying on through BE or BZ days.
     SERIES_MOVE = "series_move"
+    # A missing candle on a day the Trading Calendar lists as a Special Session.
+    SPECIAL_SESSION = "special_session"
     # Kite's close is a x NSE's - b over the mismatch's whole stretch (``_additive``).
     ADDITIVE_ADJUSTMENT = "additive_adjustment"
     # Kite's close is NSE's times the stretch's factor rounded to the rupee, half to even.
@@ -120,7 +127,7 @@ class Reason(StrEnum):
 # recorded. ADR 0018's order: missing, a Special Session then not fetched; extra, a
 # series move; close, an additive adjustment over its stretch then coarse rounding.
 REASONS: Mapping[Kind, tuple[Reason, ...]] = {
-    "missing": (),
+    "missing": (Reason.SPECIAL_SESSION,),
     "extra": (Reason.SERIES_MOVE,),
     "close": (Reason.ADDITIVE_ADJUSTMENT, Reason.COARSE_ROUNDING),
 }
@@ -404,6 +411,11 @@ def _rules(
         row = found.row
         return bool(listed[(row.instrument, row.trade_date)] - {row.series})
 
+    special_sessions = load_trading_calendar(Path(settings.trading_calendar)).special_sessions
+
+    def special_session(found: _Found) -> bool:
+        return found.row.trade_date in special_sessions
+
     additive: dict[int, bool] = {}  # by id of a stretch, which lives as long as the run
 
     def additive_adjustment(found: _Found) -> bool:
@@ -414,6 +426,7 @@ def _rules(
 
     return {
         Reason.SERIES_MOVE: series_move,
+        Reason.SPECIAL_SESSION: special_session,
         Reason.ADDITIVE_ADJUSTMENT: additive_adjustment,
         Reason.COARSE_ROUNDING: _coarse_rounding,
     }

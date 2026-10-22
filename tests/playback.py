@@ -8,6 +8,7 @@ onto the recorded one, an ``edit`` that changes the recorded body, or both.
 
 import io
 import json
+import re
 import zipfile
 from collections.abc import Callable
 from datetime import date, datetime
@@ -284,3 +285,28 @@ def bhavcopy_series(day: date, symbol: str, series: str | None) -> Edit:
         return moved.getvalue()
 
     return edit
+
+
+def bhavcopy_rows(edit: Callable[[date, list[str]], list[str]]) -> Edit:
+    """An edit of the CSV lines of each UDiFF end-of-day file (from 2024-07-08), given its day.
+
+    Every other body, and a day NSE has no file for, is served as recorded.
+    """
+
+    def edit_body(request: Request, body: bytes) -> bytes:
+        found = _UDIFF_DAY.search(request.url)
+        if found is None or not zipfile.is_zipfile(io.BytesIO(body)):
+            return body
+        day = datetime.strptime(found.group(1), "%Y%m%d").date()
+        with zipfile.ZipFile(io.BytesIO(body)) as archive:
+            (name,) = archive.namelist()
+            text = archive.read(name).decode()
+        edited = io.BytesIO()
+        with zipfile.ZipFile(edited, "w") as archive:
+            archive.writestr(name, "\n".join(edit(day, text.split("\n"))))
+        return edited.getvalue()
+
+    return edit_body
+
+
+_UDIFF_DAY = re.compile(r"/BhavCopy_NSE_CM_0_0_0_(\d{8})_F_0000\.csv\.zip$")

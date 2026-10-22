@@ -119,12 +119,26 @@ class Config:
         # A stretch's close mismatches are an additive adjustment only when it
         # has at least this many compared bars to fit a x NSE - b over.
         additive_min_bars: int = 5
+        # The Trading Calendar whose Special Sessions explain a missing candle:
+        # the same file as ``integrity.trading_calendar``, relative to the
+        # working directory.
+        trading_calendar: str = "trading_calendar.csv"
 
     @dataclass(frozen=True)
     class Integrity:
         # The checked-in Trading Calendar (``tradeline.trading_calendar``),
         # relative to the working directory.
         trading_calendar: str = "trading_calendar.csv"
+        # The checked-in Large Move records (``tradeline.large_move_records``),
+        # relative to the working directory.
+        large_moves: str = "large_moves.csv"
+        # A close more than this many times the previous close, either way,
+        # is a Large Move.
+        large_move_ratio: float = 1.5
+
+        def __post_init__(self) -> None:
+            if not self.large_move_ratio > 1:
+                raise ConfigError("integrity.large_move_ratio must be more than 1")
 
     @dataclass(frozen=True)
     class Instruments:
