@@ -90,6 +90,82 @@ to a free line. Loose mode reaches 685 (0.0679 %), but needs 10 free `f x - b` s
 (COALINDIA ×5, KARURVYSYA ×2, BEL, SSLT ×2) and near-identity fitted stages that nudge
 closes by a paisa. That is a fit, not a model, so the numbers above are strict.
 
+### Fitted stages in mixed gaps (`RULES=final_strict`)
+
+A fitted stage covers a **gap**: every Ex-Date between the older stretch and the newer one it
+joins. When several Ex-Dates fall in one gap (the stretches between them do not stand), the
+gap is **mixed** if it holds both a fittable action (rights, demerger, scheme, AGM, buyback, ...)
+and a computed-kind one (split, bonus, consolidation, or a dividend of any era). Under
+`RULES=final` a mixed gap gets one stage, and a fitted one can fold a computed action into its r.
+
+Of `final`'s 56 fitted stages, 49 are clean (a gap of their own Ex-Date alone: every rights and
+demerger stage) and 7 sit in mixed gaps, all at an AGM or buyback (or with one in the gap):
+
+| Instrument | Fitted at | r (final) | Gap's computed-kind actions | Class |
+|---|---|---|---|---|
+| IIFLWAM | 2022-09-22 AGM | 4.000221 | 1:1 bonus + 2-for-1 split 2023-03-02, 2 dividends | absorbing: the split, r = 4 (off 5.5e-05) |
+| MAJESCO | 2020-11-12 buyback | 84.597234 | Rs 974 dividend 2020-12-23 (pre-July-2023) | absorbing: P/(P-D) = 84.605150 (off 9.4e-05) |
+| MOTHERSUMI | 2022-01-14 demerger | 1.676522 | 1:2 bonus 2018-10-30, 5 dividends, an AGM | absorbing + residual: 1.5 x 1.117681 |
+| COALINDIA | 2020-09-14 AGM | 1.008696 (116/115, off the 6-decimal grid) | 10 dividends 2020-11..2023-11 | separate: nearest computed value 1.013834, 0.5 % away |
+| COALINDIA | 2019-02-14 buyback | 1.000023 | dividend 2019-03-22 | near-identity |
+| COALINDIA | 2018-09-04 AGM | 0.999983 | dividend 2018-12-28 | near-identity |
+| COALINDIA | 2017-08-31 AGM | 0.999949 | dividend 2018-03-16 | near-identity |
+
+No join crosses a split: within every Kite Basis, the Ex-Dates between member stretches hold only
+dividends and fittable actions, so a basis's one r cannot fold in a split that way.
+
+`RULES=final_strict` is `final` except in a mixed gap, where a fitted stage may not absorb,
+replace or distort a computed action:
+
+- **(a)** each computed-kind Ex-Date gets its own computed stage, at its own Ex-Date, with its
+  computed value (every form `final` offers), or no stage where the rules allow none: any
+  dividend may carry none, and one before 2023-07-01 always does. A split, bonus or
+  consolidation always has its stage.
+- **(b)** a fitted stage sits at a fittable action's own Ex-Date, in Ex-Date order among the
+  gap's computed stages (earlier ones inside it, later ones outside). Its r is fitted with them
+  in place, so it carries only what they do not. Every fittable Ex-Date is tried; equal results
+  go to the latest, as in `final`.
+- **(c)** a fitted r within 0.1 % of a value a computed-kind action of the gap without its own
+  stage would give (split ratio, 2-decimal ratio, P/(P-D) of a dividend of any era, or a product
+  of these) is that action absorbed, and is refused. Closes that need it stay unexplained.
+- **(d)** in any gap, mixed or not, a fitted r within 0.1 % of 1 is refused. It adjusts nothing,
+  so it is a reround, and a reround stands only at a dividend Ex-Date from 2023-07-01, as a
+  computed stage.
+
+Interpretation choices: a mixed gap's stages are chosen together, fewest closes off, then
+without a fitted stage, then fewer stages, then the coarsest ticks. The computed stages share a
+tick, the fitted stage has its own, and all share a tie rule. Each join re-chooses those ticks,
+the tie rule and the fitted r over the whole basis, keeping the layout. Gaps with more than 64
+layouts (they reach back over many non-standing stretches, as NMDC's do) are searched by
+improving one Ex-Date's choice at a time. `RULES=final_nofit_in_mixed_gaps` bounds this: no fitted stage
+at all in a mixed gap.
+
+What `final_strict` changes, against `final`:
+
+| Instrument | final | final_strict |
+|---|---|---|
+| IIFLWAM | fitted 4.000221 at the AGM | split 4.0 at 2023-03-02 (own stage); the AGM's fitted r = 1.000000 (a reround) refused by (d) |
+| MOTHERSUMI | fitted 1.676522 at the demerger | bonus 1.5 at 2018-10-30 (own stage), plus a fitted r = 1.117684 at the demerger |
+| MAJESCO | fitted 84.597234 at the buyback | refused (absorbs the Rs 974 dividend); 7 more stretches (1,004 bars) do not stand |
+| COALINDIA | fitted 1.008696 at the 2020-09-14 AGM | fitted 1.008698: no computed value in r (nearest 1.013834) |
+| COALINDIA ×3 | fitted 0.999949, 0.999983, 1.000023 at 2017–2019 AGMs and a buyback | refused by (d) |
+| TATACOMM | fitted 1.0005 at 2019-09-17, a clean gap | refused by (d) |
+
+The gap's dividends keep no stage in both. None of these closes is flagged by Kite Parity today,
+apart from one MAJESCO close that was already unexplained. The unexplained count does not move.
+
+| Run (same 1,008,709-row extract) | Unexplained | % | Gate 0.1 % | Fitted stages | Explained closes via a fitted stage | Non-standing stretches |
+|---|---|---|---|---|---|---|
+| baseline (no `RULES`, `report.py` count) | 745 | 0.0739 % | pass | 56 | 2,847 | 94 |
+| baseline (`score.py` count) | 842 | 0.0835 % | pass | 56 | 2,847 | 94 |
+| `final` | 841 | 0.0834 % | pass | 56 | 2,848 | 93 |
+| `final_strict` | 841 | 0.0834 % | pass | 50 | 2,848 | 112 |
+| `final_nofit_in_mixed_gaps` (bound) | 841 | 0.0834 % | pass | 49 | 2,848 | 116 |
+
+`score.py` counts a close as explained only in a Kite Basis of 20 bars or more, so it counts the
+baseline 97 higher than `report.py`. "Fitted stages" counts every fitted stage entering a chain,
+including those in bases under 20 bars (the baseline has 7 of those). Of 6,468 stretches in all.
+
 ### Parked questions, with what the prototype saw
 
 - **Tick per stage:** yes, and the tie rule per stage too.
@@ -108,6 +184,14 @@ closes by a paisa. That is a fit, not a model, so the numbers above are strict.
 - `extract_all.py`: the read-only dump of every stretch, reusing `parity`'s own pipeline.
 - `replay_run.py`: the replay, working back from today.
 - `report.py`: the summary and the #62 cases.
+- `score.py`: the count under the settled rules (`RULES=final`, `final_strict`, ...): only
+  standing stretches in a Kite Basis of 20 bars or more explain a close. It prints unexplained
+  closes by cause and Instrument, pass or fail against the 0.1 % gate, the fitted-stage count,
+  the explained closes that depend on a fitted stage, and the non-standing stretches. It also
+  classifies every fitted stage's gap (clean, or conflicting: absorbing, absorbing + residual,
+  near-identity, separate). Given a second result, it shows how each one handled every
+  computed-kind action in a mixed gap. Its inputs and outputs go in `out/`, which is
+  git-ignored (they embed Kite closes).
 - `build_demo.py` and `demo_template.html`: build `kite-adjustment-chain.html`, a single
   file to open in a browser. Its walkthroughs cover ITC, TATASTEEL, GAIL, IOC, HDFCBANK,
   OFSS, NMDC and SHANKARA, with a free-play stage editor. The built page embeds real
@@ -118,4 +202,20 @@ uv run python prototypes/kite_adjustment_chain/extract_all.py /tmp/all.pkl   # ~
 uv run --with scipy python prototypes/kite_adjustment_chain/replay_run.py /tmp/all.pkl /tmp/v.pkl 0.05 strict
 uv run --with scipy python prototypes/kite_adjustment_chain/report.py /tmp/v.pkl
 uv run python prototypes/kite_adjustment_chain/build_demo.py /tmp/all.pkl prototypes/kite_adjustment_chain/kite-adjustment-chain.html
+```
+
+The rule-set runs and their scores (each replay needs `--with scipy`; `final_strict` takes about
+6 minutes on 10 cores, the others 0.5 to 1.5):
+
+```sh
+P=prototypes/kite_adjustment_chain; O=$P/out
+uv run python $P/extract_all.py $O/all.pkl                     # read-only; 1,008,709 rows
+uv run --with scipy python $P/replay_run.py $O/all.pkl $O/baseline.pkl 0.05 strict
+for v in final final_strict final_nofit_in_mixed_gaps; do
+  RULES=$v uv run --with scipy python $P/replay_run.py $O/all.pkl $O/$v.pkl 0.05 strict
+done
+uv run --with scipy python $P/report.py $O/baseline.pkl         # 745
+uv run python $P/score.py $O/final.pkl $O/baseline.pkl           # 841
+uv run python $P/score.py $O/final_strict.pkl $O/final.pkl       # 841, and the handling diff
+uv run python $P/score.py $O/final_nofit_in_mixed_gaps.pkl $O/final.pkl
 ```
