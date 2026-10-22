@@ -26,6 +26,8 @@ from playback import (
     Edit,
     Playback,
     add_bar,
+    drop_bar,
+    in_requested_range,
     kite_candles,
     lines,
     recorded_range,
@@ -38,7 +40,7 @@ from tradeline.db import app_connection
 from tradeline.ingest.candles import CandleIngestResult, ingest_candles
 from tradeline.ingest.eod import ingest_eod
 from tradeline.ingest.symbol_changes import ingest_symbol_changes
-from tradeline.parity import ParityReport, PreListingCandle, parity
+from tradeline.parity import ParityReport, PreListingCandle, Reason, parity
 from tradeline.rebuild_instruments import rebuild_instruments
 from tradeline.sources.kite import INSTRUMENTS_URL, KiteSession
 from tradeline.transport import PlaybackTransport, Request
@@ -296,3 +298,38 @@ def test_an_instruments_candles_read_through_a_symbol_are_those_of_the_instrumen
     assert closes(by_key.candles) == [("ETERNAL", day, close) for day, close in KITE_CLOSES]
     assert by_new_name == by_key
     assert by_old_name == by_key
+
+
+def fetch_range(
+    conn: psycopg.Connection, symbol: str, start: date, end: date, *, dropped: str
+) -> None:
+    """Kite asked for ``symbol`` from ``start`` to ``end``, its bars dated ``dropped`` left out."""
+    transport = Playback(
+        KITE,
+        ask=recorded_range("2025-04-07", "2025-04-11"),
+        edit=kite_candles(then(in_requested_range, drop_bar(ETERNAL_TOKEN, dropped))),
+    )
+    session = KiteSession(transport, api_key="key", access_token="tok", sleep=lambda _: None)
+    ingest_candles(conn, session, start=start, end=end, symbols=[symbol])
+
+
+def test_a_range_requested_under_an_instruments_earlier_or_later_symbol_counts_as_fetched(
+    fresh_database_url: str,
+) -> None:
+    """Kite is asked for the 11th as ZOMATO before the rename and for the 7th and 8th
+    as ETERNAL after it; the 8th's and 11th's bars are dropped, the 9th never asked."""
+    with app_connection(fresh_database_url) as conn:
+        load_nse(conn, dump=as_before_the_rename)
+        fetch_range(conn, "ZOMATO", date(2025, 4, 11), date(2025, 4, 11), dropped="2025-04-11")
+        load_nse(conn)
+        rebuild_instruments(conn)
+        fetch_range(conn, "ETERNAL", date(2025, 4, 7), date(2025, 4, 8), dropped="2025-04-08")
+        report = compared(conn)
+
+    assert [(d.symbol, d.trade_date, d.reason) for d in report.missing] == [
+        # NSE's ZOMATO day, asked for as ETERNAL: the later Symbol counts.
+        ("ZOMATO", date(2025, 4, 8), None),
+        ("ETERNAL", date(2025, 4, 9), Reason.NOT_FETCHED),
+        # NSE's ETERNAL day, asked for as ZOMATO: the earlier Symbol counts.
+        ("ETERNAL", date(2025, 4, 11), None),
+    ]

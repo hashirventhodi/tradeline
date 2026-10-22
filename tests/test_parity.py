@@ -26,7 +26,9 @@ from playback import (
     CandleEdit,
     Playback,
     drop_bar,
+    in_requested_range,
     kite_candles,
+    recorded_range,
     shift_close,
     then,
     zero_prices,
@@ -37,7 +39,7 @@ from tradeline.db import app_connection
 from tradeline.ingest.candles import ingest_candles
 from tradeline.ingest.corporate_actions import ingest_corporate_actions
 from tradeline.ingest.eod import ingest_eod
-from tradeline.parity import Difference, ParityReport, parity
+from tradeline.parity import Difference, ParityReport, Reason, parity
 from tradeline.sources.kite import KiteSession
 from tradeline.transport import PlaybackTransport, Request
 
@@ -48,6 +50,7 @@ TRADING_DAYS = 43
 EQ_SYMBOLS = 4
 ROWS = TRADING_DAYS * EQ_SYMBOLS
 SETTINGS = Config.Parity(close_tolerance=0.001, max_unexplained_pct=0.1)
+HUNDRED = Decimal(100)
 
 INFY_TOKEN = "408065"
 
@@ -56,7 +59,8 @@ def untouched(request: Request, candles: list[Candle]) -> list[Candle]:
     return candles
 
 
-def load(url: str, edit: CandleEdit = untouched) -> None:
+def load(url: str, edit: CandleEdit = untouched, *, candles_end: date = END) -> None:
+    """The fixtures loaded, Kite asked for candles from START to ``candles_end``."""
     with app_connection(url) as conn:
         ingest_eod(conn, PlaybackTransport(FIXTURES / "ingest_eod"), start=START, end=END)
         ingest_corporate_actions(
@@ -65,9 +69,13 @@ def load(url: str, edit: CandleEdit = untouched) -> None:
             start=ACTIONS_START,
             end=ACTIONS_END,
         )
-        transport = Playback(FIXTURES / "ingest_candles", edit=kite_candles(edit))
+        transport = Playback(
+            FIXTURES / "ingest_candles",
+            ask=recorded_range(START.isoformat(), END.isoformat()),
+            edit=kite_candles(then(in_requested_range, edit)),
+        )
         session = KiteSession(transport, api_key="key", access_token="tok", sleep=lambda _: None)
-        ingest_candles(conn, session, start=START, end=END)
+        ingest_candles(conn, session, start=START, end=candles_end)
 
 
 def run(url: str, settings: Config.Parity = SETTINGS) -> ParityReport:
@@ -197,15 +205,45 @@ def test_with_no_parity_reason_yet_every_difference_is_unexplained_and_counted_b
     summary = report.summary()
     assert (summary["differences"], summary["unexplained"]) == (2, 2)
     assert summary["by_kind"] == {
-        "missing": {"total": 1, "unexplained": 1},
+        "missing": {"total": 1, "not_fetched": 0, "unexplained": 1},
         "extra": {"total": 0, "unexplained": 0},
         "close": {"total": 1, "unexplained": 1},
     }
-    assert summary["by_reason"] == {"unexplained": 2}
+    assert summary["by_reason"] == {"not_fetched": 0, "unexplained": 2}
     assert [(d["kind"], d["reason"]) for d in summary["listed_unexplained"]] == [
         ("missing", None),
         ("close", None),
     ]
+
+
+def test_nse_rows_outside_every_requested_range_are_not_fetched_while_a_dropped_bar_is_not(
+    fresh_database_url: str,
+) -> None:
+    """Kite is asked for July alone, and INFY's 15 July bar is dropped inside it."""
+    load(fresh_database_url, drop_bar(INFY_TOKEN, "2024-07-15"), candles_end=date(2024, 7, 31))
+
+    report = run(fresh_database_url)
+
+    not_fetched = [d for d in report.missing if d.reason == Reason.NOT_FETCHED]
+    # August 2024 less the 15th's holiday: 21 days of each EQ symbol.
+    assert len(not_fetched) == 21 * EQ_SYMBOLS
+    assert {d.trade_date.month for d in not_fetched} == {8}
+    assert [(d.kind, d.symbol, d.trade_date) for d in report.unexplained] == [
+        ("missing", "INFY", date(2024, 7, 15))
+    ]
+    assert report.rows == ROWS
+    # One unexplained row in 172: the not-fetched ones do not count against parity.
+    assert report.unexplained_pct == HUNDRED / ROWS
+    summary = report.summary()
+    assert summary["by_kind"]["missing"] == {
+        "total": 21 * EQ_SYMBOLS + 1,
+        "not_fetched": 21 * EQ_SYMBOLS,
+        "unexplained": 1,
+    }
+    assert summary["by_reason"] == {"not_fetched": 21 * EQ_SYMBOLS, "unexplained": 1}
+    assert "by reason: not_fetched 84, unexplained 1" in report.text()
+    # 85 missing of 172 rows would fail any threshold; the one unexplained passes 1 percent.
+    assert run(fresh_database_url, Config.Parity(max_unexplained_pct=1.0)).passed
 
 
 def test_an_empty_database_cannot_pass(fresh_database_url: str) -> None:
@@ -305,11 +343,11 @@ def test_the_command_exits_zero_on_clean_fixtures_with_a_summary_and_a_table(
         "unexplained_pct": "0.0000",
         "passed": True,
         "by_kind": {
-            "missing": {"total": 0, "unexplained": 0},
+            "missing": {"total": 0, "not_fetched": 0, "unexplained": 0},
             "extra": {"total": 0, "unexplained": 0},
             "close": {"total": 0, "unexplained": 0},
         },
-        "by_reason": {"unexplained": 0},
+        "by_reason": {"not_fetched": 0, "unexplained": 0},
         "listed_unexplained": [],
         "candle_disagreements": 0,
         "listed_candle_disagreements": [],
@@ -354,7 +392,7 @@ def test_the_command_exits_non_zero_above_the_configured_threshold(
         }
     ]
     assert "1 unexplained (0.5814%), must be under 0.1%: FAIL" in strict_table
-    assert "by reason: unexplained 1" in strict_table
+    assert "by reason: not_fetched 0, unexplained 1" in strict_table
     assert "missing  INFY" in strict_table
 
 
