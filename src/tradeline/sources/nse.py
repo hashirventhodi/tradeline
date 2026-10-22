@@ -440,26 +440,42 @@ class CorporateActionNotice:
 
     symbol: str
     series: str
+    # As served: the SME list gives a number here, not an ISIN.
     isin: str | None
-    ex_date: date
+    # None where NSE writes "-", as the fund-unit list does for redemptions.
+    ex_date: date | None
     record_date: date | None
     face_value: Decimal | None
     # NSE's text with its whitespace collapsed; otherwise identical records differ by a space.
     subject: str
 
 
-def corporate_actions_url(start: date, end: date, *, symbol: str | None = None) -> str:
-    params = {"index": "equities", "from_date": f"{start:%d-%m-%Y}", "to_date": f"{end:%d-%m-%Y}"}
+# NSE's corporate-action lists, by the ``index`` that serves each: the main board's,
+# the SME platform's (series SM), and fund units' (ETFs and other units, series EQ,
+# MF and BL). "SME", "emerge", "etf", and "debt" serve nothing (docs/research.md, #33).
+CORPORATE_ACTION_LISTS = ("equities", "sme", "mf")
+
+
+def corporate_actions_url(
+    start: date, end: date, *, nse_list: str = "equities", symbol: str | None = None
+) -> str:
+    params = {"index": nse_list, "from_date": f"{start:%d-%m-%Y}", "to_date": f"{end:%d-%m-%Y}"}
     if symbol is not None:
         params["symbol"] = symbol
     return f"{CORPORATE_ACTIONS_URL}?{urlencode(params)}"
 
 
 def fetch_corporate_actions(
-    session: NseSession, *, start: date, end: date, symbol: str | None = None
+    session: NseSession,
+    *,
+    start: date,
+    end: date,
+    nse_list: str = "equities",
+    symbol: str | None = None,
 ) -> list[CorporateActionNotice]:
-    """Every action with an ex-date from ``start`` to ``end`` inclusive (one symbol's, if named)."""
-    url = corporate_actions_url(start, end, symbol=symbol)
+    """Every action in one list with an ex-date from ``start`` to ``end`` inclusive
+    (one symbol's, if named)."""
+    url = corporate_actions_url(start, end, nse_list=nse_list, symbol=symbol)
     response = session.get(url)
     if response.status != 200:
         raise NseError(f"HTTP {response.status} fetching {url}")
@@ -481,7 +497,7 @@ def _notice(record: dict[str, Any]) -> CorporateActionNotice:
         symbol=_required(record, "symbol"),
         series=_required(record, "series"),
         isin=_text(record.get("isin")),
-        ex_date=_nse_date(_required(record, "exDate")),
+        ex_date=_optional_nse_date(_required(record, "exDate")),
         record_date=_optional_nse_date(record.get("recDate")),
         face_value=_lenient_decimal(record.get("faceVal")),
         subject=" ".join(_required(record, "subject").split()),

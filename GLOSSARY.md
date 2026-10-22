@@ -7,7 +7,7 @@ A long-only swing trading platform for NSE cash equities. A deterministic quant 
 ### Instruments
 
 **Instrument**:
-One NSE-listed equity followed across its Symbols, series, and ISINs, from listing to delisting. Two Instruments are never joined because their companies merged.
+One security NSE lists in an equity listing series (fund units such as ETFs included), followed across its Symbols, series, and ISINs, from listing to delisting. Two Instruments are never joined because their companies merged.
 _Avoid_: Company (one company can become several, and several one), stock, ticker, security
 
 **Symbol**:

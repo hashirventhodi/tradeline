@@ -60,6 +60,8 @@ class CorporateAction:
     isin: str | None = None
     record_date: date | None = None
     face_value: Decimal | None = None
+    # The NSE list it came from: "equities", "sme", or "mf".
+    nse_list: str = "equities"
 
 
 @dataclass(frozen=True)
@@ -158,8 +160,9 @@ def _volume(volume: int, factor: Fraction) -> int:
 
 # --- Reading NSE's subjects -------------------------------------------------
 
-# "Bonus 1:1", "Bonus- 1:2", "Bonus 1: 25". Not "Bonus Ncrps 1:1" nor "Bonus - 1 Debenture".
-_BONUS = re.compile(r"\bbonus\s*-?\s*(\d+)\s*:\s*(\d+)", re.IGNORECASE)
+# "Bonus 1:1", "Bonus- 1:2", "Bonus 1: 25", "BONUS 1.5:1". Not "Bonus Ncrps 1:1" nor
+# "Bonus - 1 Debenture".
+_BONUS = re.compile(r"\bbonus\s*-?\s*(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)", re.IGNORECASE)
 # "Face Value Split (Sub-Division) - From Rs 10/- Per Share To Re 1/- Per Share",
 # "Face Value Split From Rs 2 To Re 1", "Consolidation Of Equity Shares From Re 1 ... To Rs 10",
 # and, for a face value split only, "Face Value Split Rs 10 To Rs 1" without the "From"
@@ -194,8 +197,8 @@ def interpret(subject: str) -> tuple[Kind, Fraction | None]:
             kind = "split"
         bonus = _BONUS.search(subject)
         if bonus is not None:
-            extra, held = int(bonus.group(1)), int(bonus.group(2))
-            factor *= Fraction(held, extra + held)
+            extra, held = Fraction(bonus.group(1)), Fraction(bonus.group(2))
+            factor *= held / (extra + held)
             kind = kind or "bonus"
     if kind is not None:
         return kind, factor

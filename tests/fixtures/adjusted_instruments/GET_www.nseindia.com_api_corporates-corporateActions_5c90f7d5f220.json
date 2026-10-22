@@ -1,0 +1,123 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://www.nseindia.com/api/corporates-corporateActions?index=mf&from_date=14-01-2019&to_date=16-01-2019&symbol=GUJENERGY",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "server",
+        "Apache"
+      ],
+      [
+        "x-dns-prefetch-control",
+        "off"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "x-download-options",
+        "noopen"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-xss-protection",
+        "1; mode=block"
+      ],
+      [
+        "content-security-policy",
+        "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; script-src 'self' 'nonce-z+0OZZyQBzmyPBcMkT7Hog==' https://www.google-analytics.com https://analytics.google.com https://*.highcharts.com https://*.nse.co.in https://*.nseindia.com https://*.nseindia.in https://*.nseroot.com https://www.googletagmanager.com https://*.nse.in https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://*.nse.co.in https://*.nseindia.com https://*.nseindia.in https://*.nseroot.com https://www.google.co.in https://www.gstatic.com https://*.highcharts.com https://*.nse.in; font-src 'self' https://fonts.gstatic.com https://fonts.googleapis.com https://*.bootstrapcdn.com https://*.nse.co.in https://*.nseindia.com https://*.nseindia.in https://*.nseroot.com https://*.nse.in; img-src 'self' data: blob: https://www.google-analytics.com https://analytics.google.com https://www.googletagmanager.com https://www.google.co.in https://*.nse.co.in https://*.nseindia.com https://*.nseindia.in https://*.nseroot.com https://*.nse.in https://i.ytimg.com https://*.youtube.com; connect-src 'self' https://www.google-analytics.com https://analytics.google.com https://stats.g.doubleclick.net https://*.go-mpulse.net https://*.akstat.io https://*.akamaihd.net https://*.highcharts.com https://*.nse.co.in https://*.nseindia.com https://*.nseindia.in https://*.nseroot.com wss://*.nse.co.in wss://*.nseindia.com wss://*.nseindia.in wss://*.nseroot.com https://www.google.com https://*.nse.in; frame-src 'self' https://www.googletagmanager.com https://td.doubleclick.net https://www.youtube.com https://*.nse.co.in https://*.nseindia.com https://*.nseindia.in https://*.nseroot.com https://www.google.com https://recaptcha.google.com https://www.recaptcha.net https://*.nse.in; media-src 'self' https://*.nse.co.in https://*.nseindia.com https://*.nseindia.in https://*.nseroot.com https://*.nse.in; form-action 'self' https://*.highcharts.com"
+      ],
+      [
+        "referrer-policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "access-control-allow-origin",
+        "beta.nseindia.com"
+      ],
+      [
+        "access-control-allow-origin",
+        "nseindia.com"
+      ],
+      [
+        "access-control-allow-methods",
+        "GET,POST"
+      ],
+      [
+        "access-control-allow-headers",
+        "Content-Type"
+      ],
+      [
+        "content-type",
+        "application/json; charset=utf-8"
+      ],
+      [
+        "content-length",
+        "2"
+      ],
+      [
+        "cross-origin-embedder-policy",
+        "unsafe-none"
+      ],
+      [
+        "cross-origin-resource-policy",
+        "unsafe-none"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "unsafe-none"
+      ],
+      [
+        "permissions-policy",
+        "camera=(), microphone=(), geolocation=()"
+      ],
+      [
+        "date",
+        "Thu, 22 Oct 2026 07:07:50 GMT"
+      ],
+      [
+        "connection",
+        "keep-alive"
+      ],
+      [
+        "server-timing",
+        "cdn-cache; desc=MISS"
+      ],
+      [
+        "server-timing",
+        "edge; dur=25"
+      ],
+      [
+        "server-timing",
+        "origin; dur=37"
+      ],
+      [
+        "akamai-grn",
+        "0.47adce17.1792652870.136ef01"
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000 ; includeSubDomains ; preload"
+      ],
+      [
+        "set-cookie",
+        "ak_bmsc=980D5E18000ECFB78D69D5F866846772~000000000000000000000000000000~YAAQR63OF4/9s1+hAQAAtQNwYgElbHT7wZq/TI4PsRvxcCPXA8YlTFAt4sSmGhu98NHLzIpaorOnDbVfK2MmWPItYgyusTD1p61gDFHM6nhq1QBXp2V5GYRUzC7MceM7fXOoG4q/juIs649OzG+k2Km8nQrgdfp/mq0TRi6Yfg+mHuvcUPqYpVwmeqOHwamk0FsUzu93Zn/kvfukzwk0dfja3Ma51ZH+cV00n3Y9iQ78vOxbPqkmW0YchK+WSWvvXtXYzROaET+gFGzcitrj9ntcvC9EzzvgSSqokMxnxx/0w9q+ZFF8aZPlh66S2zMymPtWpnjG2IANG7BTiP4aTfGjEPIpM/HjMjj6zRsTx+yygdL/ymjr3Er163ssjq7C; Domain=.nseindia.com; Path=/; Expires=Thu, 22 Oct 2026 09:07:50 GMT; Max-Age=7200; HttpOnly"
+      ],
+      [
+        "server-timing",
+        "ak_p; desc=\"1792652870499_399420743_20377345_6143_19356_31_0_-\";dur=1"
+      ]
+    ],
+    "body": "[]",
+    "body_encoding": "utf-8"
+  }
+}

@@ -244,8 +244,9 @@ def test_ingest_corporate_actions_plays_fixtures_end_to_end_and_logs_the_run(
     (finished,) = [line for line in lines if line["msg"] == "ingest run finished"]
     assert finished["source"] == "nse_corporate_actions"
     assert (finished["range_start"], finished["range_end"]) == ("2024-07-01", "2024-12-31")
-    assert (finished["rows_seen"], finished["rows_written"]) == (20, 19)
-    assert finished["by_kind"] == {"bonus": 2, "dividend": 8, "other": 7, "rights": 1, "split": 2}
+    # The three lists: the main board's 20 (19 unique), SME's 6, fund units' 4 with no Ex-Date.
+    assert (finished["rows_seen"], finished["rows_written"]) == (30, 25)
+    assert finished["by_kind"] == {"bonus": 3, "dividend": 8, "other": 11, "rights": 1, "split": 3}
     assert lines[-1]["msg"] == "ingest corporate-actions finished"
     assert lines[-1]["unparsed"] == 0
 
