@@ -26,6 +26,7 @@ from playback import (
     Edit,
     Playback,
     add_bar,
+    bhavcopy_series,
     kite_candles,
     lines,
     recorded_range,
@@ -38,7 +39,7 @@ from tradeline.db import app_connection
 from tradeline.ingest.candles import CandleIngestResult, ingest_candles
 from tradeline.ingest.eod import ingest_eod
 from tradeline.ingest.symbol_changes import ingest_symbol_changes
-from tradeline.parity import ParityReport, PreListingCandle, parity
+from tradeline.parity import ParityReport, PreListingCandle, Reason, parity
 from tradeline.rebuild_instruments import rebuild_instruments
 from tradeline.sources.kite import INSTRUMENTS_URL, KiteSession
 from tradeline.transport import PlaybackTransport, Request
@@ -128,6 +129,22 @@ def test_parity_by_instrument_counts_no_extras_for_a_rename_that_by_symbol_shows
     assert (by_instrument.rows, by_instrument.differences) == (4, 0)
     # Naming the old Symbol compares its Instrument, whose candles are under the new one.
     assert (by_old_name.rows, by_old_name.differences) == (4, 0)
+
+
+def test_a_series_move_is_found_under_any_symbol_of_the_instrument_not_just_the_candles(
+    fresh_database_url: str,
+) -> None:
+    # NSE lists ZOMATO in BE on the 8th; Kite's candle that day is under ETERNAL.
+    with app_connection(fresh_database_url) as conn:
+        load_nse(conn, dump=bhavcopy_series(date(2025, 4, 8), "ZOMATO", "BE"))
+        rebuild_instruments(conn)
+        fetch(conn, Playback(KITE), "ETERNAL")
+        report = compared(conn)
+
+    assert [(d.symbol, d.series, d.trade_date, d.reason) for d in report.extra] == [
+        ("ETERNAL", "EQ", date(2025, 4, 8), Reason.SERIES_MOVE)
+    ]
+    assert report.unexplained == ()
 
 
 def test_an_instrument_day_stored_under_two_kite_names_reads_the_newer_and_reports_a_disagreement(
