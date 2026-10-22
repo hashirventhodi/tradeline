@@ -36,8 +36,8 @@ from tradeline.logging import configure_logging, log_context
 from tradeline.login import login as login_service
 from tradeline.manual_links import load_manual_links
 from tradeline.migrations import PendingMigrations, UnreadableMigrations, apply_migrations
+from tradeline.parity import parity as parity_service
 from tradeline.rebuild_instruments import rebuild_instruments as rebuild_instruments_service
-from tradeline.reconcile import reconcile as reconcile_service
 from tradeline.secrets import (
     DATABASE_URL,
     KITE_ACCESS_TOKEN,
@@ -242,21 +242,21 @@ def _feeds(ctx: Context, names: Sequence[str] | None = None) -> list[Feed]:
     return [Feed(name, configured[name]) for name in names]
 
 
-def reconcile(ctx: Context, args: argparse.Namespace) -> int:
-    """Compare candles with end-of-day rows; fail unless under the configured threshold.
+def parity(ctx: Context, args: argparse.Namespace) -> int:
+    """Kite Parity: fail unless unexplained differences are under the configured threshold.
 
     The summary is the last JSON line on stdout; the table goes to stderr.
     """
     end = args.start if args.end is None else args.end
     with _scope(args.start, end, args.symbols):
         with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
-            report = reconcile_service(
-                conn, ctx.config.reconcile, start=args.start, end=end, symbols=args.symbols
+            report = parity_service(
+                conn, ctx.config.parity, start=args.start, end=end, symbols=args.symbols
             )
         sys.stderr.write(report.text())
         log.log(
             logging.INFO if report.passed else logging.ERROR,
-            "reconcile finished",
+            "parity finished",
             extra={"report": report.summary()},
         )
     return 0 if report.passed else 1
@@ -416,7 +416,7 @@ COMMANDS: dict[str, Command] = {
     "login": login,
     "ingest": ingest,
     "universe": universe,
-    "reconcile": reconcile,
+    "parity": parity,
     "compare-adjusted": compare_adjusted,
     "sectors": sectors,
     "rebuild-instruments": rebuild_instruments,
@@ -593,12 +593,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="the Universe month to compare; defaults to the current month",
     )
 
-    reconcile_parser = subparsers.add_parser(
-        "reconcile",
+    parity_parser = subparsers.add_parser(
+        "parity",
         parents=[date_range],
-        help="compare daily candles with NSE end-of-day files; exit 1 unless under the threshold",
+        help="Kite Parity: compare daily candles with NSE end-of-day files; exit 1 unless"
+        " unexplained differences are under the threshold",
     )
-    reconcile_parser.add_argument(
+    parity_parser.add_argument(
         "--symbol",
         dest="symbols",
         metavar="SYMBOL",
