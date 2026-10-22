@@ -15,7 +15,8 @@ Seven steps, in order, each one the existing service for the day:
    manual links file (``load_manual_links``, ``rebuild_instruments``). It
    runs after the end-of-day rows and Corporate Actions it links by, and
    before the Universe, which ranks Instruments. It runs even when a fetch
-   before it failed, on the evidence already stored.
+   before it failed, on the evidence already stored, and reports the Cited
+   Actions NSE's list supersedes, an anomaly failing nothing.
 5. ``candles``: Kite's daily candle for every member of the current Universe,
    the day's month under the configured rule (``ingest_candles``). The
    month's membership is computed first if it has not been (``compute_universe``),

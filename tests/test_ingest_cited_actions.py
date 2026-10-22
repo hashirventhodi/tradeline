@@ -7,18 +7,22 @@ last row, and the new ISIN from 2020-07-03. GICL's split and bonus of
 2025-10-15 (SM, 173.70 to 46.50) are two rows checked together.
 """
 
+import logging
 from collections.abc import Iterable
 from datetime import date
 from decimal import Decimal
 from fractions import Fraction
 
 import psycopg
+import pytest
 
 from tradeline import queries
 from tradeline.adjust import interpret
 from tradeline.cited_actions import CitedAction
 from tradeline.db import app_connection
 from tradeline.ingest.cited_actions import ingest_cited_actions
+from tradeline.instruments import ManualLink
+from tradeline.instruments_report import instruments_report
 from tradeline.rebuild_instruments import rebuild_instruments
 
 D = Decimal
@@ -261,3 +265,106 @@ def test_a_row_reworded_after_it_was_stored_is_superseded_with_it_and_applied_ne
         assert len([row for row in stored(conn) if row[8] is not None]) == 2
     assert (reworded.rows_written, reworded.superseded, reworded.anomalies) == (1, 1, 0)
     assert before.factor == Fraction(1, 5)  # the listed split once; neither cited row
+
+
+def listed(conn: psycopg.Connection, ex_date: str, subject: str, kind: str, factor: str) -> None:
+    """One of NSE's listed actions for KARDA in BE, its factor as ``n/d``."""
+    numerator, denominator = factor.split("/")
+    conn.execute(
+        "INSERT INTO corporate_actions (symbol, series, ex_date, subject, kind,"
+        " factor_numerator, factor_denominator, nse_list)"
+        " VALUES ('KARDA', 'BE', %s, %s, %s, %s, %s, 'equities')",
+        (ex_date, subject, kind, numerator, denominator),
+    )
+    conn.commit()
+
+
+def test_a_rebuild_reports_a_stored_row_nse_lists_the_action_for_later(
+    fresh_database_url: str,
+) -> None:
+    with app_connection(fresh_database_url) as conn:
+        karda_rows(conn)
+        ingest_cited_actions(conn, [karda_split()])
+        listed(conn, "2020-07-03", "Face Value Split From Rs 10 To Rs 2", "split", "1/5")
+
+        rebuilt = rebuild_instruments(conn)
+        (error, details) = conn.execute(
+            "SELECT error, details FROM ingest_runs WHERE source = 'instrument_links'"
+        ).fetchone()  # type: ignore[misc]
+
+    assert (rebuilt.superseded_cited_actions, rebuilt.cited_anomalies) == (1, 0)
+    assert error is None
+    assert details["superseded_cited_actions"] == [
+        {
+            "symbol": "KARDA",
+            "ex_date": "2020-07-02",
+            "subjects": [KARDA_SPLIT],
+            "listed": [{"ex_date": "2020-07-03", "subject": "Face Value Split From Rs 10 To Rs 2"}],
+            "cited_factor": "1/5",
+            "listed_factor": "1/5",
+        }
+    ]
+    assert details["cited_anomalies"] == 0
+
+
+def test_a_rebuild_reports_a_listed_action_pricing_a_stored_row_differently_as_an_anomaly(
+    fresh_database_url: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    with app_connection(fresh_database_url) as conn:
+        karda_rows(conn)
+        ingest_cited_actions(conn, [karda_split()])
+        listed(conn, "2020-07-02", "Bonus 1:1", "bonus", "1/2")
+
+        with caplog.at_level(logging.WARNING, logger="tradeline.rebuild_instruments"):
+            rebuilt = rebuild_instruments(conn)
+
+    assert (rebuilt.superseded_cited_actions, rebuilt.cited_anomalies) == (1, 1)
+    (warning,) = [r for r in caplog.records if r.name == "tradeline.rebuild_instruments"]
+    assert warning.getMessage() == "NSE's list prices a cited corporate action's change differently"
+    assert (warning.symbol, warning.cited_factor, warning.listed_factor) == ("KARDA", "1/5", "1/2")  # type: ignore[attr-defined]
+
+
+def test_a_rebuild_reports_a_stored_row_a_manual_link_brings_within_reach_of_nses_list(
+    fresh_database_url: str,
+) -> None:
+    # NSE files the split under DHARAN, the name KARDA took after it; nothing joins the two
+    # until the Operator cites the rename in a manual link.
+    with app_connection(fresh_database_url) as conn:
+        karda_rows(conn)
+        ingest_cited_actions(conn, [karda_split()])
+        eod(conn, [(date(2020, 7, 6), "DHARAN", "BE", KARDA_NEW, "58.50")])
+        conn.execute(
+            "INSERT INTO corporate_actions (symbol, series, ex_date, subject, kind,"
+            " factor_numerator, factor_denominator, nse_list)"
+            " VALUES ('DHARAN', 'BE', '2020-07-03',"
+            " 'Face Value Split From Rs 10 To Rs 2', 'split', 1, 5, 'equities')"
+        )
+        conn.commit()
+
+        apart = rebuild_instruments(conn)
+        joined = rebuild_instruments(
+            conn,
+            manual_links=[ManualLink("KARDA", "DHARAN", date(2020, 7, 6), "NSE/CML/2020/99999")],
+        )
+
+    assert (apart.superseded_cited_actions, apart.cited_anomalies) == (0, 0)
+    assert (joined.anomalies, joined.superseded_cited_actions, joined.cited_anomalies) == (0, 1, 0)
+
+
+def test_the_instruments_report_lists_the_last_rebuilds_superseded_rows_marking_anomalies(
+    fresh_database_url: str,
+) -> None:
+    with app_connection(fresh_database_url) as conn:
+        karda_rows(conn)
+        ingest_cited_actions(conn, [karda_split()])
+        listed(conn, "2020-07-02", "Bonus 1:1", "bonus", "1/2")
+        rebuild_instruments(conn)
+
+        report = instruments_report(conn)
+
+    assert report.summary()["superseded_cited_actions"] == {"agree": 0, "anomalies": 1}
+    section = report.text().split("Superseded Cited Actions: 1\n")[1].split("\n\n")[0]
+    assert section.splitlines() == [
+        "  Ex-Date  Symbol  cited factor  listed factor  listed actions",
+        "  2020-07-02  KARDA  1/5  1/2  2020-07-02 Bonus 1:1  ANOMALY",
+    ]

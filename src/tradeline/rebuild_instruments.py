@@ -33,9 +33,20 @@ Symbols never reads the Instruments, so its months are never stale. A link
 dated after a window leaves the rows in it grouped as they were, so an
 ordinary rename makes no earlier month stale.
 
+Through the new Instruments, before they are committed, every stored Cited
+Action is checked against NSE's lists (``ingest.cited_actions.supersession``,
+as ``ingest cited-actions`` checks a new one): those a listed split or bonus
+within seven days supersedes replace the last rebuild's
+(``cited_action_supersessions``), and each whose listed factor differs is
+logged as an anomaly. A Cited Action becomes superseded when NSE lists its
+action later, or when a rebuild joins it to the Instrument whose Symbol NSE
+filed the action under (ADR 0006, amended by #37 and #45). An anomaly fails
+nothing: the Adjusted Series already follows NSE's list.
+
 Each rebuild is recorded in the run history (command ``instruments``, source
 ``instrument_links``) with its counts: Instruments, links by source,
-anomalies by kind, Link Candidates, and the Universe months it found stale.
+anomalies by kind, Link Candidates, the Universe months it found stale, and
+the superseded Cited Actions with how many are anomalies.
 """
 
 from __future__ import annotations
@@ -50,9 +61,11 @@ from datetime import date
 from typing import Any
 
 import psycopg
+from psycopg.types.json import Jsonb
 
 from tradeline import queries
 from tradeline.ingest import record_ingest_run
+from tradeline.ingest.cited_actions import stored_supersessions
 from tradeline.instruments import (
     LISTING_SERIES,
     Evidence,
@@ -77,6 +90,10 @@ class InstrumentRebuildResult:
     links: int
     anomalies: int
     link_candidates: int
+    # Stored Cited Actions NSE's list supersedes, by Symbol and Ex-Date; and those of them
+    # the listed actions price differently.
+    superseded_cited_actions: int = 0
+    cited_anomalies: int = 0
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -85,6 +102,8 @@ class InstrumentRebuildResult:
             "links": self.links,
             "anomalies": self.anomalies,
             "link_candidates": self.link_candidates,
+            "superseded_cited_actions": self.superseded_cited_actions,
+            "cited_anomalies": self.cited_anomalies,
         }
 
 
@@ -96,6 +115,10 @@ def rebuild_instruments(
         built = build_instruments(evidence)
         stale = _record_stale_months(conn, built, found_by=run.id)
         _replace(conn, built)
+        # Read through the new Instruments, before they are committed.
+        superseding = stored_supersessions(conn)
+        _replace_supersessions(conn, superseding)
+        cited_anomalies = [found for found in superseding if not found.agrees]
         conn.commit()
         links = Counter(link.kind for i in built.instruments for link in i.links)
         run.rows_seen = len(evidence.spans)
@@ -111,11 +134,18 @@ def rebuild_instruments(
             "link_candidates": len(built.link_candidates),
             "stale_months": stale,
             "obsolete_universe_keys": len(queries.obsolete_universe_keys(conn)),
+            "superseded_cited_actions": [found.record() for found in superseding],
+            "cited_anomalies": len(cited_anomalies),
         }
         for anomaly in built.anomalies:
             log.warning(
                 "instrument history split",
                 extra={"kind": anomaly.kind, "symbol": anomaly.symbol, "detail": anomaly.detail},
+            )
+        for found in cited_anomalies:
+            log.warning(
+                "NSE's list prices a cited corporate action's change differently",
+                extra=found.record(),
             )
     return InstrumentRebuildResult(
         spans=len(evidence.spans),
@@ -123,6 +153,8 @@ def rebuild_instruments(
         links=sum(links.values()),
         anomalies=len(built.anomalies),
         link_candidates=len(built.link_candidates),
+        superseded_cited_actions=len(superseding),
+        cited_anomalies=len(cited_anomalies),
     )
 
 
@@ -335,4 +367,29 @@ def _replace(conn: psycopg.Connection, built: InstrumentBuild) -> None:
             [c.old_last for c in candidates],
             [c.new_first for c in candidates],
         ),
+    )
+
+
+def _replace_supersessions(
+    conn: psycopg.Connection, superseding: Sequence[queries.SupersededCitedAction]
+) -> None:
+    conn.execute("DELETE FROM cited_action_supersessions")
+    # Row by row: each row's subjects are an array of their own length.
+    conn.cursor().executemany(
+        "INSERT INTO cited_action_supersessions (symbol, ex_date, subjects, listed,"
+        " cited_numerator, cited_denominator, listed_numerator, listed_denominator)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+        [
+            (
+                f.symbol,
+                f.ex_date,
+                list(f.subjects),
+                Jsonb(f.record()["listed"]),
+                f.cited_factor.numerator,
+                f.cited_factor.denominator,
+                f.listed_factor.numerator,
+                f.listed_factor.denominator,
+            )
+            for f in superseding
+        ],
     )

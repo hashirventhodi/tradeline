@@ -889,6 +889,57 @@ class EndedInstrument:
     detail: str
 
 
+@dataclass(frozen=True)
+class SupersededCitedAction:
+    """The Cited Actions of one Symbol and Ex-Date that NSE's listed splits and bonuses
+    within seven days supersede (``adjust.superseded``)."""
+
+    symbol: str
+    ex_date: date
+    subjects: tuple[str, ...]
+    # The listed actions, as (Ex-Date, subject), by Ex-Date.
+    listed: tuple[tuple[date, str], ...]
+    cited_factor: Fraction
+    listed_factor: Fraction
+
+    @property
+    def agrees(self) -> bool:
+        """Whether NSE's list prices the change as the Cited Actions do; if not, an anomaly."""
+        return self.cited_factor == self.listed_factor
+
+    def record(self) -> dict[str, Any]:
+        """As a run's details and the log state it."""
+        return {
+            "symbol": self.symbol,
+            "ex_date": self.ex_date.isoformat(),
+            "subjects": list(self.subjects),
+            "listed": [{"ex_date": d.isoformat(), "subject": s} for d, s in self.listed],
+            "cited_factor": str(self.cited_factor),
+            "listed_factor": str(self.listed_factor),
+        }
+
+
+def superseded_cited_actions(conn: psycopg.Connection) -> list[SupersededCitedAction]:
+    """The stored Cited Actions NSE's list superseded at the last rebuild, oldest Ex-Date
+    first."""
+    rows = conn.execute(
+        "SELECT symbol, ex_date, subjects, listed, cited_numerator, cited_denominator,"
+        " listed_numerator, listed_denominator FROM cited_action_supersessions"
+        " ORDER BY ex_date, symbol"
+    ).fetchall()
+    return [
+        SupersededCitedAction(
+            symbol=symbol,
+            ex_date=ex_date,
+            subjects=tuple(subjects),
+            listed=tuple((date.fromisoformat(a["ex_date"]), a["subject"]) for a in listed),
+            cited_factor=Fraction(cited_n, cited_d),
+            listed_factor=Fraction(listed_n, listed_d),
+        )
+        for symbol, ex_date, subjects, listed, cited_n, cited_d, listed_n, listed_d in rows
+    ]
+
+
 def instruments_last_day(conn: psycopg.Connection) -> date | None:
     """The last day of any Instrument's history: where the Raw Series ends."""
     row = conn.execute("SELECT max(last_day) FROM instrument_intervals").fetchone()
