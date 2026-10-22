@@ -11,7 +11,9 @@ a view or column it lacks, with an error that does not say why. The check reads
 ``schema_migrations`` before switching role, which the schema's owner and any
 member of ``tradeline_app`` can (migration 0022); a member without INHERIT reads
 it after switching. A member-only role meeting a database without 0022 cannot
-read it at all, and is told to migrate.
+read it at all, and is told to migrate. A login role that is not a member of
+``tradeline_app`` is refused the switch, before or after the check, and is told
+to be granted the role: migrating would not help it.
 
 Locally one ``DATABASE_URL`` serves both because the Compose user owns the
 schema and is a member of ``tradeline_app``. In production (Phase 6) the app
@@ -25,6 +27,16 @@ import psycopg
 from tradeline.migrations import PendingMigrations, UnreadableMigrations, pending_migrations
 
 APP_ROLE = "tradeline_app"
+
+
+class NotAppRoleMember(RuntimeError):
+    """The connecting login role may not switch to ``tradeline_app`` (#47)."""
+
+    def __init__(self, user: str) -> None:
+        super().__init__(
+            f"login role {user} is not a member of {APP_ROLE};"
+            f" grant it with `GRANT {APP_ROLE} TO {user}`"
+        )
 
 
 def connect(url: str) -> psycopg.Connection:
@@ -63,5 +75,8 @@ def _pending_migrations_as_member(conn: psycopg.Connection) -> list[str]:
 
 
 def _set_app_role(conn: psycopg.Connection) -> None:
-    conn.execute(psycopg.sql.SQL("SET ROLE {}").format(psycopg.sql.Identifier(APP_ROLE)))
+    try:
+        conn.execute(psycopg.sql.SQL("SET ROLE {}").format(psycopg.sql.Identifier(APP_ROLE)))
+    except psycopg.errors.InsufficientPrivilege:
+        raise NotAppRoleMember(conn.info.user) from None
     conn.commit()

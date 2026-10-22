@@ -108,11 +108,12 @@ def another_database_url(request: pytest.FixtureRequest, migrated_template: str)
 def member_only_url(request: pytest.FixtureRequest) -> Iterator[Callable[..., str]]:
     """Make a login role that is only a member of tradeline_app and return ``url`` as that role.
 
-    The production shape (db.py). Roles are cluster-wide, so each is dropped after the test.
+    The production shape (db.py). ``member=False`` leaves out the grant, as a login role
+    someone forgot to set up (#47). Roles are cluster-wide, so each is dropped after the test.
     """
     names: list[str] = []
 
-    def make(url: str, *, inherit: bool = True) -> str:
+    def make(url: str, *, inherit: bool = True, member: bool = True) -> str:
         name = _database_name(f"role_{request.node.name}")
         password = secrets.token_hex(8)
         with psycopg.connect(MAINTENANCE_URL, autocommit=True) as conn:
@@ -124,9 +125,12 @@ def member_only_url(request: pytest.FixtureRequest) -> Iterator[Callable[..., st
                 )
             )
             names.append(name)
-            conn.execute(
-                psycopg.sql.SQL("GRANT tradeline_app TO {}").format(psycopg.sql.Identifier(name))
-            )
+            if member:
+                conn.execute(
+                    psycopg.sql.SQL("GRANT tradeline_app TO {}").format(
+                        psycopg.sql.Identifier(name)
+                    )
+                )
         return psycopg.conninfo.make_conninfo(url, user=name, password=password)
 
     yield make

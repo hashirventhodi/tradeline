@@ -8,7 +8,7 @@ import psycopg
 import pytest
 
 from tradeline.adjust import interpret
-from tradeline.db import app_connection, connect
+from tradeline.db import NotAppRoleMember, app_connection, connect
 from tradeline.migrations import (
     SCHEMA_MIGRATIONS_READ,
     UnreadableMigrations,
@@ -120,6 +120,38 @@ def test_a_member_only_login_role_is_told_to_migrate_while_0022_is_pending(
         apply_migrations(conn)
     with app_connection(member_url) as conn:
         assert applied_migrations(conn)
+
+
+@pytest.mark.parametrize("pending_0022", [False, True], ids=["migrated", "0022-pending"])
+def test_a_login_role_that_is_not_a_member_of_tradeline_app_is_told_to_grant_it(
+    empty_database_url: str, member_only_url: Callable[..., str], pending_0022: bool
+) -> None:
+    if pending_0022:
+        _with_0022_pending(empty_database_url)
+    else:
+        with connect(empty_database_url) as conn:
+            apply_migrations(conn)
+    outsider_url = member_only_url(empty_database_url, member=False)
+
+    with pytest.raises(NotAppRoleMember):
+        app_connection(outsider_url)
+
+
+def test_a_non_member_that_can_read_the_applied_migrations_is_still_told_to_grant_it(
+    database_url: str, member_only_url: Callable[..., str]
+) -> None:
+    # It passes the pending-migrations check and is refused only at the SET ROLE after it.
+    outsider_url = member_only_url(database_url, member=False)
+    with psycopg.connect(outsider_url) as conn:
+        outsider = conn.info.user
+    with connect(database_url) as conn:
+        conn.execute(
+            psycopg.sql.SQL("GRANT pg_read_all_data TO {}").format(psycopg.sql.Identifier(outsider))
+        )
+        conn.commit()
+
+    with pytest.raises(NotAppRoleMember):
+        app_connection(outsider_url)
 
 
 def test_the_application_role_cannot_update_or_delete_ingest_runs(database_url: str) -> None:
