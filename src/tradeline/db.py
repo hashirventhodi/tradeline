@@ -9,7 +9,9 @@ An app connection to a database with a migration pending is refused, naming
 the pending versions: a command run before ``migrate`` would otherwise fail on
 a view or column it lacks, with an error that does not say why. The check reads
 ``schema_migrations`` before switching role, which the schema's owner and any
-member of ``tradeline_app`` can (migration 0022).
+member of ``tradeline_app`` can (migration 0022); a member without INHERIT reads
+it after switching. A member-only role meeting a database without 0022 cannot
+read it at all, and is told to migrate.
 
 Locally one ``DATABASE_URL`` serves both because the Compose user owns the
 schema and is a member of ``tradeline_app``. In production (Phase 6) the app
@@ -20,7 +22,7 @@ from __future__ import annotations
 
 import psycopg
 
-from tradeline.migrations import PendingMigrations, pending_migrations
+from tradeline.migrations import PendingMigrations, UnreadableMigrations, pending_migrations
 
 APP_ROLE = "tradeline_app"
 
@@ -32,12 +34,34 @@ def connect(url: str) -> psycopg.Connection:
 def app_connection(url: str) -> psycopg.Connection:
     conn = psycopg.connect(url)
     try:
-        pending = pending_migrations(conn)
+        pending = _pending_migrations(conn)
         if pending:
             raise PendingMigrations(pending)
-        conn.execute(psycopg.sql.SQL("SET ROLE {}").format(psycopg.sql.Identifier(APP_ROLE)))
-        conn.commit()
+        _set_app_role(conn)
     except Exception:
         conn.close()
         raise
     return conn
+
+
+def _pending_migrations(conn: psycopg.Connection) -> list[str]:
+    """Read before SET ROLE, so the owner sees every pending version even before 0022.
+
+    A role that cannot read ``schema_migrations`` reads it again as ``tradeline_app``:
+    a member without INHERIT holds that role's grants only after SET ROLE. If that
+    is refused too, 0022 is pending.
+    """
+    try:
+        return pending_migrations(conn)
+    except psycopg.errors.InsufficientPrivilege:
+        pass
+    _set_app_role(conn)
+    try:
+        return pending_migrations(conn)
+    except psycopg.errors.InsufficientPrivilege:
+        raise UnreadableMigrations() from None
+
+
+def _set_app_role(conn: psycopg.Connection) -> None:
+    conn.execute(psycopg.sql.SQL("SET ROLE {}").format(psycopg.sql.Identifier(APP_ROLE)))
+    conn.commit()

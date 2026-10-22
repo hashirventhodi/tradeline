@@ -13,7 +13,7 @@ database is never written to.
 import logging
 import os
 import secrets
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import psycopg
@@ -102,3 +102,34 @@ def another_database_url(request: pytest.FixtureRequest, migrated_template: str)
     name = _database_name(f"another_{request.node.name}")
     yield _create_database(name, template=migrated_template)
     _drop_database(name)
+
+
+@pytest.fixture
+def member_only_role(request: pytest.FixtureRequest) -> Iterator[Callable[..., str]]:
+    """Make a login role that is only a member of tradeline_app; return a URL as it, to ``url``.
+
+    The production shape (db.py). Roles are cluster-wide, so each is dropped after the test.
+    """
+    names: list[str] = []
+
+    def make(url: str, *, inherit: bool = True) -> str:
+        name = _database_name(f"role_{request.node.name}")
+        password = secrets.token_hex(8)
+        with psycopg.connect(MAINTENANCE_URL, autocommit=True) as conn:
+            conn.execute(
+                psycopg.sql.SQL("CREATE ROLE {} LOGIN {} PASSWORD {}").format(
+                    psycopg.sql.Identifier(name),
+                    psycopg.sql.SQL("INHERIT" if inherit else "NOINHERIT"),
+                    psycopg.sql.Literal(password),
+                )
+            )
+            names.append(name)
+            conn.execute(
+                psycopg.sql.SQL("GRANT tradeline_app TO {}").format(psycopg.sql.Identifier(name))
+            )
+        return psycopg.conninfo.make_conninfo(url, user=name, password=password)
+
+    yield make
+    with psycopg.connect(MAINTENANCE_URL, autocommit=True) as conn:
+        for name in names:
+            conn.execute(psycopg.sql.SQL("DROP ROLE {}").format(psycopg.sql.Identifier(name)))

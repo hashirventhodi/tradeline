@@ -18,6 +18,9 @@ log = logging.getLogger(__name__)
 # Serialises concurrent ``migrate`` runs against one database.
 _LOCK_KEY = 0x7472_6164  # "trad"
 
+# The migration that lets ``tradeline_app`` read which migrations are applied.
+SCHEMA_MIGRATIONS_READ = "0022_schema_migrations_read"
+
 
 def available_migrations() -> list[tuple[str, str]]:
     """``(version, sql)`` pairs in application order."""
@@ -43,6 +46,18 @@ class PendingMigrations(RuntimeError):
         super().__init__(
             f"{count} migration{'s' if count != 1 else ''} pending ({', '.join(versions)});"
             " run `tradeline migrate`"
+        )
+
+
+class UnreadableMigrations(PendingMigrations):
+    """The role cannot read ``schema_migrations``, so 0022, which lets it, is pending."""
+
+    def __init__(self) -> None:
+        RuntimeError.__init__(
+            self,
+            f"{SCHEMA_MIGRATIONS_READ} and perhaps later migrations pending"
+            " (this role cannot read schema_migrations until it is applied);"
+            " run `tradeline migrate`",
         )
 
 

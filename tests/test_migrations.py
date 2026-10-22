@@ -1,4 +1,5 @@
 import uuid
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from fractions import Fraction
@@ -8,7 +9,12 @@ import pytest
 
 from tradeline.adjust import interpret
 from tradeline.db import app_connection, connect
-from tradeline.migrations import applied_migrations, apply_migrations
+from tradeline.migrations import (
+    SCHEMA_MIGRATIONS_READ,
+    PendingMigrations,
+    applied_migrations,
+    apply_migrations,
+)
 
 
 def test_migrate_creates_the_schema_from_empty_and_is_a_no_op_second_time(
@@ -70,6 +76,51 @@ def test_the_application_role_cannot_record_a_migration(database_url: str) -> No
         pytest.raises(psycopg.errors.InsufficientPrivilege),
     ):
         conn.execute("INSERT INTO schema_migrations (version) VALUES ('9999_forged')")
+
+
+@pytest.mark.parametrize("inherit", [True, False], ids=["inherit", "noinherit"])
+def test_a_member_only_login_role_reads_the_applied_migrations_and_nothing_owner_only(
+    database_url: str, member_only_role: Callable[..., str], inherit: bool
+) -> None:
+    member_url = member_only_role(database_url, inherit=inherit)
+    with connect(database_url) as conn:
+        applied = applied_migrations(conn)
+
+    with app_connection(member_url) as conn:
+        assert applied_migrations(conn) == applied
+        for statement in (
+            "INSERT INTO schema_migrations (version) VALUES ('9999_forged')",
+            "DROP TABLE ingest_runs",
+            "CREATE TABLE forged (id int)",
+        ):
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                conn.execute(statement)
+            conn.rollback()
+
+
+def _with_0022_pending(url: str) -> None:
+    """As a database migrated before 0022 was merged: tradeline_app cannot read the table."""
+    with connect(url) as conn:
+        apply_migrations(conn)
+        conn.execute("DELETE FROM schema_migrations WHERE version = %s", (SCHEMA_MIGRATIONS_READ,))
+        conn.execute("REVOKE SELECT ON schema_migrations FROM tradeline_app")
+
+
+@pytest.mark.parametrize("inherit", [True, False], ids=["inherit", "noinherit"])
+def test_a_member_only_login_role_is_told_to_migrate_while_0022_is_pending(
+    empty_database_url: str, member_only_role: Callable[..., str], inherit: bool
+) -> None:
+    _with_0022_pending(empty_database_url)
+    member_url = member_only_role(empty_database_url, inherit=inherit)
+
+    with pytest.raises(PendingMigrations, match=r"run `tradeline migrate`$") as error:
+        app_connection(member_url)
+    assert SCHEMA_MIGRATIONS_READ in str(error.value)
+
+    with connect(empty_database_url) as conn:
+        apply_migrations(conn)
+    with app_connection(member_url) as conn:
+        assert applied_migrations(conn)
 
 
 def test_the_application_role_cannot_update_or_delete_ingest_runs(database_url: str) -> None:
