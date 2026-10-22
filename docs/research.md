@@ -320,6 +320,9 @@ manual link is unmatched.
   all are now cited.
 - **MAZDOCK's 8 candles from 2017 and 2018** (#34), before its 2020 listing: an
   earlier instrument under a reused Kite token is likely but unconfirmed.
+  Researched in "MAZDOCK's Kite candles before its listing (#34)" below:
+  they are Farmax India's BZ bars under NSE token 509, with MAZDOCK's 2024
+  split applied.
 - **A stored member's key can be renamed under it.** The SUBEX link renamed
   the Instrument `SUBEXLTD@2020-11-05` to `SUBEX@2020-11-05` (its first Symbol
   is now SUBEX). SUBEXLTD's six stored member-months under `ded30b1014c4`
@@ -913,6 +916,219 @@ its key.
   patterns and the batch circulars named above (NSE/CML/28574, 41893, 45904,
   58560, 57699, 73797, 75748), not each against its own listing circular.
 - NSE's own definition of "DATE OF LISTING": none found.
+
+## MAZDOCK's Kite candles before its listing (#34)
+
+Researched on 2026-10-22 against the #29 database, Kite's public instrument
+dump (`https://api.kite.trade/instruments/NSE`, fetched that day), NSE's
+archives (the legacy bhavcopy `cm04DEC2017bhav.csv.zip`, the UDiFF bhavcopies
+of 2024-01-02 and 2026-10-19, and the security master
+`nsearchives.nseindia.com/content/cm/NSE_CM_security_19102026.csv.gz`), NSE's
+circulars (listed through `www.nseindia.com/api/circulars` with the repo's
+`NseSession`, read at `nsearchives.nseindia.com/content/circulars/<dept><number>.pdf`),
+and Kite Connect's documentation. No Kite login was used. No code, config or
+stored data was changed.
+
+**The 8 bars are Farmax India Limited's (FARMAXIND, INE890I01035) BZ-series
+bars, served under the instrument token NSE reassigned to MAZDOCK, with
+MAZDOCK's 2024 split applied to them.** The match to NSE's rows is cited
+(each volume is exactly twice FARMAXIND BZ's traded quantity that day, on all
+8 days and no others). That NSE token 509 was FARMAXIND BZ's in 2017 and 2018
+is inferred: no public file from those years carries tokens.
+
+### The bars
+
+`candles_daily` stores no token. The bars were loaded on 2026-10-21 (ingest
+run `84359aa1`, range 2016-10-21 to 2026-10-20) through MAZDOCK's token in
+`symbols`, 130305, and are stored as Kite returned them. Beside NSE's rows for
+FARMAXIND BZ on the same days:
+
+| Day | Kite under 130305: O, H, L, C | Kite volume | NSE FARMAXIND BZ: O, H, L, C | NSE traded qty | Trades |
+|---|---|---|---|---|---|
+| 2017-12-04 | 0, 0, 0, 0 | 7,154,666 | 0.05 each (prev close 1) | 3,577,333 | 32 |
+| 2018-01-01 | 0, 0, 0, 0 | 670,998 | 0.05 each | 335,499 | 4 |
+| 2018-02-05 | 0, 0, 0, 0 | 2,430,000 | 0.05 each | 1,215,000 | 10 |
+| 2018-03-05 | 0, 0, 0, 0 | 2,012 | 0.05 each | 1,006 | 2 |
+| 2018-04-02 | 0, 0, 0, 0 | 100,000 | 0.05 each | 50,000 | 5 |
+| 2018-05-07 | 0, 0, 0, 0 | 20,000 | 0.05 each | 10,000 | 1 |
+| 2018-06-04 | 0, 0, 0, 0 | 840,852 | 0.05 each | 420,426 | 14 |
+| 2018-07-02 | 0, 0, 0, 0 | 166,400 | 0.05 each | 83,200 | 7 |
+
+- **Not MAZDOCK.** MAZDOCK's first bar, 2020-10-12, is O 107.45, H 108.5,
+  L 86, C 86 on 79,858,408 in Kite, against NSE's 214.90, 216.95, 171.95,
+  171.95 on 39,929,204 under INE249Z01012. No MAZDOCK or INE249Z ISIN row
+  exists in `eod_bhavcopy` before 2020-10-12.
+- **They are the only zero-price candles stored.** No other bar in
+  `candles_daily` has a zero open, low or close.
+- **Kite applied MAZDOCK's split to them.** MAZDOCK split Rs 10 to Rs 5, ex
+  2024-12-27 (NSE's Corporate Action, factor 1/2). Kite doubles the volume of
+  every bar before it: all 1,045 of MAZDOCK's own pre-split bars are exactly
+  twice NSE's traded quantity, and so are the 8. Halved, FARMAXIND's 0.05 is
+  0.025, a tie between 0 and 0.05; Kite rounds ties to the even 5 paisa tick
+  ("Kite daily history depth and adjustment" above). On MAZDOCK's own
+  pre-split bars, all 1,394 prices that halve to a tie land on the even tick.
+  So the zeros are 0.05 adjusted and rounded, not missing prices (inferred
+  from that rule; Kite does not document it).
+- **The dates are FARMAXIND's trading days.** All 8 are the first Monday of
+  the month. NSE/CML/36332 (2017-11-17) and NSE/CML/36374 (2017-11-24, ref
+  1147/2017) moved FARMAXIND to BZ for non-compliance with SEBI (LODR)
+  Regulations 27(2) and 31, the second effective 2017-12-04, the first BZ
+  day. Both note that its shares were "not available for trading w.e.f.
+  August 08, 2017 due to GSM framework under Stage VI. Trading in such
+  securities shall be permitted once a month (i.e. First Monday of the
+  month)." FARMAXIND had entered the Graded Surveillance Measure in NSE/SURV/34321
+  (2017-03-03) and stayed in it in NSE/SURV/35167 (2017-06-21). Its BE bars
+  of June to October 2017 (also first Mondays, 0.05 to 0.10) are not in
+  Kite's answer for 130305, which fits a separate token per series
+  (inferred).
+- **FARMAXIND ended before MAZDOCK listed.** Its last row is 2018-07-02. It
+  was compulsorily delisted from 2020-07-10 (NSE/CML/44686, 2020-06-18;
+  NSE's delisted list as stored in `delistings`) and moved to NSE's
+  Dissemination Board (NSE/CML/45009). MAZDOCK was announced for listing by
+  NSE/CML/45978 (2020-10-08) and listed on 2020-10-12, 94 days after the
+  delisting.
+
+### Which security token 509 belonged to
+
+- **Today: MAZDOCK EQ.** Kite's dump gives `130305,509,MAZDOCK,...,EQ,NSE,NSE`
+  (instrument token, exchange token). NSE's UDiFF bhavcopies give
+  `FinInstrmId` 509 for MAZDOCK EQ on 2024-01-02 (INE249Z01012) and on
+  2026-10-19 (INE249Z01020), so the token survived the split's ISIN change.
+  NSE's security master of 2026-10-19 lists 509 as MAZDOCK EQ with
+  `ListgDt` 1286928000, which is 2020-10-12 counted in seconds from
+  1980-01-01.
+- **Kite's token is NSE's token times 256, plus 1.** All 10,235 NSE-segment
+  rows of the dump satisfy `instrument_token = exchange_token * 256 + 1`
+  (130305 = 509 * 256 + 1). The formula is observed in the dump, not stated
+  in Kite's documentation.
+- **In 2017 and 2018: not established from a primary file.** NSE's legacy
+  bhavcopy has no token column (`cm04DEC2017bhav.csv` lists `FARMAXIND,BZ,
+  0.05,...,3577333,...,INE890I01035`). The UDiFF bhavcopy starts in January
+  2024 and the security master on the archives host in July 2024 (requests
+  for 2018 to January 2024 dates return 404). The Internet Archive holds no
+  Kite dump from before 2020-08-07, and that capture is cut off at 1 MB in
+  the BCD segment.
+- **What NSE's master shows about how 509 was assigned.** The tokens around
+  it went to securities listed between 2017-11-17 and 2017-11-30
+  (HDFCLIFE's series at 470 to 479, AISL 482 to 494, VERTOZ 500 to 506, PULZ
+  507 to 515, ICICIB22 522, INFY BB 535, UTI fund units at 541 to 545),
+  interleaved with securities listed on 2020-10-12 (MAZDOCK EQ, RL, BE, BL,
+  IQ at 509, 511, 514, 521, 524; ICEMAKE at 489 to 504; UTIAMC at 527 and
+  532; STINDIA BZ 481; KSERASERA BZ 484). FARMAXIND's BZ series was created
+  for 2017-12-04, inside that late-November allocation, and its bars sit at
+  509. That NSE gave FARMAXIND BZ token 509 in November 2017 and gave it to
+  MAZDOCK EQ when it listed is inferred from this pattern and from the bar
+  match. No NSE document read says so.
+- **What the owners say about reuse.** Kite Connect's instrument
+  documentation (`kite.trade/docs/connect/v3/market-quotes/`) says to key
+  stored instruments on "a combination of exchange and tradingsymbol as the
+  unique key, not the numeric instrument token. Exchanges may reuse
+  instrument tokens for different derivative instruments after each
+  expiry." Its historical documentation (`kite.trade/docs/connect/v3/historical/`)
+  says only that exchanges flush futures and options tokens at every
+  expiry. Neither mentions equity tokens. No NSE document on reusing
+  capital-market tokens was found; Zerodha's support pages were not
+  searched.
+
+### Other Instruments with Kite candles before their first NSE row
+
+Three, counted over every candle in `candles_daily` against its Instrument's
+first Raw Series row (query below):
+
+| Instrument | First NSE row | Kite candles before it | Span |
+|---|---|---|---|
+| RELIANCE@1995-11-29 | 2015-01-01 | 3,740 | 2000-01-03 to 2014-12-31 |
+| INFY@1995-02-08 | 2015-01-01 | 2,949 | 2003-01-01 to 2014-12-31 |
+| MAZDOCK@2020-10-12 | 2020-10-12 | 8 | 2017-12-04 to 2018-07-02 |
+
+RELIANCE's and INFY's are the history-depth probe of 2026-10-21 (range from
+1995-01-01, above). They come before the Raw Series starts (2015-01-01), not
+before the listing, and are outside every Reconcile range so far. MAZDOCK is
+the only Instrument with Kite candles before both its first row and its
+listing, and the only one whose earlier candles are another security's.
+Counted against `listed_on` instead, the four ever-members of #32 also have
+earlier candles (NESTLEIND 1,677, FORCEMOT 1,038, SUBEX 886, CAMS 146); those
+are the same shares' PTT or pre-reduction trading, with NSE rows on the same
+days. Every candle in `candles_daily` maps to an Instrument; none is filed
+under a bare Symbol.
+
+### Facts that bear on reporting such candles
+
+- **The token is the only thing joining the 8 bars to MAZDOCK.** They carry
+  no Symbol, ISIN or series of their own: Kite files history by instrument
+  token, and the repo looks the token up by MAZDOCK's name in today's dump
+  (`ingest/candles.py`, "Which token"). ADR 0016 joins two stretches of NSE
+  history only by a dated, sourced link, because a wrong join "silently
+  mixes two companies' prices". Here Kite has made that join upstream, and
+  MAZDOCK's Instrument has no NSE row to place the bars against.
+- **NSE's rows already place them.** The same 8 days are FARMAXIND BZ rows
+  in `eod_bhavcopy`, inside the Instrument FARMAXIND@2015-01-01 (BZ interval
+  2017-12-04 to 2018-07-02). FARMAXIND has no candles, so Reconcile never
+  compares it.
+- **Listing Age does not read candles.** ADR 0017 counts from the earliest
+  master date or the first Raw Series row, both NSE's, so MAZDOCK's Listing
+  Age starts on 2020-10-12 whatever Kite returns. The Adjusted Series is
+  built from NSE's rows, not Kite's, so it does not carry the 8 bars either.
+- **Kite's values are not the earlier security's prices.** Kite adjusted
+  them by a split of the later security, so they are neither FARMAXIND's
+  prices (0.05) nor MAZDOCK's. A bar of a reused token can come back zero
+  when the earlier security was a penny stock.
+- **The class can recur.** NSE's master shows tokens refilled by later
+  listings (MAZDOCK, ICEMAKE and UTIAMC on 2020-10-12 in the 470 to 545
+  range). Any Instrument fetched through a reused token may have such bars,
+  dated before its first row. Today only MAZDOCK does, of 464 Instruments
+  with candles.
+
+### Queries
+
+Run with `psql` on the #29 database. The 8 bars and FARMAXIND's rows those
+days:
+
+```sql
+SELECT k.trade_date, k.open, k.close, k.volume, e.symbol, e.series, e.isin,
+       e.close, e.traded_qty, e.trades
+FROM candles_daily k
+LEFT JOIN eod_bhavcopy e ON e.trade_date = k.trade_date AND k.volume = 2 * e.traded_qty
+WHERE k.symbol = 'MAZDOCK' AND k.trade_date < '2020-10-12' ORDER BY 1;
+```
+
+On 2018-01-01 and 2018-05-07 one other row also matches on quantity (GHCL
+EQ, SKSTEXTILE SM); FARMAXIND BZ is the only match on all 8. Instruments with
+candles before their first row:
+
+```sql
+WITH first AS (SELECT instrument_key, min(first_day) AS first_row
+               FROM instrument_intervals GROUP BY 1)
+SELECT c.instrument, f.first_row, count(*), min(c.trade_date), max(c.trade_date)
+FROM candles_daily_instruments c JOIN first f ON f.instrument_key = c.instrument
+WHERE c.trade_date < f.first_row GROUP BY 1, 2 ORDER BY 3 DESC;
+```
+
+The same against `instruments.listed_on` gives the second count. Kite's
+rounding on MAZDOCK's pre-split bars: every pair of a Kite price and NSE's
+price on the same day before 2024-12-27 whose NSE price is an odd 5 paisa
+tick, tested for `round(kite / 0.05) % 2 = 0`. The token arithmetic was
+checked over the dump with `instrument_token = exchange_token * 256 + 1`.
+FARMAXIND's circulars were found by downloading every circular whose subject
+mentions Z category, GSM, Regulation 33 or non-compliance (2017), or
+delisting or suspension (2018 and 2020), and searching the text.
+
+### Unresolved
+
+- **Token 509 in 2017 and 2018** is inferred, not read. A Kite dump or an
+  NSE security master from those years would settle it; none public was
+  found.
+- **Not checked with Kite (needs a Session Login).** With a fresh access
+  token: whether `historical/130305/day` for 2017-01-01 to 2018-12-31 still
+  returns the 8 bars; whether any FARMAXIND series returns bars under
+  another token (delisted, so not in the dump); and whether a minute
+  request for 2017-12-04 returns minute bars.
+- **FARMAXIND's halt after 2018-07-02**: no suspension circular was found in
+  the subjects searched (July to December 2018). Its delisting in 2020 is
+  cited.
+- **Zerodha's support pages** were not searched for equity token reuse.
+- **How such candles are reported** is #34's second checkbox, for the
+  Operator.
 
 ## US-market findings (for reference; not the chosen market)
 
