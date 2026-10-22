@@ -1412,15 +1412,16 @@ live Kite responses. The range is #13's and #29's, 2016-10-21 to 2026-10-20.
 
 | Step | Result | Runtime |
 |---|---|---|
-| `migrate` | 0025 (`candle_requests`). | under 1 s |
-| `ingest candles --interval day --from 2016-10-21 --to 2026-10-20`, once per Symbol already holding candles (464) | 928 requests, each recorded: 464 (Symbol, series) pairs, merged to one range each. 1,007,665 bars seen, **1,435 written** (expected 0; BAFNAPH, below). 823 (Symbol, series) pairs without a token, skipped and not recorded. 0 anomalies. | 5 min |
-| `integrity` | **Pass.** Below. | 22 s |
+| `migrate` | 0025 (`candle_requests`), applied before the run. | under 1 s |
+| `integrity` (it reads no candles, so it ran first) | **Pass.** Below. | 22 s |
+| `ingest candles --interval day --from 2016-10-21 --to 2026-10-20`, naming each of the 464 Symbols already holding candles | 928 requests, each recorded: 464 (Symbol, series) pairs, merged to one range each. 1,007,665 bars seen, **1,435 written** (expected 0; BAFNAPH, below). 823 (Symbol, series) pairs without a token, skipped and not recorded. 0 anomalies. | 5 min |
 | `parity` | **Fail: 2.09 percent** unexplained against 0.1. Below. | 2 min 19 s |
 
 ### The re-fetch wrote BAFNAPH's history
 
 A named Symbol is fetched under every series it has a token for. BAFNAPH
-had candles only for July and August 2024 (#13's 998 missing), and its BE
+had candles only for July and August 2024, which is why #13 and #29
+counted 998 of its NSE rows as missing candles. Its BE
 token returned 1,435 bars more, from 2020-03-02. The spec put fetching its
 history out of scope, but the bars are kept: their requests are recorded,
 so without them every one of those days would read as a bar Kite was asked
@@ -1453,9 +1454,9 @@ compared, 44,755 differences, 21,069 unexplained (**2.09 percent**): FAIL.
 | missing | Special Session | 1,044 (muhurat) | 1,044 |
 | missing | not fetched | 998 (BAFNAPH) | 0 (BAFNAPH fetched, above) |
 | missing | unexplained | 8 | 8 |
-| close | additive adjustment | about 29,670 | 5,238 |
-| close | coarse rounding | (with the above) | 3,371 |
-| close | unexplained | | 21,061 |
+| close | additive adjustment | 29,670 (both causes, not split out) | 5,238 |
+| close | coarse rounding | (in the row above) | 3,371 |
+| close | unexplained | (not split out) | 21,061 |
 | | **total** | **45,324 (4.50 percent)** | **44,755; unexplained 21,069 (2.09 percent)** |
 
 Series moves rose by 437 with BAFNAPH's BE history in the comparison.
@@ -1475,27 +1476,32 @@ Series moves rose by 437 with BAFNAPH's BE history in the comparison.
 | over 5, at most 10 paisa | 7,906 |
 | over 10 paisa | 2,229 |
 
-  - **Additive, then rounded to Kite's tick (about 18,930).** One a and b
-    hold across consecutive stretches, often for years: GNFC a = 0.932,
+  - **Additive, then rounded (18,931).** Kite's close is a × NSE's close − b
+    (ADR 0018's additive adjustment: a scale a and an offset b), and one a
+    and b hold across consecutive stretches, often for years: GNFC a = 0.932,
     b = 43.33 (1,742 closes); BANKBARODA 0.936, 7.11 (1,668); CANBK 0.187,
     3.01 (1,641); ASHOKLEY 0.500, 2.48 (1,149). The same holds for HINDPETRO,
     VEDL, MPHASIS, M&MFIN, BPCL, TECHM, TATASTEEL, HEROMOTOCO, POWERGRID,
-    NMDC, IOC and GAIL. Kite's closes there are on a 5 paisa tick, or a
-    10 paisa one (MPHASIS, TECHM). A price rounded to a 5 paisa tick can be
-    2.5 paisa from the true line, and a least-squares line drawn through
+    NMDC, IOC and GAIL. Kite's closes there are on a 5 paisa tick
+    (BANKBARODA, ASHOKLEY, GNFC, HINDPETRO), a 10 paisa one (MPHASIS,
+    TECHM), or finer (CANBK, TATASTEEL, IOC, GAIL). A rounded price can be
+    half its tick from the true line, and a least-squares line drawn through
     rounded prices is itself a little off it, so the largest gap lands just
-    above 2.5 paisa (2.7 to 3.1 paisa for CANBK, TATASTEEL, BANKBARODA,
-    ASHOKLEY). On a 10 paisa tick it reaches about 10 paisa (MPHASIS,
-    TECHM). The rule as written (ADR 0018) cannot pass these.
-  - **Additive with coarser rounding (about 2,080).** OFSS (1,531, up to
+    above 2.5 paisa: 2.7 to 3.1 paisa for CANBK, TATASTEEL, BANKBARODA and
+    ASHOKLEY. On a 10 paisa tick it reaches about 10 paisa (MPHASIS,
+    TECHM). GNFC, HINDPETRO, M&MFIN and BPCL reach 5.2 to 9.1 paisa on a
+    5 paisa tick, more than rounding alone accounts for; why was not
+    established. The rule as written (ADR 0018) cannot pass any of these.
+  - **Additive with coarser rounding (2,076).** OFSS (1,531, up to
     51 paisa), BSE, NIITTECH, GODFRYPHLP, TATAINVEST, MCX and NAUKRI: fits
-    off by 27 to 57 paisa, on a 10 paisa tick or coarser. These look like
-    additive history rounded to the rupee or half-rupee, a combination of
-    two reasons the rules apply one at a time.
-  - **Single days and one short run (about 55).** One to three bars in 16
-    Instruments (34 closes, up to ₹6 off: DMART, SBILIFE, PNBHOUSING,
-    AUBANK, TEJASNET, DIXON, HINDZINC and others), and 20 SHANKARA closes
-    about ₹6 off in one stretch. Cause not found.
+    off by 25 to 57 paisa, on a 10 paisa tick or coarser. These look like
+    additive history rounded coarser than Kite's usual tick, to the rupee or
+    the half-rupee. ADR 0018 agrees only rounding to ₹1, and only on its
+    own, never after an additive fit.
+  - **Isolated closes (54).** 16 Instruments with at most three unexplained
+    closes each (34 closes: DMART, SBILIFE, PNBHOUSING, AUBANK, TEJASNET,
+    DIXON, HINDZINC and others), and 20 SHANKARA closes in one stretch whose
+    fit is about ₹6 off. Cause not found.
 
 ### Outcome
 
@@ -1503,8 +1509,8 @@ The Integrity Check passes: nothing in NSE's data as we hold it is lost or
 unexplained. Kite Parity fails at 2.09 percent, and nearly all of that is
 one cause, Kite's additive adjustment rounded to its own tick, which the
 half-tick limit was set too tight to recognise. Even a limit of one 10 paisa
-tick would explain about 18,800 of the 21,061 and leave about 2,240
-unexplained (0.22 percent), still a fail.
+tick would explain 18,832 of the 21,061 and leave 2,229 close mismatches
+and the 8 missing days unexplained (0.22 percent), still a fail.
 
 ### Unresolved
 
@@ -1516,7 +1522,7 @@ unexplained (0.22 percent), still a fail.
 - **Additive history rounded coarser** (OFSS, BSE, MCX, TATAINVEST,
   GODFRYPHLP, NIITTECH, NAUKRI): a follow-up decides whether one reason may
   combine the additive fit with rupee rounding.
-- **The 8 missing single days and about 55 isolated close mismatches**:
+- **The 8 missing single days and the 54 isolated close mismatches**:
   causes not found.
 - **Fetching every series of a named Symbol** filled BAFNAPH's BE history
   on a run meant to write nothing. A re-fetch meant only to record requests
