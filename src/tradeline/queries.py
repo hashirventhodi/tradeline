@@ -212,6 +212,65 @@ def daily_candles(
     return [DailyCandle(*row) for row in rows]
 
 
+@dataclass(frozen=True)
+class CandleRequest:
+    """One range candle ingest asked Kite for, under the Symbol it fetched."""
+
+    ingest_run_id: uuid.UUID
+    symbol: str
+    series: str
+    interval: str
+    start: date
+    end: date
+
+
+@dataclass(frozen=True)
+class RequestedRange:
+    """Days, ``start`` to ``end`` inclusive, that candle ingest has asked Kite for."""
+
+    start: date
+    end: date
+
+    def covers(self, day: date) -> bool:
+        return self.start <= day <= self.end
+
+
+def candle_requests(
+    conn: psycopg.Connection, symbol: str, *, series: str, interval: str = "day"
+) -> list[CandleRequest]:
+    """Every range asked of Kite for ``symbol`` in ``series``, in the order asked.
+
+    One per request, so a range longer than Kite serves at once is several,
+    and a re-run asks, and is recorded, again."""
+    rows = conn.execute(
+        "SELECT ingest_run_id, symbol, series, interval, range_start, range_end"
+        " FROM candle_requests WHERE (symbol, series, interval) = (%s, %s, %s)"
+        " ORDER BY requested_at, range_start",
+        (symbol, series, interval),
+    ).fetchall()
+    return [CandleRequest(*row) for row in rows]
+
+
+def requested_candle_ranges(
+    conn: psycopg.Connection, symbol: str, *, series: str, interval: str = "day"
+) -> list[RequestedRange]:
+    """The days ever asked of Kite for ``symbol`` in ``series``, merged, oldest first.
+
+    Overlapping and adjoining requests read as one range; whether Kite
+    returned bars for them does not matter."""
+    merged: list[RequestedRange] = []
+    for request in sorted(
+        candle_requests(conn, symbol, series=series, interval=interval),
+        key=lambda r: (r.start, r.end),
+    ):
+        if merged and request.start <= merged[-1].end + timedelta(days=1):
+            last = merged[-1]
+            merged[-1] = RequestedRange(last.start, max(last.end, request.end))
+        else:
+            merged.append(RequestedRange(request.start, request.end))
+    return merged
+
+
 def corporate_actions(
     conn: psycopg.Connection,
     instrument: str,

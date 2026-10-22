@@ -27,6 +27,10 @@ close_tolerance = 0.001
 # The command fails at or above this percentage of the rows compared whose
 # difference (missing, extra, or close) no Parity Reason explains.
 max_unexplained_pct = 0.1
+# A stretch's close mismatches are explained as Kite's additive adjustment when
+# one fit of a x NSE - b puts every bar within half a tick, over at least this
+# many compared bars.
+additive_min_bars = 5
 # The Trading Calendar, the file [integrity] checks against: a missing candle
 # on one of its Special Sessions is explained.
 trading_calendar = "trading_calendar.csv"

@@ -24,7 +24,20 @@ Reason is a rule over data we hold, never a list of dates, and a new one needs
 ADR 0018 to agree it first. A missing candle on a day the Trading Calendar
 (``parity.trading_calendar``, the file the Integrity Check reads) lists as a
 Special Session is explained as one; a calendar that does not load refuses
-the run, as it refuses the Integrity Check.
+the run, as it refuses the Integrity Check. A missing candle on a day outside
+every range candle ingest asked Kite for, under any of the Instrument's
+Symbols in that series (``queries.requested_candle_ranges``), is explained as
+not fetched: history never requested is not Kite missing it.
+
+A close mismatch is tried first as an **additive adjustment**: Kite adjusts
+some older histories by subtracting as well as scaling (GNFC, OFSS), which no
+one factor takes out. When one least-squares fit of Kite's close as
+a x NSE's - b puts every compared bar of the mismatch's stretch within half a
+tick, over at least ``additive_min_bars`` bars, all of that stretch's
+mismatches are explained. Then as **coarse rounding**: Kite rounds some
+adjusted histories to whole rupees (MCX, BSE, BAJFINANCE), so a close equal to
+NSE's close times the stretch's factor rounded to the rupee, half to even, is
+explained. Only the rupee is recognised.
 
 A candle dated before its Instrument's Listing Age starts (the view
 ``instrument_listing_age``, ADR 0017) is a **Pre-listing Candle**: the
@@ -55,10 +68,10 @@ rupees (#17, #41). Such a bar is left out of its stretch's factor, a ratio of
 0 showing only that the price rounded away, and is still compared against
 NSE's close times the factor of the rest: it passes where that is within half
 the tick of 0 and mismatches otherwise, so a whole-rupee 0 for 0.30 is a
-mismatch. A stretch whose every close is 0 has no factor: its bars count as
-rows and are never close mismatches, like a stretch too short to show a bad
-close. Only the close is compared; a zero open, high or low is
-``compare-adjusted``'s to find.
+mismatch, one coarse rounding explains. A stretch whose every close is 0 has
+no factor: its bars count as rows and are never close mismatches, like a
+stretch too short to show a bad close. Only the close is compared; a zero
+open, high or low is ``compare-adjusted``'s to find.
 
 The run passes when unexplained differences, of all three kinds, are under
 ``max_unexplained_pct`` of the rows compared, a row being one (Instrument,
@@ -74,7 +87,7 @@ from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Decimal
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
@@ -89,6 +102,7 @@ from tradeline.trading_calendar import load_trading_calendar
 Kind = Literal["missing", "extra", "close"]
 KINDS: tuple[Kind, ...] = ("missing", "extra", "close")
 HALF_TICK = Decimal("0.025")
+RUPEE = Decimal(1)
 HUNDRED = Decimal(100)
 # Every difference is counted; this many unexplained ones are listed in a summary.
 MAX_LISTED = 100
@@ -98,8 +112,7 @@ class Reason(StrEnum):
     """A Parity Reason: a stated, checkable cause of a difference (ADR 0018).
 
     Each is a member, with its rule in ``_rules`` and its place in
-    ``REASONS``. Still to come: additive adjustment and coarse rounding (#52),
-    and not fetched (#53).
+    ``REASONS``.
     """
 
     # A candle on a day NSE lists its Instrument in another listing series and
@@ -107,15 +120,21 @@ class Reason(StrEnum):
     SERIES_MOVE = "series_move"
     # A missing candle on a day the Trading Calendar lists as a Special Session.
     SPECIAL_SESSION = "special_session"
+    # A missing bar on a day no range candle ingest asked Kite for covers.
+    NOT_FETCHED = "not_fetched"
+    # Kite's close is a x NSE's - b over the mismatch's whole stretch (``_additive``).
+    ADDITIVE_ADJUSTMENT = "additive_adjustment"
+    # Kite's close is NSE's times the stretch's factor rounded to the rupee, half to even.
+    COARSE_ROUNDING = "coarse_rounding"
 
 
 # Each kind's Parity Reasons, in the order they are tried; the first that applies is
 # recorded. ADR 0018's order: missing, a Special Session then not fetched; extra, a
 # series move; close, an additive adjustment over its stretch then coarse rounding.
 REASONS: Mapping[Kind, tuple[Reason, ...]] = {
-    "missing": (Reason.SPECIAL_SESSION,),
+    "missing": (Reason.SPECIAL_SESSION, Reason.NOT_FETCHED),
     "extra": (Reason.SERIES_MOVE,),
-    "close": (),
+    "close": (Reason.ADDITIVE_ADJUSTMENT, Reason.COARSE_ROUNDING),
 }
 
 
@@ -402,7 +421,46 @@ def _rules(
     def special_session(found: _Found) -> bool:
         return found.row.trade_date in special_sessions
 
-    return {Reason.SERIES_MOVE: series_move, Reason.SPECIAL_SESSION: special_session}
+    additive: dict[int, bool] = {}  # by id of a stretch, which lives as long as the run
+
+    def additive_adjustment(found: _Found) -> bool:
+        stretch = _of(found.stretch)
+        if id(stretch) not in additive:
+            additive[id(stretch)] = _additive(stretch, settings.additive_min_bars)
+        return additive[id(stretch)]
+
+    return {
+        Reason.SERIES_MOVE: series_move,
+        Reason.SPECIAL_SESSION: special_session,
+        Reason.NOT_FETCHED: _not_fetched(conn, rows),
+        Reason.ADDITIVE_ADJUSTMENT: additive_adjustment,
+        Reason.COARSE_ROUNDING: _coarse_rounding,
+    }
+
+
+def _coarse_rounding(found: _Found) -> bool:
+    """Kite's close is the expected close rounded to the rupee, half to even. Only the
+    rupee is recognised: another tick needs evidence and ADR 0018 to agree it."""
+    return found.row.candle_close == _of(found.expected).quantize(RUPEE, ROUND_HALF_EVEN)
+
+
+def _additive(stretch: _Stretch, min_bars: int) -> bool:
+    """Whether one least-squares fit of Kite's close as a x NSE's - b puts every one of the
+    stretch's compared bars, at least ``min_bars`` of them, within half a tick of it.
+
+    A stretch's factor alone leaving mismatches is given: one is being classified. A
+    stretch whose NSE closes are all one price has no fit."""
+    if len(stretch.rows) < min_bars:
+        return False
+    points = [(_of(r.eod_close), _of(r.candle_close)) for r in stretch.rows]
+    mean_x = sum((x for x, _ in points), Decimal(0)) / len(points)
+    mean_y = sum((y for _, y in points), Decimal(0)) / len(points)
+    spread = sum(((x - mean_x) ** 2 for x, _ in points), Decimal(0))
+    if not spread:
+        return False
+    a = sum(((x - mean_x) * (y - mean_y) for x, y in points), Decimal(0)) / spread
+    b = a * mean_x - mean_y
+    return all(abs(y - (a * x - b)) <= HALF_TICK for x, y in points)
 
 
 def _listed_series(
@@ -432,6 +490,37 @@ def _listed_series(
     for instrument, trade_date, series in found:
         listed[(instrument, trade_date)].add(series)
     return listed
+
+
+def _not_fetched(conn: psycopg.Connection, rows: Sequence[_Row]) -> _Rule:
+    """A missing bar on a day outside every range candle ingest asked Kite for, under
+    any of the Instrument's Symbols, in that series: history never requested is not
+    Kite missing it. Requests are recorded under the Symbol fetched, the Instrument's
+    name at the time, so each of its Symbols is read."""
+    wanted = sorted({(r.instrument, r.series) for r in rows if not r.has_candle})
+    names: dict[str, set[str]] = defaultdict(set)
+    for instrument, symbol in conn.execute(
+        "SELECT instrument_key, symbol FROM symbol_instruments"
+        " WHERE instrument_key = ANY(%s::text[])",
+        ([instrument for instrument, _ in wanted],),
+    ).fetchall():
+        names[instrument].add(symbol)
+    requested = {
+        (instrument, series): [
+            requested_range
+            # A Symbol in no Instrument stands for its own.
+            for symbol in sorted(names[instrument] or {instrument})
+            for requested_range in queries.requested_candle_ranges(conn, symbol, series=series)
+        ]
+        for instrument, series in wanted
+    }
+
+    def rule(found: _Found) -> bool:
+        row = found.row
+        ranges = requested[(row.instrument, row.series)]
+        return not any(r.covers(row.trade_date) for r in ranges)
+
+    return rule
 
 
 def parity(

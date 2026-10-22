@@ -28,11 +28,15 @@ from playback import (
     CandleEdit,
     Edit,
     Playback,
+    affine_prices,
     bhavcopy_series,
     drop_bar,
+    in_requested_range,
     kite_candles,
+    recorded_range,
     shift_close,
     then,
+    whole_rupees,
     zero_prices,
 )
 from tradeline.cli import main
@@ -56,6 +60,7 @@ CALENDAR = FIXTURES / "trading_calendar.csv"
 SETTINGS = Config.Parity(
     close_tolerance=0.001, max_unexplained_pct=0.1, trading_calendar=str(CALENDAR)
 )
+HUNDRED = Decimal(100)
 
 INFY_TOKEN = "408065"
 
@@ -64,7 +69,10 @@ def untouched(request: Request, candles: list[Candle]) -> list[Candle]:
     return candles
 
 
-def load(url: str, edit: CandleEdit = untouched, eod: Edit | None = None) -> None:
+def load(
+    url: str, edit: CandleEdit = untouched, eod: Edit | None = None, *, candles_end: date = END
+) -> None:
+    """The fixtures loaded, Kite asked for candles from START to ``candles_end``."""
     with app_connection(url) as conn:
         ingest_eod(conn, Playback(FIXTURES / "ingest_eod", edit=eod), start=START, end=END)
         ingest_corporate_actions(
@@ -73,9 +81,13 @@ def load(url: str, edit: CandleEdit = untouched, eod: Edit | None = None) -> Non
             start=ACTIONS_START,
             end=ACTIONS_END,
         )
-        transport = Playback(FIXTURES / "ingest_candles", edit=kite_candles(edit))
+        transport = Playback(
+            FIXTURES / "ingest_candles",
+            ask=recorded_range(START.isoformat(), END.isoformat()),
+            edit=kite_candles(then(in_requested_range, edit)),
+        )
         session = KiteSession(transport, api_key="key", access_token="tok", sleep=lambda _: None)
-        ingest_candles(conn, session, start=START, end=END)
+        ingest_candles(conn, session, start=START, end=candles_end)
 
 
 def run(url: str, settings: Config.Parity = SETTINGS) -> ParityReport:
@@ -205,11 +217,23 @@ def test_with_no_parity_reason_yet_every_difference_is_unexplained_and_counted_b
     summary = report.summary()
     assert (summary["differences"], summary["unexplained"]) == (2, 2)
     assert summary["by_kind"] == {
-        "missing": {"total": 1, "special_session": 0, "unexplained": 1},
+        "missing": {"total": 1, "special_session": 0, "not_fetched": 0, "unexplained": 1},
         "extra": {"total": 0, "series_move": 0, "unexplained": 0},
-        "close": {"total": 1, "unexplained": 1},
+        "close": {
+            "total": 1,
+            "additive_adjustment": 0,
+            "coarse_rounding": 0,
+            "unexplained": 1,
+        },
     }
-    assert summary["by_reason"] == {"series_move": 0, "special_session": 0, "unexplained": 2}
+    assert summary["by_reason"] == {
+        "series_move": 0,
+        "special_session": 0,
+        "not_fetched": 0,
+        "additive_adjustment": 0,
+        "coarse_rounding": 0,
+        "unexplained": 2,
+    }
     assert [(d["kind"], d["reason"]) for d in summary["listed_unexplained"]] == [
         ("missing", None),
         ("close", None),
@@ -252,7 +276,14 @@ def test_a_candle_on_a_day_nse_lists_the_instrument_in_no_series_stays_unexplain
     assert [(d.kind, d.symbol, d.trade_date, d.reason) for d in report.unexplained] == [
         ("extra", "INFY", date(2024, 7, 15), None)
     ]
-    assert report.by_reason == {"series_move": 0, "special_session": 0, "unexplained": 1}
+    assert report.by_reason == {
+        "series_move": 0,
+        "special_session": 0,
+        "not_fetched": 0,
+        "additive_adjustment": 0,
+        "coarse_rounding": 0,
+        "unexplained": 1,
+    }
     assert not report.passed
 
 
@@ -278,10 +309,25 @@ def test_a_bar_dropped_on_a_special_session_is_explained_and_the_verdict_ignores
     assert report.unexplained == ()
     assert report.passed
     summary = report.summary()
-    assert summary["by_kind"]["missing"] == {"total": 1, "special_session": 1, "unexplained": 0}
-    assert summary["by_reason"] == {"series_move": 0, "special_session": 1, "unexplained": 0}
+    assert summary["by_kind"]["missing"] == {
+        "total": 1,
+        "special_session": 1,
+        "not_fetched": 0,
+        "unexplained": 0,
+    }
+    assert summary["by_reason"] == {
+        "series_move": 0,
+        "special_session": 1,
+        "not_fetched": 0,
+        "additive_adjustment": 0,
+        "coarse_rounding": 0,
+        "unexplained": 0,
+    }
     assert summary["listed_unexplained"] == []
-    assert "by reason: series_move 0, special_session 1, unexplained 0" in report.text()
+    assert (
+        "by reason: series_move 0, special_session 1, not_fetched 0, additive_adjustment 0,"
+        " coarse_rounding 0, unexplained 0"
+    ) in report.text()
 
 
 def test_the_same_bar_dropped_on_an_ordinary_day_stays_unexplained(
@@ -307,6 +353,70 @@ def test_a_malformed_calendar_refuses_the_run_naming_the_line(
 
     with pytest.raises(ValueError, match="trading_calendar.csv line 3"):
         run(fresh_database_url, calendar(tmp_path, "2024-07-15,special_session\n"))
+
+
+def test_nse_rows_outside_every_requested_range_are_not_fetched_while_a_dropped_bar_is_not(
+    fresh_database_url: str,
+) -> None:
+    """Kite is asked for July alone, and INFY's 15 July bar is dropped inside it."""
+    load(fresh_database_url, drop_bar(INFY_TOKEN, "2024-07-15"), candles_end=date(2024, 7, 31))
+
+    report = run(fresh_database_url)
+
+    not_fetched = [d for d in report.missing if d.reason == Reason.NOT_FETCHED]
+    # August 2024 less the 15th's holiday: 21 days of each EQ symbol.
+    assert len(not_fetched) == 21 * EQ_SYMBOLS
+    assert {d.trade_date.month for d in not_fetched} == {8}
+    assert [(d.kind, d.symbol, d.trade_date) for d in report.unexplained] == [
+        ("missing", "INFY", date(2024, 7, 15))
+    ]
+    assert report.rows == ROWS
+    # One unexplained row in 172: the not-fetched ones do not count against parity.
+    assert report.unexplained_pct == HUNDRED / ROWS
+    summary = report.summary()
+    assert summary["by_kind"]["missing"] == {
+        "total": 21 * EQ_SYMBOLS + 1,
+        "special_session": 0,
+        "not_fetched": 21 * EQ_SYMBOLS,
+        "unexplained": 1,
+    }
+    assert summary["by_reason"] == {
+        "series_move": 0,
+        "special_session": 0,
+        "not_fetched": 21 * EQ_SYMBOLS,
+        "additive_adjustment": 0,
+        "coarse_rounding": 0,
+        "unexplained": 1,
+    }
+    assert (
+        "by reason: series_move 0, special_session 0, not_fetched 84, additive_adjustment 0,"
+        " coarse_rounding 0, unexplained 1" in report.text()
+    )
+    # 85 missing of 172 rows would fail any threshold; the one unexplained passes 1 percent.
+    assert run(fresh_database_url, replace(SETTINGS, max_unexplained_pct=1.0)).passed
+
+
+def test_a_special_session_outside_every_requested_range_is_a_special_session(
+    fresh_database_url: str, tmp_path: Path
+) -> None:
+    """ADR 0018 tries a Special Session before not fetched."""
+    load(fresh_database_url, candles_end=date(2024, 7, 31))
+
+    report = run(
+        fresh_database_url, calendar(tmp_path, "2024-08-01,special_session,NSE/CMTR/77777\n")
+    )
+
+    reasons = {(d.trade_date, d.reason) for d in report.missing}
+    assert (date(2024, 8, 1), Reason.SPECIAL_SESSION) in reasons
+    assert (date(2024, 8, 1), Reason.NOT_FETCHED) not in reasons
+    assert report.by_reason == {
+        "series_move": 0,
+        "special_session": EQ_SYMBOLS,
+        "not_fetched": 20 * EQ_SYMBOLS,
+        "additive_adjustment": 0,
+        "coarse_rounding": 0,
+        "unexplained": 0,
+    }
 
 
 def test_an_empty_database_cannot_pass(fresh_database_url: str) -> None:
@@ -368,6 +478,100 @@ def test_a_stretch_whose_every_close_is_zero_has_no_factor_and_no_close_mismatch
     assert report.differences == 0
 
 
+# INFY's Kite prices as a tenth less 50 rupees: Kite's close is a x NSE's - b with
+# a about 0.0979 and b 50, the recorded closes' own rounding shrunk below half a tick.
+ADDITIVE = affine_prices(INFY_TOKEN, times="0.1", minus="50")
+
+
+def test_a_stretch_whose_kite_closes_fit_a_times_nse_minus_b_is_an_additive_adjustment(
+    fresh_database_url: str,
+) -> None:
+    load(fresh_database_url, ADDITIVE)
+
+    report = run(fresh_database_url)
+
+    # INFY's one stretch runs from 1 July to 30 August, 43 bars from about 1,590 to
+    # 1,944: no one factor puts 105.71 for 1,590.8 and 140.25 for 1,943.7 within tolerance.
+    assert len(report.close_mismatches) > 30
+    assert {(d.symbol, d.reason) for d in report.close_mismatches} == {
+        ("INFY", Reason.ADDITIVE_ADJUSTMENT)
+    }
+    assert report.unexplained == ()
+    assert report.by_reason["additive_adjustment"] == len(report.close_mismatches)
+    assert report.passed
+
+
+# Monday 1 to Thursday 4 July 2024: one stretch of four INFY bars.
+FOUR_START, FOUR_END = date(2024, 7, 1), date(2024, 7, 4)
+
+
+def run_four(url: str, settings: Config.Parity = SETTINGS) -> ParityReport:
+    with app_connection(url) as conn:
+        return parity(conn, settings, start=FOUR_START, end=FOUR_END, symbols=["INFY"])
+
+
+def test_the_same_shift_on_a_stretch_of_four_bars_stays_unexplained(
+    fresh_database_url: str,
+) -> None:
+    load(fresh_database_url, ADDITIVE)
+
+    report = run_four(fresh_database_url)
+
+    assert report.rows == 4
+    assert report.close_mismatches
+    assert [d.reason for d in report.unexplained] == [None] * len(report.close_mismatches)
+    assert not report.passed
+
+
+def test_the_minimum_stretch_for_an_additive_adjustment_is_a_setting(
+    fresh_database_url: str,
+) -> None:
+    load(fresh_database_url, ADDITIVE)
+
+    report = run_four(fresh_database_url, replace(SETTINGS, additive_min_bars=4))
+
+    assert report.close_mismatches
+    assert report.unexplained == ()
+
+
+# INFY's Kite prices as a tenth, rounded to the rupee: a whole-rupee history of prices
+# from about 156 to 194, where the 0.1 percent tolerance is under 20 paisa.
+WHOLE_RUPEES = whole_rupees(INFY_TOKEN, times="0.1")
+
+
+def test_a_close_equal_to_the_expected_close_rounded_to_the_rupee_is_coarse_rounding(
+    fresh_database_url: str,
+) -> None:
+    load(fresh_database_url, WHOLE_RUPEES)
+
+    report = run(fresh_database_url)
+
+    assert len(report.close_mismatches) > 20
+    assert {(d.symbol, d.reason) for d in report.close_mismatches} == {
+        ("INFY", Reason.COARSE_ROUNDING)
+    }
+    assert all(d.candle_close == d.candle_close.to_integral() for d in report.close_mismatches)  # type: ignore[union-attr]
+    assert report.unexplained == ()
+    assert report.by_reason["coarse_rounding"] == len(report.close_mismatches)
+    assert report.by_reason["additive_adjustment"] == 0
+    assert report.passed
+
+
+def test_a_close_fifty_paisa_off_the_expected_close_rounded_to_the_rupee_is_unexplained(
+    fresh_database_url: str,
+) -> None:
+    load(fresh_database_url, then(WHOLE_RUPEES, shift_close(INFY_TOKEN, "2024-07-01", "0.5")))
+
+    report = run(fresh_database_url)
+
+    ((off),) = report.unexplained
+    assert (off.kind, off.symbol, off.trade_date) == ("close", "INFY", date(2024, 7, 1))
+    # 1,557.1 a tenth is 155.71, rounded to 156 and moved to 156.5.
+    assert off.candle_close == Decimal("156.5")
+    assert {d.reason for d in report.close_mismatches if d is not off} == {Reason.COARSE_ROUNDING}
+    assert not report.passed
+
+
 REPO_CONFIG = Path(__file__).resolve().parents[1] / "tradeline.toml"
 
 
@@ -416,11 +620,23 @@ def test_the_command_exits_zero_on_clean_fixtures_with_a_summary_and_a_table(
         "unexplained_pct": "0.0000",
         "passed": True,
         "by_kind": {
-            "missing": {"total": 0, "special_session": 0, "unexplained": 0},
+            "missing": {"total": 0, "special_session": 0, "not_fetched": 0, "unexplained": 0},
             "extra": {"total": 0, "series_move": 0, "unexplained": 0},
-            "close": {"total": 0, "unexplained": 0},
+            "close": {
+                "total": 0,
+                "additive_adjustment": 0,
+                "coarse_rounding": 0,
+                "unexplained": 0,
+            },
         },
-        "by_reason": {"series_move": 0, "special_session": 0, "unexplained": 0},
+        "by_reason": {
+            "series_move": 0,
+            "special_session": 0,
+            "not_fetched": 0,
+            "additive_adjustment": 0,
+            "coarse_rounding": 0,
+            "unexplained": 0,
+        },
         "listed_unexplained": [],
         "candle_disagreements": 0,
         "listed_candle_disagreements": [],
@@ -465,7 +681,10 @@ def test_the_command_exits_non_zero_above_the_configured_threshold(
         }
     ]
     assert "1 unexplained (0.5814%), must be under 0.1%: FAIL" in strict_table
-    assert "by reason: series_move 0, special_session 0, unexplained 1" in strict_table
+    assert (
+        "by reason: series_move 0, special_session 0, not_fetched 0, additive_adjustment 0,"
+        " coarse_rounding 0, unexplained 1"
+    ) in strict_table
     assert "missing  INFY" in strict_table
 
 
