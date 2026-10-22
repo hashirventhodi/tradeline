@@ -12,7 +12,7 @@ import re
 import zipfile
 from collections.abc import Callable
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Decimal
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -137,6 +137,39 @@ def zero_prices(token: str, stamp: str) -> CandleEdit:
         for candle in candles:
             if candle[0].startswith(stamp):
                 candle[1:5] = [0, 0, 0, 0]
+        return candles
+
+    return edit
+
+
+def affine_prices(token: str, times: str, minus: str) -> CandleEdit:
+    """Instrument ``token``'s every price ``p`` replaced by ``p * times - minus``, as an
+    additive adjustment of Kite's would leave it (#17)."""
+
+    def edit(request: Request, candles: list[Candle]) -> list[Candle]:
+        if f"/historical/{token}/" not in request.url:
+            return candles
+        for candle in candles:
+            candle[1:5] = [
+                float(Decimal(str(p)) * Decimal(times) - Decimal(minus)) for p in candle[1:5]
+            ]
+        return candles
+
+    return edit
+
+
+def whole_rupees(token: str, times: str) -> CandleEdit:
+    """Instrument ``token``'s every price ``p`` replaced by ``p * times`` rounded to the
+    rupee, half to even, as Kite rounds some adjusted histories (#17)."""
+
+    def edit(request: Request, candles: list[Candle]) -> list[Candle]:
+        if f"/historical/{token}/" not in request.url:
+            return candles
+        for candle in candles:
+            candle[1:5] = [
+                float((Decimal(str(p)) * Decimal(times)).quantize(Decimal(1), ROUND_HALF_EVEN))
+                for p in candle[1:5]
+            ]
         return candles
 
     return edit

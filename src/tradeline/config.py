@@ -116,6 +116,9 @@ class Config:
         # explains are under this percentage of the rows compared; a run
         # exactly at it fails (Phase 1: under 0.1, ADR 0018).
         max_unexplained_pct: float = 0.1
+        # A stretch's close mismatches are an additive adjustment only when it
+        # has at least this many compared bars to fit a x NSE - b over.
+        additive_min_bars: int = 5
         # The Trading Calendar whose Special Sessions explain a missing candle:
         # the same file as ``integrity.trading_calendar``, relative to the
         # working directory.
@@ -166,8 +169,8 @@ def default_config_path() -> Path:
 # its settings went rather than only that the section is unknown.
 RETIRED_SECTIONS = {
     "reconcile": "[reconcile] is retired; Kite Parity's settings are in [parity]"
-    " (close_tolerance, max_unexplained_pct) and the Integrity Check's in [integrity],"
-    " ADR 0018",
+    " (close_tolerance, max_unexplained_pct, additive_min_bars) and the Integrity Check's"
+    " in [integrity], ADR 0018",
 }
 
 
