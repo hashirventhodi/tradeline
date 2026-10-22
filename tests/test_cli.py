@@ -114,8 +114,7 @@ def test_a_login_role_that_is_not_a_member_of_tradeline_app_is_told_to_grant_it(
 ) -> None:
     # Migrating would not help it, so it is not told to (#47).
     outsider_url = member_only_url(database_url, member=False)
-    with psycopg.connect(outsider_url) as conn:
-        outsider = conn.info.user
+    outsider = str(psycopg.conninfo.conninfo_to_dict(outsider_url)["user"])
     monkeypatch.setenv("DATABASE_URL", outsider_url)
 
     assert main(["reconcile", "--from", "2024-07-01"]) == 1
@@ -123,8 +122,8 @@ def test_a_login_role_that_is_not_a_member_of_tradeline_app_is_told_to_grant_it(
     (line,) = json_lines(capsys.readouterr().out)
     assert line["level"] == "ERROR"
     assert line["msg"] == (
-        f"login role {outsider} is not a member of tradeline_app;"
-        f" grant it with `GRANT tradeline_app TO {outsider}`"
+        f'login role "{outsider}" is not a member of tradeline_app;'
+        f' grant it with `GRANT tradeline_app TO "{outsider}"`'
     )
 
 

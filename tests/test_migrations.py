@@ -142,8 +142,7 @@ def test_a_non_member_that_can_read_the_applied_migrations_is_still_told_to_gran
 ) -> None:
     # It passes the pending-migrations check and is refused only at the SET ROLE after it.
     outsider_url = member_only_url(database_url, member=False)
-    with psycopg.connect(outsider_url) as conn:
-        outsider = conn.info.user
+    outsider = str(psycopg.conninfo.conninfo_to_dict(outsider_url)["user"])
     with connect(database_url) as conn:
         conn.execute(
             psycopg.sql.SQL("GRANT pg_read_all_data TO {}").format(psycopg.sql.Identifier(outsider))

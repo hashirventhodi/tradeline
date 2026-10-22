@@ -33,6 +33,7 @@ class NotAppRoleMember(RuntimeError):
     """The connecting login role may not switch to ``tradeline_app`` (#47)."""
 
     def __init__(self, user: str) -> None:
+        # ``user`` is quoted as an identifier, so the GRANT can be pasted as printed.
         super().__init__(
             f"login role {user} is not a member of {APP_ROLE};"
             f" grant it with `GRANT {APP_ROLE} TO {user}`"
@@ -78,5 +79,5 @@ def _set_app_role(conn: psycopg.Connection) -> None:
     try:
         conn.execute(psycopg.sql.SQL("SET ROLE {}").format(psycopg.sql.Identifier(APP_ROLE)))
     except psycopg.errors.InsufficientPrivilege:
-        raise NotAppRoleMember(conn.info.user) from None
+        raise NotAppRoleMember(psycopg.sql.Identifier(conn.info.user).as_string(conn)) from None
     conn.commit()
