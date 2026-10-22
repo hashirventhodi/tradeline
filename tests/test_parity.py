@@ -1,14 +1,14 @@
-"""``reconcile``: Kite's daily candles against NSE's end-of-day files, per symbol per day.
+"""Kite Parity: Kite's daily candles against NSE's end-of-day files, per symbol per day.
 
 Each test loads its own database from the recorded fixtures: the master and
 end-of-day rows (``ingest_eod``), NSE's corporate actions, and Kite's candles
 for the four ``EQ`` symbols over 2024-07-01 to 2024-08-30. Kite's bars are
 adjusted by Kite's rules (RELIANCE halved by a later bonus, INFY and
 BAJAJ-AUTO scaled by about 0.98 for large dividends), so the clean fixtures
-already differ from NSE's closes by a factor per symbol that reconcile must
+already differ from NSE's closes by a factor per symbol that parity must
 not report.
 
-A discrepancy is injected by playing the real recorded Kite responses back
+A difference is injected by playing the real recorded Kite responses back
 with one bar dropped or one close changed on its way to the ingest
 (``playback``), so no fixture file is edited and none is written by hand.
 """
@@ -24,7 +24,9 @@ import pytest
 from playback import (
     Candle,
     CandleEdit,
+    Edit,
     Playback,
+    bhavcopy_series,
     drop_bar,
     kite_candles,
     shift_close,
@@ -37,7 +39,7 @@ from tradeline.db import app_connection
 from tradeline.ingest.candles import ingest_candles
 from tradeline.ingest.corporate_actions import ingest_corporate_actions
 from tradeline.ingest.eod import ingest_eod
-from tradeline.reconcile import Discrepancy, ReconcileReport, reconcile
+from tradeline.parity import Difference, ParityReport, Reason, parity
 from tradeline.sources.kite import KiteSession
 from tradeline.transport import PlaybackTransport, Request
 
@@ -47,7 +49,7 @@ ACTIONS_START, ACTIONS_END = date(2024, 7, 1), date(2024, 12, 31)
 TRADING_DAYS = 43
 EQ_SYMBOLS = 4
 ROWS = TRADING_DAYS * EQ_SYMBOLS
-SETTINGS = Config.Reconcile(close_tolerance=0.001, max_discrepancy_pct=0.1)
+SETTINGS = Config.Parity(close_tolerance=0.001, max_unexplained_pct=0.1)
 
 INFY_TOKEN = "408065"
 
@@ -56,9 +58,9 @@ def untouched(request: Request, candles: list[Candle]) -> list[Candle]:
     return candles
 
 
-def load(url: str, edit: CandleEdit = untouched) -> None:
+def load(url: str, edit: CandleEdit = untouched, eod: Edit | None = None) -> None:
     with app_connection(url) as conn:
-        ingest_eod(conn, PlaybackTransport(FIXTURES / "ingest_eod"), start=START, end=END)
+        ingest_eod(conn, Playback(FIXTURES / "ingest_eod", edit=eod), start=START, end=END)
         ingest_corporate_actions(
             conn,
             PlaybackTransport(FIXTURES / "ingest_corporate_actions"),
@@ -70,12 +72,12 @@ def load(url: str, edit: CandleEdit = untouched) -> None:
         ingest_candles(conn, session, start=START, end=END)
 
 
-def run(url: str, settings: Config.Reconcile = SETTINGS) -> ReconcileReport:
+def run(url: str, settings: Config.Parity = SETTINGS) -> ParityReport:
     with app_connection(url) as conn:
-        return reconcile(conn, settings, start=START, end=END)
+        return parity(conn, settings, start=START, end=END)
 
 
-def test_clean_fixtures_reconcile_fully_with_no_discrepancies(fresh_database_url: str) -> None:
+def test_clean_fixtures_are_at_parity_with_no_differences(fresh_database_url: str) -> None:
     load(fresh_database_url)
 
     report = run(fresh_database_url)
@@ -84,8 +86,9 @@ def test_clean_fixtures_reconcile_fully_with_no_discrepancies(fresh_database_url
     assert report.missing == ()
     assert report.extra == ()
     assert report.close_mismatches == ()
-    assert report.discrepancies == 0
-    assert report.reconciliation_pct == Decimal(100)
+    assert report.differences == 0
+    assert report.unexplained == ()
+    assert report.unexplained_pct == Decimal(0)
     assert report.passed
 
 
@@ -97,7 +100,7 @@ def test_a_deleted_candle_day_is_reported_as_missing_for_that_symbol_and_date_al
     report = run(fresh_database_url)
 
     assert report.missing == (
-        Discrepancy(
+        Difference(
             kind="missing",
             symbol="INFY",
             series="EQ",
@@ -109,7 +112,7 @@ def test_a_deleted_candle_day_is_reported_as_missing_for_that_symbol_and_date_al
     assert report.extra == ()
     assert report.close_mismatches == ()
     assert report.rows == ROWS
-    assert report.discrepancies == 1
+    assert report.differences == 1
 
 
 def test_a_close_altered_beyond_tolerance_is_reported_for_that_row_alone(
@@ -140,21 +143,20 @@ def test_a_close_altered_within_tolerance_is_not_reported(fresh_database_url: st
     report = run(fresh_database_url)
 
     assert report.close_mismatches == ()
-    assert report.discrepancies == 0
+    assert report.differences == 0
 
 
-def test_the_run_fails_when_discrepancies_exceed_the_threshold_and_passes_under_it(
+def test_the_run_fails_when_unexplained_differences_exceed_the_threshold_and_passes_under_it(
     fresh_database_url: str,
 ) -> None:
     load(fresh_database_url, drop_bar(INFY_TOKEN, "2024-07-15"))
 
-    strict = run(fresh_database_url, Config.Reconcile(max_discrepancy_pct=0.1))
-    lenient = run(fresh_database_url, Config.Reconcile(max_discrepancy_pct=1.0))
+    strict = run(fresh_database_url, Config.Parity(max_unexplained_pct=0.1))
+    lenient = run(fresh_database_url, Config.Parity(max_unexplained_pct=1.0))
 
-    # One row in 172 is 0.58 percent.
-    assert strict.discrepancy_pct == lenient.discrepancy_pct
-    assert Decimal("0.58") < strict.discrepancy_pct < Decimal("0.59")
-    assert Decimal("99.41") < strict.reconciliation_pct < Decimal("99.42")
+    # One unexplained row in 172 is 0.58 percent.
+    assert strict.unexplained_pct == lenient.unexplained_pct
+    assert Decimal("0.58") < strict.unexplained_pct < Decimal("0.59")
     assert not strict.passed
     assert lenient.passed
 
@@ -167,15 +169,84 @@ def test_a_run_exactly_at_the_threshold_fails_since_it_must_be_under_it(
     with app_connection(fresh_database_url) as conn:
         # Monday 15 to Friday 19 July less Wednesday's Muharram holiday: four
         # days of four symbols, one row missing, so 6.25 percent.
-        report = reconcile(
+        report = parity(
             conn,
-            Config.Reconcile(max_discrepancy_pct=6.25),
+            Config.Parity(max_unexplained_pct=6.25),
             start=date(2024, 7, 15),
             end=date(2024, 7, 19),
         )
 
     assert report.rows == 16
-    assert report.discrepancy_pct == Decimal("6.25")
+    assert report.unexplained_pct == Decimal("6.25")
+    assert not report.passed
+
+
+def test_with_no_parity_reason_yet_every_difference_is_unexplained_and_counted_by_kind(
+    fresh_database_url: str,
+) -> None:
+    load(
+        fresh_database_url,
+        then(drop_bar(INFY_TOKEN, "2024-07-15"), shift_close(INFY_TOKEN, "2024-07-01", "16")),
+    )
+
+    report = run(fresh_database_url)
+
+    assert [(d.kind, d.trade_date, d.reason) for d in report.unexplained] == [
+        ("missing", date(2024, 7, 15), None),
+        ("close", date(2024, 7, 1), None),
+    ]
+    assert report.differences == 2
+    summary = report.summary()
+    assert (summary["differences"], summary["unexplained"]) == (2, 2)
+    assert summary["by_kind"] == {
+        "missing": {"total": 1, "unexplained": 1},
+        "extra": {"total": 0, "series_move": 0, "unexplained": 0},
+        "close": {"total": 1, "unexplained": 1},
+    }
+    assert summary["by_reason"] == {"series_move": 0, "unexplained": 2}
+    assert [(d["kind"], d["reason"]) for d in summary["listed_unexplained"]] == [
+        ("missing", None),
+        ("close", None),
+    ]
+
+
+def test_a_candle_on_a_day_nse_lists_the_instrument_only_in_be_is_a_series_move(
+    fresh_database_url: str,
+) -> None:
+    # NSE lists INFY in BE on 15 July 2024; Kite's EQ token carries on that day.
+    load(fresh_database_url, eod=bhavcopy_series(date(2024, 7, 15), "INFY", "BE"))
+
+    report = run(fresh_database_url)
+
+    assert report.extra == (
+        Difference(
+            kind="extra",
+            symbol="INFY",
+            series="EQ",
+            trade_date=date(2024, 7, 15),
+            candle_close=Decimal("1670.9"),
+            eod_close=None,
+            reason=Reason.SERIES_MOVE,
+        ),
+    )
+    assert report.unexplained == ()
+    assert report.passed
+    summary = report.summary()
+    assert summary["by_kind"]["extra"] == {"total": 1, "series_move": 1, "unexplained": 0}
+    assert summary["by_reason"]["series_move"] == 1
+
+
+def test_a_candle_on_a_day_nse_lists_the_instrument_in_no_series_stays_unexplained(
+    fresh_database_url: str,
+) -> None:
+    load(fresh_database_url, eod=bhavcopy_series(date(2024, 7, 15), "INFY", None))
+
+    report = run(fresh_database_url)
+
+    assert [(d.kind, d.symbol, d.trade_date, d.reason) for d in report.unexplained] == [
+        ("extra", "INFY", date(2024, 7, 15), None)
+    ]
+    assert report.by_reason == {"series_move": 0, "unexplained": 1}
     assert not report.passed
 
 
@@ -190,21 +261,21 @@ def test_symbols_can_be_narrowed_and_one_without_candles_is_refused(
     load(fresh_database_url, drop_bar(INFY_TOKEN, "2024-07-15"))
 
     with app_connection(fresh_database_url) as conn:
-        tcs = reconcile(conn, SETTINGS, start=START, end=END, symbols=["TCS"])
+        tcs = parity(conn, SETTINGS, start=START, end=END, symbols=["TCS"])
         with pytest.raises(ValueError, match="KHADIM"):
-            reconcile(conn, SETTINGS, start=START, end=END, symbols=["TCS", "KHADIM"])
+            parity(conn, SETTINGS, start=START, end=END, symbols=["TCS", "KHADIM"])
 
     assert tcs.rows == TRADING_DAYS
-    assert tcs.discrepancies == 0
+    assert tcs.differences == 0
 
 
 # Monday 1 and Tuesday 2 July 2024: one stretch of two INFY bars.
 SHORT_START, SHORT_END = date(2024, 7, 1), date(2024, 7, 2)
 
 
-def run_short(url: str) -> ReconcileReport:
+def run_short(url: str) -> ParityReport:
     with app_connection(url) as conn:
-        return reconcile(conn, SETTINGS, start=SHORT_START, end=SHORT_END, symbols=["INFY"])
+        return parity(conn, SETTINGS, start=SHORT_START, end=SHORT_END, symbols=["INFY"])
 
 
 def test_a_zero_close_is_left_out_of_its_stretchs_factor_and_compared_against_the_rest(
@@ -235,17 +306,17 @@ def test_a_stretch_whose_every_close_is_zero_has_no_factor_and_no_close_mismatch
 
     assert report.close_mismatches == ()
     assert report.rows == 2
-    assert report.discrepancies == 0
+    assert report.differences == 0
 
 
 REPO_CONFIG = Path(__file__).resolve().parents[1] / "tradeline.toml"
 
 
-def reconcile_command(
+def parity_command(
     url: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> tuple[int, list[dict[str, Any]], str]:
     monkeypatch.setenv("DATABASE_URL", url)
-    code = main(["reconcile", "--from", START.isoformat(), "--to", END.isoformat()])
+    code = main(["parity", "--from", START.isoformat(), "--to", END.isoformat()])
     captured = capsys.readouterr()
     return code, [json.loads(line) for line in captured.out.splitlines()], captured.err
 
@@ -256,35 +327,38 @@ def test_the_command_exits_zero_on_clean_fixtures_with_a_summary_and_a_table(
     monkeypatch.setenv("TRADELINE_CONFIG", str(REPO_CONFIG))
     load(fresh_database_url)
 
-    code, lines, table = reconcile_command(fresh_database_url, monkeypatch, capsys)
+    code, lines, table = parity_command(fresh_database_url, monkeypatch, capsys)
 
     assert code == 0
     assert all(
         (line["range_start"], line["range_end"]) == ("2024-07-01", "2024-08-30") for line in lines
     )
     summary = lines[-1]
-    assert summary["command"] == "reconcile"
-    assert summary["msg"] == "reconcile finished"
+    assert summary["command"] == "parity"
+    assert summary["msg"] == "parity finished"
     assert summary["report"] == {
         "start": "2024-07-01",
         "end": "2024-08-30",
         "close_tolerance": "0.001",
-        "max_discrepancy_pct": "0.1",
+        "max_unexplained_pct": "0.1",
         "rows": ROWS,
-        "discrepancies": 0,
-        "missing": 0,
-        "extra": 0,
-        "close_mismatches": 0,
-        "discrepancy_pct": "0.0000",
-        "reconciliation_pct": "100.0000",
+        "differences": 0,
+        "unexplained": 0,
+        "unexplained_pct": "0.0000",
         "passed": True,
-        "listed": [],
+        "by_kind": {
+            "missing": {"total": 0, "unexplained": 0},
+            "extra": {"total": 0, "series_move": 0, "unexplained": 0},
+            "close": {"total": 0, "unexplained": 0},
+        },
+        "by_reason": {"series_move": 0, "unexplained": 0},
+        "listed_unexplained": [],
         "candle_disagreements": 0,
         "listed_candle_disagreements": [],
         "pre_listing_candles": 0,
         "listed_pre_listing_candles": [],
     }
-    assert "172 rows, 0 discrepancies" in table
+    assert "172 rows, 0 differences" in table
     assert "PASS" in table
 
 
@@ -297,19 +371,19 @@ def test_the_command_exits_non_zero_above_the_configured_threshold(
     load(fresh_database_url, drop_bar(INFY_TOKEN, "2024-07-15"))
     config = tmp_path / "tradeline.toml"
 
-    config.write_text("[reconcile]\nmax_discrepancy_pct = 0.1\n")
+    config.write_text("[parity]\nmax_unexplained_pct = 0.1\n")
     monkeypatch.setenv("TRADELINE_CONFIG", str(config))
-    strict_code, strict_lines, strict_table = reconcile_command(
+    strict_code, strict_lines, strict_table = parity_command(
         fresh_database_url, monkeypatch, capsys
     )
-    config.write_text("[reconcile]\nmax_discrepancy_pct = 1.0\n")
-    lenient_code, _, _ = reconcile_command(fresh_database_url, monkeypatch, capsys)
+    config.write_text("[parity]\nmax_unexplained_pct = 1.0\n")
+    lenient_code, _, _ = parity_command(fresh_database_url, monkeypatch, capsys)
 
     assert strict_code == 1
     assert lenient_code == 0
     report = strict_lines[-1]["report"]
     assert report["passed"] is False
-    assert report["listed"] == [
+    assert report["listed_unexplained"] == [
         {
             "kind": "missing",
             "symbol": "INFY",
@@ -318,9 +392,11 @@ def test_the_command_exits_non_zero_above_the_configured_threshold(
             "candle_close": None,
             "eod_close": "1707.05",
             "expected_close": None,
+            "reason": None,
         }
     ]
-    assert "FAIL" in strict_table
+    assert "1 unexplained (0.5814%), must be under 0.1%: FAIL" in strict_table
+    assert "by reason: series_move 0, unexplained 1" in strict_table
     assert "missing  INFY" in strict_table
 
 
@@ -332,7 +408,7 @@ def test_every_line_of_the_command_carries_its_range_and_the_symbols_named(
     load(fresh_database_url)
     capsys.readouterr()
 
-    code = main(["reconcile", "--from", "2024-07-01", "--to", "2024-07-31", "--symbol", "INFY"])
+    code = main(["parity", "--from", "2024-07-01", "--to", "2024-07-31", "--symbol", "INFY"])
 
     lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert code == 0
