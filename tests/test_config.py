@@ -201,3 +201,10 @@ def test_a_config_with_the_retired_reconcile_section_is_refused_naming_parity(
 
     with pytest.raises(ConfigError, match=r"\[reconcile\] is retired.*\[parity\]"):
         load_config(path)
+
+
+def test_the_integrity_section_names_the_trading_calendar_file(tmp_path: Path) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text('[integrity]\ntrading_calendar = "data/calendar.csv"\n')
+
+    assert load_config(path).integrity == Config.Integrity(trading_calendar="data/calendar.csv")

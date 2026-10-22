@@ -118,6 +118,12 @@ class Config:
         max_unexplained_pct: float = 0.1
 
     @dataclass(frozen=True)
+    class Integrity:
+        # The checked-in Trading Calendar (``tradeline.trading_calendar``),
+        # relative to the working directory.
+        trading_calendar: str = "trading_calendar.csv"
+
+    @dataclass(frozen=True)
     class Instruments:
         # The checked-in file of manual Instrument Links (``tradeline.manual_links``),
         # relative to the working directory.
@@ -135,6 +141,7 @@ class Config:
     news: News = field(default_factory=News)
     instruments: Instruments = field(default_factory=Instruments)
     corporate_actions: CorporateActions = field(default_factory=CorporateActions)
+    integrity: Integrity = field(default_factory=Integrity)
 
 
 def default_config_path() -> Path:
@@ -145,7 +152,8 @@ def default_config_path() -> Path:
 # its settings went rather than only that the section is unknown.
 RETIRED_SECTIONS = {
     "reconcile": "[reconcile] is retired; Kite Parity's settings are in [parity]"
-    " (close_tolerance, max_unexplained_pct), ADR 0018",
+    " (close_tolerance, max_unexplained_pct) and the Integrity Check's in [integrity],"
+    " ADR 0018",
 }
 
 
