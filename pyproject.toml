@@ -36,7 +36,9 @@ addopts = "--disable-socket --allow-unix-socket --allow-hosts=127.0.0.1,::1,loca
 [tool.mypy]
 strict = true
 python_version = "3.12"
-packages = ["tradeline"]
+# The tests too: their doubles (stub transports, playback edits) stand in for the
+# package's protocols, and are checked against them.
+files = ["src/tradeline", "tests"]
 mypy_path = "src"
 
 [[tool.mypy.overrides]]

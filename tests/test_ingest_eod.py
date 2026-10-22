@@ -18,7 +18,7 @@ from tradeline import queries
 from tradeline.db import app_connection
 from tradeline.ingest.eod import EodIngestResult, ingest_eod
 from tradeline.sources.nse import NseSession, fetch_bhavcopy
-from tradeline.transport import PlaybackTransport
+from tradeline.transport import PlaybackTransport, Request, Response
 
 FIXTURES = Path(__file__).parent / "fixtures" / "ingest_eod"
 START, END = date(2024, 7, 1), date(2024, 8, 30)
@@ -218,7 +218,7 @@ def test_an_interrupted_run_is_recorded_as_an_error_not_a_success(
     database_url: str, two_runs: tuple[EodIngestResult, EodIngestResult]
 ) -> None:
     class Interrupting:
-        def send(self, request: object) -> object:
+        def send(self, request: Request) -> Response:
             raise KeyboardInterrupt
 
     with app_connection(database_url) as conn:

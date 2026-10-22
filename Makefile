@@ -1,4 +1,4 @@
-.PHONY: db db-down migrate test typecheck lint check
+.PHONY: db db-down migrate test typecheck lint check hooks
 
 db:            ## Start the local Postgres
 	docker compose up -d --wait postgres
@@ -19,3 +19,6 @@ lint:
 	uv run ruff check . && uv run ruff format --check .
 
 check: lint typecheck test
+
+hooks:         ## Use the repo's git hooks (.githooks: the commit message's shape)
+	git config core.hooksPath .githooks

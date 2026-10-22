@@ -12,7 +12,7 @@ from fractions import Fraction
 
 import pytest
 
-from tradeline.adjust import AdjustedBar, CorporateAction, RawBar, adjust, interpret
+from tradeline.adjust import AdjustedBar, CorporateAction, Kind, RawBar, adjust, interpret
 
 D = Decimal
 
@@ -31,7 +31,7 @@ def bar(day: date, o: str, h: str, lo: str, c: str, volume: int) -> RawBar:
 
 
 def action(
-    ex_date: date, kind: str, factor: Fraction | None = None, subject: str = ""
+    ex_date: date, kind: Kind, factor: Fraction | None = None, subject: str = ""
 ) -> CorporateAction:
     return CorporateAction(
         symbol="X", series="EQ", ex_date=ex_date, subject=subject, kind=kind, factor=factor
