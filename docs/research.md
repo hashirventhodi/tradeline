@@ -507,9 +507,10 @@ The repo asks only for `index=equities`. The same endpoint answers other
 | `index=equities&from_date=01-01-2023&to_date=31-01-2023` | 49 records, EQ and other main-board series |
 | `index=sme&from_date=01-01-2023&to_date=31-01-2023` | 6 records, all series SM (GOLDSTAR's split and bonus among them) |
 | `index=SME&...`, `index=emerge&...` (same dates) | `{"data":[],"msg":"no data found"}` |
-| `index=sme&from_date=01-01-<year>&to_date=31-12-<year>`, 2015 to 2026 | 7 to 274 records a year, 1,650 distinct (Symbol, Ex-Date, subject) |
+| `index=sme&from_date=01-01-<year>&to_date=31-12-<year>`, 2015 to 2026 | 1,517 distinct (Symbol, series, Ex-Date, subject), all series SM |
 | `index=sme&symbol=GOLDSTAR&from_date=01-01-2015&to_date=31-10-2026` | 8 records; the same query with `index=equities` returns `[]` |
 | `index=mf&from_date=01-12-2019&to_date=31-12-2019` | 140 records, series MF (ETF and fund unit actions) |
+| `index=mf&...`, year by year, 2015 to 2026 | 8,714 distinct (Symbol, series, Ex-Date, subject), series MF, EQ and BL; 6,854 have `exDate` `"-"` (redemptions, "Specified Transaction Period") |
 | `index=etf&...`, `index=debt&...` (same dates) | `{"data":[],"msg":"no data found"}` |
 
 The value is lower-case `sme`. The records differ from the equity ones in two
@@ -519,8 +520,8 @@ ways that matter to ingest:
   `"isin":"386040"`, its bonus `"386046"`), so the builder could match an SME
   action only by Symbol, never by the old or new ISIN.
 - **Subjects are in upper case** ("FACE VALUE SPLIT (SUB-DIVISION) - FROM RS
-  10/- PER SHARE TO RE 1/- PER SHARE", "BONUS 4:5"). Run over all 1,650,
-  `adjust.interpret` gives 25 splits and 153 bonuses, and leaves one
+  10/- PER SHARE TO RE 1/- PER SHARE", "BONUS 4:5"). Run over all 1,517,
+  `adjust.interpret` gives 19 splits and 153 bonuses, and leaves one
   adjusting subject without a factor: TOUCHWOOD's "BONUS 1.5:1" (ex
   2019-08-22), which `looks_adjusting` would flag.
 
