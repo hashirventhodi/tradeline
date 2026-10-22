@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
+from tradeline.cited_actions import load_cited_actions
 from tradeline.collect import collect_daily as collect_daily_service
 from tradeline.compare_adjusted import compare_adjusted as compare_adjusted_service
 from tradeline.config import Config, default_config_path, load_config
@@ -24,6 +25,7 @@ from tradeline.db import app_connection, connect
 from tradeline.environment import Environment
 from tradeline.ingest.announcements import ingest_announcements
 from tradeline.ingest.candles import CurrentUniverse, ingest_candles
+from tradeline.ingest.cited_actions import ingest_cited_actions
 from tradeline.ingest.corporate_actions import ingest_corporate_actions
 from tradeline.ingest.delistings import ingest_delistings
 from tradeline.ingest.eod import ingest_eod
@@ -116,6 +118,8 @@ def ingest(ctx: Context, args: argparse.Namespace) -> int:
         return _ingest_symbol_changes(ctx, args)
     if args.source == "delistings":
         return _ingest_delistings(ctx, args)
+    if args.source == "cited-actions":
+        return _ingest_cited_actions(ctx)
     end = args.start if args.end is None else args.end
     with _scope(args.start, end, getattr(args, "symbols", None)):
         return _ingest_range(ctx, args, end)
@@ -213,6 +217,19 @@ def _ingest_delistings(ctx: Context, args: argparse.Namespace) -> int:
         result = ingest_delistings(conn, transport)
     log.info("ingest delistings finished", extra=result.summary())
     return 0
+
+
+def _ingest_cited_actions(ctx: Context) -> int:
+    """The cited Corporate Actions file, checked and stored; exits 1 if any row was refused."""
+    rows = load_cited_actions(Path(ctx.config.corporate_actions.cited))
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = ingest_cited_actions(conn, rows)
+    log.log(
+        logging.ERROR if result.refused else logging.INFO,
+        "ingest cited-actions finished",
+        extra=result.summary(),
+    )
+    return 1 if result.refused else 0
 
 
 def _feeds(ctx: Context, names: Sequence[str] | None = None) -> list[Feed]:
@@ -499,6 +516,11 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="SYMBOL",
         action="append",
         help="an NSE symbol to load; repeatable; defaults to every symbol NSE lists",
+    )
+    sources.add_parser(
+        "cited-actions",
+        help="the splits and bonuses of the cited corporate actions file, checked against the"
+        " price; exits 1 if any row is refused",
     )
     sources.add_parser(
         "announcements",

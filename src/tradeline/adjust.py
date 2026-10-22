@@ -12,6 +12,12 @@ flagged on the bars they precede but left unadjusted, since adjusting them
 needs a price (the ex-date close) and a convention, and the broker's chart
 does not adjust them either. Meetings, buybacks, and the rest are recorded only.
 
+A split or bonus in none of NSE's lists may come from a reviewed row citing
+NSE's circulars (ADR 0006, amended by #37; ``tradeline.cited_actions``). NSE's
+list wins: a cited action with a listed split or bonus of the same Instrument
+within ``SUPERSEDED_WITHIN`` of its Ex-Date is not applied (``superseded``),
+so an action NSE files as two and a row files as one is never counted twice.
+
 Factors are exact fractions (a 1:5 bonus is 5/6), and an adjusted price is
 rounded to the exchange tick of 5 paisa with ties to the even tick. Checked on
 2026-10-21 against Kite's displayed RELIANCE bars across its 1:1 bonus of
@@ -27,7 +33,7 @@ import re
 from bisect import bisect_right
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from fractions import Fraction
 from typing import Literal
@@ -41,6 +47,9 @@ TICK = Decimal("0.05")
 _TICK = Fraction(TICK)
 _PAISA = Decimal("0.01")
 
+# How far from a cited action's Ex-Date a listed split or bonus supersedes it.
+SUPERSEDED_WITHIN = timedelta(days=7)
+
 
 @dataclass(frozen=True)
 class CorporateAction:
@@ -48,7 +57,9 @@ class CorporateAction:
 
     ``factor`` multiplies the prices of every bar before ``ex_date``; it is
     below one for a split or bonus, above one for a consolidation, and None
-    for everything that is not adjusted.
+    for everything that is not adjusted. An action from one of NSE's lists
+    names the list; one from a reviewed row names no list and carries the
+    row's ``citation`` of NSE's circulars instead.
     """
 
     symbol: str
@@ -60,8 +71,20 @@ class CorporateAction:
     isin: str | None = None
     record_date: date | None = None
     face_value: Decimal | None = None
-    # The NSE list it came from: "equities", "sme", or "mf".
-    nse_list: str = "equities"
+    # The NSE list it came from: "equities", "sme", or "mf"; None for a cited action.
+    nse_list: str | None = "equities"
+    # The NSE circulars a reviewed row cites, for an action in none of NSE's lists.
+    citation: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.nse_list is None) == (self.citation is None):
+            raise ValueError(
+                f"{self.symbol} {self.ex_date}: an action names an NSE list or a citation, not both"
+            )
+
+    @property
+    def cited(self) -> bool:
+        return self.citation is not None
 
 
 @dataclass(frozen=True)
@@ -101,8 +124,12 @@ def adjust(
     an action dated on a holiday adjusts everything before it and nothing
     after. NSE can list one action more than once (under each series the
     symbol trades in, or again with a revised subject); it is applied once.
+    A cited action that a listed one known on ``as_of`` supersedes is not
+    applied at all.
     """
-    known = _distinct(a for a in actions if a.ex_date <= as_of)
+    known_on = [a for a in actions if a.ex_date <= as_of]
+    dropped = {found.ex_date for found in superseded(known_on)}
+    known = _distinct(a for a in known_on if not (a.cited and a.ex_date in dropped))
     # Suffix products: factors[i] is the product of the factors of known[i:],
     # the actions after a bar whose date sorts just before known[i].
     factors = [Fraction(1)] * (len(known) + 1)
@@ -138,6 +165,55 @@ def adjust(
     return adjusted
 
 
+@dataclass(frozen=True)
+class Supersession:
+    """The cited actions of one Ex-Date that NSE's listed splits and bonuses supersede."""
+
+    ex_date: date
+    # Each once, as ``adjust`` would apply them.
+    cited: tuple[CorporateAction, ...]
+    # The listed splits and bonuses within ``SUPERSEDED_WITHIN``, each once, by Ex-Date.
+    listed: tuple[CorporateAction, ...]
+
+    @property
+    def cited_factor(self) -> Fraction:
+        return _product(self.cited)
+
+    @property
+    def listed_factor(self) -> Fraction:
+        return _product(self.listed)
+
+    @property
+    def agrees(self) -> bool:
+        """Whether NSE's list prices the change as the cited row does; if not, an anomaly."""
+        return self.cited_factor == self.listed_factor
+
+
+def superseded(actions: Iterable[CorporateAction]) -> list[Supersession]:
+    """The cited splits and bonuses among one Instrument's ``actions`` that NSE's list also
+    has, by Ex-Date: a listed split or bonus within ``SUPERSEDED_WITHIN`` of theirs. Every
+    cited action of a superseded Ex-Date is superseded, each of them once in ``cited``."""
+    adjusting = [a for a in actions if a.kind in ADJUSTED_KINDS and a.factor is not None]
+    listed = _distinct(a for a in adjusting if not a.cited)
+    by_ex_date: dict[date, list[CorporateAction]] = {}
+    for a in _distinct(a for a in adjusting if a.cited):
+        by_ex_date.setdefault(a.ex_date, []).append(a)
+    found = []
+    for ex_date, cited in by_ex_date.items():
+        near = tuple(a for a in listed if abs(a.ex_date - ex_date) <= SUPERSEDED_WITHIN)
+        if near:
+            found.append(Supersession(ex_date, tuple(cited), near))
+    return found
+
+
+def _product(actions: Iterable[CorporateAction]) -> Fraction:
+    factor = Fraction(1)
+    for a in actions:
+        assert a.factor is not None
+        factor *= a.factor
+    return factor
+
+
 def _distinct(actions: Iterable[CorporateAction]) -> list[CorporateAction]:
     """One action per (ex-date, kind, factor), or per subject without a factor; by ex-date."""
     distinct: dict[tuple[object, ...], CorporateAction] = {}
@@ -160,9 +236,11 @@ def _volume(volume: int, factor: Fraction) -> int:
 
 # --- Reading NSE's subjects -------------------------------------------------
 
-# "Bonus 1:1", "Bonus- 1:2", "Bonus 1: 25", "BONUS 1.5:1". Not "Bonus Ncrps 1:1" nor
-# "Bonus - 1 Debenture".
-_BONUS = re.compile(r"\bbonus\s*-?\s*(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)", re.IGNORECASE)
+# "Bonus 1:1", "Bonus- 1:2", "Bonus 1: 25", "BONUS 1.5:1", and a circular's "Bonus Ratio 1:1".
+# Not "Bonus Ncrps 1:1" nor "Bonus - 1 Debenture".
+_BONUS = re.compile(
+    r"\bbonus\s*(?:ratio\s*)?-?\s*(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)", re.IGNORECASE
+)
 # "Face Value Split (Sub-Division) - From Rs 10/- Per Share To Re 1/- Per Share",
 # "Face Value Split From Rs 2 To Re 1", "Consolidation Of Equity Shares From Re 1 ... To Rs 10",
 # and, for a face value split only, "Face Value Split Rs 10 To Rs 1" without the "From"

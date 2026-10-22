@@ -702,7 +702,8 @@ the joins regroup SME and fund-unit rows in every window; recomputed, all
 
 - **No Adjustment Factor** for the eight manual links that are splits or
   bonuses (all but HDFCLIQUID): their Adjusted Series keep an unadjusted fall
-  (#37).
+  (#37). Settled for seven by #37 ("Splits and bonuses cited from NSE
+  circulars (#37)" below); TIDEWATER's stays.
 - **TIDEWATER's bonus Ex-Date** is inferred from the price; the circular
   read gives only the allotment date (2016-03-18).
 - **120 stale months** that recompute unchanged stay recorded as stale;
@@ -725,6 +726,85 @@ filed under the Symbol or carrying the old or new ISIN, with an Ex-Date
 within seven days of both the old ISIN's last row and the new one's first.
 Circulars were listed per batch with `api/circulars` from 25 days before the
 new ISIN's first day to 3 days after, filtered on their subject.
+
+## Splits and bonuses cited from NSE circulars (#37)
+
+Researched on 2026-10-22 against NSE's circulars, fetched as in #33 above
+(`NseSession` over `LiveTransport`; the circular search `api/circulars` and the
+PDFs at `nsearchives.nseindia.com/content/circulars/<dept><number>.pdf`), and
+checked against the #29 database. Each row of `cited_corporate_actions.csv`
+needs a circular that states both the ratio and the Ex-Date (ADR 0006, amended
+by #37).
+
+### Where the Ex-Date is stated
+
+The Listing department's "Face Value Split" circulars (NSE/CML/29389, 32517,
+39361, 44773, 53404, 68231, 70527, 31924) say only that the face value
+"shall be changed w.e.f." a date, with the old and new values in a table:
+they never say Ex-Date. The "Change in ISIN" circulars do, in one sentence,
+"The new ISIN shall be effective for all trades done on and from the Ex-Date
+i.e. <date>", with the ratio in the Remarks column. The clearing
+corporation's early pay-in circulars (NSE/CMPT, later NCL/CMPT) state the
+same Ex-Date and ratio, and the SME platform's market-lot circulars
+(NSE/CMTR) state both as fields. For five of the seven, the date the
+manual link carried was the record date, the new ISIN's first day; the
+Ex-Date is one trading day earlier.
+
+| Symbol | Ex-Date | Ratio, as the Remarks state it | Circulars stating both |
+|---|---|---|---|
+| KOTAKGOLD | 2015-04-13 | Face Value Split Rs.100/- to Rs.10/- | NSE/CML/29412, NSE/CMPT/29422 |
+| IGOLD | 2016-06-09 | Sub-division of Equity Shares from Rs. 100/- to Rs. 10/- | NSE/CML/32526, NSE/CMPT/32519 |
+| ICICIGOLD | 2018-11-15 | Sub-Division from Rs. 10/- to Re. 1/- | NSE/CML/39383, NCL/CMPT/39367 (39366 is ICICINXT50's) |
+| KARDA | 2020-07-02 | Sub-Division from Rs. 10/- to Rs. 2/- | NSE/CML/44835 (NCL/CMPT/44827 gives the same Ex-Date but misprints "into Re. 2/- each") |
+| ICICIBANKN | 2022-09-01 | Sub-Division from Rs. 10/- to Re. 1/- | NSE/CML/53470, NCL/CMPT/53447 |
+| JSLL | 2025-06-12 | Sub-Division from Rs. 10/- to Rs. 2/- | NSE/CML/68416, NCL/CMPT/68489, NSE/CMTR/68251 ("Split Ratio 5:1") |
+| GICL | 2025-10-15 | Sub-Division from Rs. 10/- to Rs. 5/-, and "Bonus Ratio 1:1" | NSE/CML/70656 for the split; NSE/CMTR/70599 alone for the bonus ("Final Adjustment Factor (A x B) = 4") |
+
+GICL's bonus circular, NSE/CML/70874, gives the record date (2025-10-15)
+and the deemed allotment (2025-10-16) but no ratio and no Ex-Date; only the
+market-lot circular states them. Its row's subject is that circular's "Bonus
+Ratio 1:1", which `interpret` now reads as it reads "Bonus 1:1"; no stored
+subject says "Bonus Ratio", so no stored action is read differently.
+
+### TIDEWATER's 2016 bonus
+
+No NSE circular found states the bonus's Ex-Date or ratio. The circular
+search for 2016-01-01 to 2016-04-30 returns 817 circulars, four of them
+Tide Water Oil's: NSE/CML/31924 and NSE/CMPT/31946 (the split, ex
+2016-03-16), NSE/CML/31978 (the Change in ISIN, which states the split's
+Ex-Date and ratio only), and NSE/CML/32044, which admits "Equity shares of
+Rs. 5/- each issued under Bonus" (1,742,400 shares allotted 2016-03-18) and
+gives neither. None of February to April's circulars has "bonus" in its
+subject. So TIDEWATER has no row: a row for the split alone (factor 1/2)
+would be refused against the close's fall of 4.12-fold. It keeps its manual
+link, and its Adjusted Series keeps the fall (#15).
+
+### Two of the seven are in NSE's lists after all
+
+NSE files KOTAKGOLD's split under GOLD1 (as #33 found) and KARDA's under
+DHARAN, KARDA's Symbol since 2025 (`index=equities`, ex 2020-07-02, ISIN
+INE278R01034, the Instrument's third). The builder cannot reach either,
+since neither record carries the Symbol or an ISIN of the change it would
+explain. The Adjusted Series can: it reads every action filed under any of
+the Instrument's Symbols. With the manual links joining their histories
+(#33), their series had no fall. Ingested, both rows are reported as
+superseded by those records, with the same factors (1/10, 1/5), and are not
+applied. They still join the ISIN changes in place of the manual links. The
+other five were in no list, and their series fell 4 to 10-fold at the
+Ex-Date until now.
+
+### Outcome
+
+On the #29 database, on 2026-10-22: `ingest cited-actions` stored all eight
+rows, refused none (every factor within 20 percent of the close's move), and
+reported KARDA's and KOTAKGOLD's as superseded, with no anomaly. With the
+seven same-Symbol manual links removed, the rebuild made 516
+corporate-action links (509) and 26 manual (33). The 10 unexplained ISIN
+changes are the 10 reported before, and no Universe month became stale. Read
+as of 2026-10-19, from ten days before each Ex-Date to five after, the
+largest daily move in the seven Adjusted Series is 8.6 percent (JSLL, a
+week before its Ex-Date). At the Ex-Dates the moves are 0.5 to 7.1
+percent.
 
 ## Listing dates later than an Instrument's first row (#32)
 

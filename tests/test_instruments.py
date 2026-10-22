@@ -617,3 +617,62 @@ def test_a_manual_link_under_one_symbol_across_a_long_gap_is_refused_however_it_
         "manual link KSE to KSE effective 2026-08-17: a relisting circular joins nothing:"
         " the old ISIN's last row, 2015-01-29, is more than 7 days before"
     )
+
+
+KARDA_OLD, KARDA_NEW = "INE278R01018", "INE278R01026"
+KARDA_SPLIT = "Sub-Division from Rs. 10/- to Rs. 2/-"
+KARDA_CIRCULARS = "NSE/CML/44773; https://nsearchives.nseindia.com/content/circulars/CML44835.pdf"
+
+
+def karda_cited_split() -> CorporateAction:
+    return CorporateAction(
+        symbol="KARDA",
+        series="BE",
+        ex_date=date(2020, 7, 2),
+        subject=KARDA_SPLIT,
+        kind="split",
+        factor=Fraction(1, 5),
+        nse_list=None,
+        citation=KARDA_CIRCULARS,
+    )
+
+
+def karda_spans() -> list[Span]:
+    return [
+        span("KARDA", KARDA_OLD, date(2017, 4, 3), date(2020, 7, 2), series="BE"),
+        span("KARDA", KARDA_NEW, date(2020, 7, 3), date(2026, 10, 19), series="BE"),
+    ]
+
+
+def test_a_split_cited_from_nse_circulars_explains_an_isin_change_and_names_its_citation() -> None:
+    built = build_instruments(
+        Evidence(spans=karda_spans(), corporate_actions=[karda_cited_split()])
+    )
+
+    (instrument,) = built.instruments
+    (link,) = instrument.links
+    assert (link.kind, link.on, link.from_isin, link.to_isin) == (
+        "corporate_action",
+        date(2020, 7, 2),
+        KARDA_OLD,
+        KARDA_NEW,
+    )
+    assert link.source == (
+        f"corporate action KARDA ex-date 2020-07-02 cited from NSE circulars"
+        f" {KARDA_CIRCULARS}: {KARDA_SPLIT}"
+    )
+    assert built.anomalies == ()
+
+
+def test_a_listed_split_explains_an_isin_change_in_place_of_a_cited_one_beside_it() -> None:
+    listed = split("KARDA", date(2020, 7, 3), "Face Value Split From Rs 10 To Rs 2")
+
+    built = build_instruments(
+        Evidence(spans=karda_spans(), corporate_actions=[karda_cited_split(), listed])
+    )
+
+    (instrument,) = built.instruments
+    (link,) = instrument.links
+    assert link.source == (
+        "NSE corporate action KARDA ex-date 2020-07-03: Face Value Split From Rs 10 To Rs 2"
+    )

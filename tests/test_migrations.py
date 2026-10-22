@@ -154,6 +154,28 @@ def test_the_application_role_cannot_update_or_delete_corporate_actions(
     assert str(factor).startswith("0.8333333")
 
 
+def test_a_corporate_action_names_an_nse_list_or_carries_a_citation_never_both(
+    database_url: str,
+) -> None:
+    insert = (
+        "INSERT INTO corporate_actions (symbol, series, ex_date, subject, kind,"
+        " factor_numerator, factor_denominator, nse_list, citation)"
+        " VALUES ('CITED', 'BE', '2020-07-02', %s, %s, %s, %s, %s, %s)"
+    )
+    split = ("Sub-Division from Rs. 10/- to Rs. 2/-", "split", 1, 5)
+    with app_connection(database_url) as conn:
+        conn.execute(insert, (*split, None, "NSE/CML/44835"))
+        conn.rollback()
+        for row in [
+            (*split, None, None),  # neither
+            (*split, "equities", "NSE/CML/44835"),  # both
+            ("AGM", "other", None, None, None, "NSE/CML/44835"),  # a cited row that adjusts nothing
+        ]:
+            with pytest.raises(psycopg.errors.CheckViolation):
+                conn.execute(insert, row)
+            conn.rollback()
+
+
 def test_the_application_role_cannot_update_or_delete_announcements(
     database_url: str,
 ) -> None:

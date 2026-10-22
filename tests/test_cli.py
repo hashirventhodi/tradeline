@@ -274,6 +274,27 @@ def test_ingest_corporate_actions_plays_fixtures_end_to_end_and_logs_the_run(
     assert lines[-1]["unparsed"] == 0
 
 
+def test_ingest_cited_actions_reads_the_configured_file_and_fails_on_a_refused_row(
+    fresh_database_url: str,
+    repo_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # No end-of-day rows: no row has the closes its price check needs.
+    monkeypatch.setenv("DATABASE_URL", fresh_database_url)
+
+    code = main(["ingest", "cited-actions"])
+
+    assert code == 1
+    lines = json_lines(capsys.readouterr().out)
+    (finished,) = [line for line in lines if line["msg"] == "ingest run finished"]
+    assert finished["source"] == "cited_corporate_actions"
+    assert lines[-1]["msg"] == "ingest cited-actions finished"
+    assert lines[-1]["level"] == "ERROR"
+    assert lines[-1]["refused"] == lines[-1]["rows_seen"] > 0
+    assert lines[-1]["rows_written"] == 0
+
+
 def test_ingest_candles_without_an_access_token_fails_by_name(
     database_url: str,
     repo_config: None,

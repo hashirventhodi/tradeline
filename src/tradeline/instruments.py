@@ -11,7 +11,9 @@ The evidence:
   Symbol in one series under one ISIN;
 - NSE's symbol-change records, as published;
 - the Corporate Actions, of which the splits and bonuses (a consolidation is a
-  split with a factor above one) can explain an ISIN change;
+  split with a factor above one) can explain an ISIN change, whether NSE lists
+  them or a reviewed row cites them from NSE's circulars (ADR 0006, amended
+  by #37);
 - NSE's listing dates, each for a (Symbol, ISIN) of the equity master;
 - the manual links, each citing an official source.
 
@@ -30,7 +32,8 @@ Instrument Link with a date and a source:
   first appears on the Ex-Date (200 changes), the next trading day (176;
   HDFCBANK 2019-09-19, BEL, EICHERMOT, TATASTEEL), two days after (10;
   IRCON 2020-04-03), or the day before (1; AHCL 2026-04-24). The nearest
-  action that does not explain a change is months away;
+  action that does not explain a change is months away. A listed action is
+  taken in place of a cited one at the same change, as NSE's list wins;
 - ``symbol_change``: an NSE record (old Symbol, new Symbol, effective date)
   joins the old Symbol's latest stretch that started before the effective date
   to the new Symbol's earliest stretch live on or after it. Chains follow, since each
@@ -331,9 +334,17 @@ def _isin_changes(
             filed = by_symbol.get(symbol, set()).union(
                 *(by_isin.get(isin, set()) for isin in (old.isin, new.isin) if isin is not None)
             )
+            # A listed action is preferred to a cited one: NSE's list wins (ADR 0006).
             explaining = sorted(
                 (a for a in filed if _at_change(a.ex_date, old.last, new.first)),
-                key=lambda a: (a.ex_date, a.symbol != symbol, a.symbol, a.series, a.subject),
+                key=lambda a: (
+                    a.cited,
+                    a.ex_date,
+                    a.symbol != symbol,
+                    a.symbol,
+                    a.series,
+                    a.subject,
+                ),
             )
             # A manual link at a change an action explains is redundant, not unmatched.
             at_change = unmatched.pop((symbol, new.first), [])
@@ -346,10 +357,7 @@ def _isin_changes(
                     from_isin=old.isin,
                     to_symbol=symbol,
                     to_isin=new.isin,
-                    source=(
-                        f"NSE corporate action {action.symbol}"
-                        f" ex-date {action.ex_date.isoformat()}: {action.subject}"
-                    ),
+                    source=_action_source(action),
                 )
             elif at_change and new.first - old.last <= EX_DATE_SLACK:
                 link = _manual_link(at_change[0], from_isin=old.isin, to_isin=new.isin)
@@ -388,6 +396,13 @@ def _isin_changes(
             for m in rows
         )
     return proposals
+
+
+def _action_source(action: CorporateAction) -> str:
+    on = f"{action.symbol} ex-date {action.ex_date.isoformat()}"
+    if action.cited:
+        return f"corporate action {on} cited from NSE circulars {action.citation}: {action.subject}"
+    return f"NSE corporate action {on}: {action.subject}"
 
 
 def _at_change(ex_date: date, old_last: date, new_first: date) -> bool:

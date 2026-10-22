@@ -12,7 +12,15 @@ from fractions import Fraction
 
 import pytest
 
-from tradeline.adjust import AdjustedBar, CorporateAction, Kind, RawBar, adjust, interpret
+from tradeline.adjust import (
+    AdjustedBar,
+    CorporateAction,
+    Kind,
+    RawBar,
+    adjust,
+    interpret,
+    superseded,
+)
 
 D = Decimal
 
@@ -236,6 +244,7 @@ def test_an_adjusting_action_without_a_factor_is_refused() -> None:
     ("subject", "kind", "factor"),
     [
         ("Bonus 1:1", "bonus", Fraction(1, 2)),
+        ("Bonus Ratio 1:1", "bonus", Fraction(1, 2)),
         (" Bonus 1:2", "bonus", Fraction(2, 3)),
         ("Bonus 4:1", "bonus", Fraction(1, 5)),
         ("Bonus- 1:1", "bonus", Fraction(1, 2)),
@@ -333,3 +342,129 @@ def test_the_ex_date_is_the_boundary_for_the_bar_and_for_the_as_of_date_alike() 
     assert (ex_day.close, ex_day.volume, ex_day.factor) == (D("50.00"), 20, Fraction(1))
     assert (unknown_before.close, unknown_before.factor) == (D("100.00"), Fraction(1))
     assert (unknown_ex.close, unknown_ex.factor) == (D("50.00"), Fraction(1))
+
+
+CIRCULAR = "NSE/CML/44773; https://nsearchives.nseindia.com/content/circulars/CML44835.pdf"
+
+
+def cited(ex_date: date, factor: Fraction, subject: str = "Sub-Division") -> CorporateAction:
+    """A split from a reviewed row citing NSE's circulars, in none of NSE's lists."""
+    return CorporateAction(
+        symbol="X",
+        series="EQ",
+        ex_date=ex_date,
+        subject=subject,
+        kind="split",
+        factor=factor,
+        nse_list=None,
+        citation=CIRCULAR,
+    )
+
+
+def test_a_cited_split_no_nse_list_has_adjusts_like_a_listed_one() -> None:
+    bars = [bar(JUL_1, "100.00", "100.00", "100.00", "100.00", 10)]
+
+    (adjusted,) = adjust(bars, [cited(JUL_3, Fraction(1, 5))], as_of=JUL_8)
+
+    assert (adjusted.close, adjusted.volume, adjusted.factor) == (D("20.00"), 50, Fraction(1, 5))
+
+
+def test_a_cited_split_within_a_week_of_a_listed_adjusting_action_is_not_applied() -> None:
+    bars = [bar(JUL_1, "100.00", "100.00", "100.00", "100.00", 10)]
+    listed = action(JUL_8, "split", Fraction(1, 5), "Face Value Split From Rs 10 To Rs 2")
+
+    (adjusted,) = adjust(bars, [cited(JUL_3, Fraction(1, 5)), listed], as_of=JUL_8)
+
+    assert adjusted.factor == Fraction(1, 5)
+
+
+def test_a_cited_split_more_than_a_week_from_a_listed_one_is_applied_beside_it() -> None:
+    bars = [bar(JUL_1, "100.00", "100.00", "100.00", "100.00", 10)]
+    listed = action(date(2024, 7, 11), "bonus", Fraction(1, 2), "Bonus 1:1")
+
+    (adjusted,) = adjust(bars, [cited(JUL_3, Fraction(1, 5)), listed], as_of=date(2024, 7, 31))
+
+    assert adjusted.factor == Fraction(1, 10)
+
+
+def test_a_listed_dividend_beside_a_cited_split_supersedes_nothing() -> None:
+    bars = [bar(JUL_1, "100.00", "100.00", "100.00", "100.00", 10)]
+    dividend = action(JUL_3, "dividend", None, "Dividend - Rs 8 Per Share")
+
+    (adjusted,) = adjust(bars, [cited(JUL_3, Fraction(1, 5)), dividend], as_of=JUL_8)
+
+    assert (adjusted.factor, adjusted.unadjusted) == (Fraction(1, 5), (dividend,))
+
+
+def test_a_listed_action_not_yet_known_on_the_as_of_date_supersedes_nothing_then() -> None:
+    bars = [bar(JUL_1, "100.00", "100.00", "100.00", "100.00", 10)]
+    listed = action(JUL_8, "split", Fraction(1, 5), "Face Value Split From Rs 10 To Rs 2")
+
+    (adjusted,) = adjust(bars, [cited(JUL_3, Fraction(1, 5)), listed], as_of=JUL_5)
+
+    assert adjusted.factor == Fraction(1, 5)
+
+
+def test_supersessions_name_each_cited_date_with_the_listed_actions_and_both_factors() -> None:
+    split = cited(JUL_3, Fraction(1, 2), "Sub-Division from Rs. 10/- to Rs. 5/-")
+    bonus = CorporateAction(
+        symbol="X",
+        series="EQ",
+        ex_date=JUL_3,
+        subject="Bonus 1:1",
+        kind="bonus",
+        factor=Fraction(1, 2),
+        nse_list=None,
+        citation=CIRCULAR,
+    )
+    listed = action(JUL_2, "split", Fraction(1, 2), "Face Value Split From Rs 10 To Rs 5")
+    listed_under_be = CorporateAction(
+        symbol="X",
+        series="BE",
+        ex_date=JUL_2,
+        subject="Face Value Split From Rs 10 To Rs 5",
+        kind="split",
+        factor=Fraction(1, 2),
+    )
+    unrelated = cited(date(2024, 9, 2), Fraction(1, 10))
+
+    (found,) = superseded([split, bonus, listed, listed_under_be, unrelated])
+
+    assert found.cited == (split, bonus)
+    assert found.listed == (listed,)
+    assert (found.cited_factor, found.listed_factor) == (Fraction(1, 4), Fraction(1, 2))
+    assert not found.agrees
+
+
+def test_a_cited_split_identical_to_a_listed_one_is_superseded_and_agrees() -> None:
+    listed = action(JUL_3, "split", Fraction(1, 5), "Face Value Split From Rs 10 To Rs 2")
+    row = cited(JUL_3, Fraction(1, 5))
+
+    (found,) = superseded([listed, row])
+
+    assert (found.cited, found.listed, found.agrees) == ((row,), (listed,), True)
+
+
+def test_every_cited_action_of_a_superseded_ex_date_is_dropped_even_one_reworded() -> None:
+    bars = [bar(JUL_1, "100.00", "100.00", "100.00", "100.00", 10)]
+    listed = action(JUL_3, "split", Fraction(1, 5), "Face Value Split From Rs 10 To Rs 2")
+    reworded = cited(JUL_3, Fraction(1, 5), "Sub-Division from Rs. 10/- to Rs. 2/-")
+
+    (adjusted,) = adjust(bars, [cited(JUL_3, Fraction(1, 5)), reworded, listed], as_of=JUL_8)
+
+    assert adjusted.factor == Fraction(1, 5)
+
+
+def test_an_action_naming_both_an_nse_list_and_a_citation_or_neither_is_refused() -> None:
+    for nse_list, citation in [("equities", CIRCULAR), (None, None)]:
+        with pytest.raises(ValueError, match="not both"):
+            CorporateAction(
+                symbol="X",
+                series="EQ",
+                ex_date=JUL_3,
+                subject="Bonus 1:1",
+                kind="bonus",
+                factor=Fraction(1, 2),
+                nse_list=nse_list,
+                citation=citation,
+            )

@@ -197,7 +197,8 @@ def corporate_actions(
     end: date | None = None,
     as_of: date | None = None,
 ) -> list[CorporateAction]:
-    """NSE's Corporate Actions of an Instrument with our factors, oldest Ex-Date first.
+    """The Corporate Actions of an Instrument with our factors, oldest Ex-Date first: NSE's
+    listed ones, and those cited from NSE's circulars (``tradeline.cited_actions``).
 
     ``instrument`` is an Instrument key, or a Symbol read as the Instrument it
     named on ``as_of`` (``end`` when not given, else the Instrument it last
@@ -218,7 +219,8 @@ def _corporate_actions(
 ) -> list[CorporateAction]:
     rows = conn.execute(
         f"WITH {_OWNED} SELECT c.symbol, c.series, c.ex_date, c.subject, c.kind,"
-        " c.factor_numerator, c.factor_denominator, c.isin, c.record_date, c.face_value, c.nse_list"
+        " c.factor_numerator, c.factor_denominator, c.isin, c.record_date, c.face_value,"
+        " c.nse_list, c.citation"
         " FROM corporate_actions c JOIN owned o ON o.symbol = c.symbol"
         " AND (o.since IS NULL OR c.ex_date >= o.since)"
         " AND (o.until IS NULL OR c.ex_date < o.until)"
@@ -231,11 +233,12 @@ def _corporate_actions(
 
 
 def adjusting_corporate_actions(conn: psycopg.Connection) -> list[CorporateAction]:
-    """Every stored split and bonus (a consolidation is a split), under whatever Symbol NSE
-    filed it, by Symbol, then Ex-Date: the actions that can explain an ISIN change."""
+    """Every stored split and bonus (a consolidation is a split), listed or cited, under
+    whatever Symbol it is filed, by Symbol, then Ex-Date: the actions that can explain an
+    ISIN change."""
     rows = conn.execute(
         "SELECT symbol, series, ex_date, subject, kind, factor_numerator, factor_denominator,"
-        " isin, record_date, face_value, nse_list FROM corporate_actions"
+        " isin, record_date, face_value, nse_list, citation FROM corporate_actions"
         " WHERE kind IN ('split', 'bonus')"
         " ORDER BY symbol, ex_date, series, subject"
     ).fetchall()
@@ -255,6 +258,7 @@ def _corporate_action(row: tuple[Any, ...]) -> CorporateAction:
         record_date,
         fv,
         nse_list,
+        citation,
     ) = row
     if kind not in KINDS:
         raise ValueError(f"unknown corporate action kind {kind!r} stored for {symbol}")
@@ -269,6 +273,7 @@ def _corporate_action(row: tuple[Any, ...]) -> CorporateAction:
         record_date=record_date,
         face_value=fv,
         nse_list=nse_list,
+        citation=citation,
     )
 
 
@@ -290,7 +295,8 @@ def adjusted_daily_candles(
     adjusted by Kite's rules and are not the input here. The adjustment is
     computed on every read from the raw rows and the stored factors
     (``tradeline.adjust``) and is never written back. Actions are those filed
-    under any of the Instrument's Symbols, in every series, applied once each.
+    under any of the Instrument's Symbols, in every series, applied once each;
+    a cited action that NSE's list has within a week is not applied at all.
 
     Point in time. ``as_of`` is the adjustment reference date: an action is
     applied, or flagged, only if its ex-date is on or before ``as_of``, the

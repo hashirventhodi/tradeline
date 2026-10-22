@@ -123,11 +123,18 @@ class Config:
         # relative to the working directory.
         manual_links: str = "manual_links.csv"
 
+    @dataclass(frozen=True)
+    class CorporateActions:
+        # The checked-in file of splits and bonuses cited from NSE's circulars
+        # (``tradeline.cited_actions``), relative to the working directory.
+        cited: str = "cited_corporate_actions.csv"
+
     logging: Logging = field(default_factory=Logging)
     universe: UniverseRule = field(default_factory=UniverseRule)
     reconcile: Reconcile = field(default_factory=Reconcile)
     news: News = field(default_factory=News)
     instruments: Instruments = field(default_factory=Instruments)
+    corporate_actions: CorporateActions = field(default_factory=CorporateActions)
 
 
 def default_config_path() -> Path:

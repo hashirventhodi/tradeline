@@ -1,0 +1,44 @@
+# Cited Corporate Actions (ADR 0006, amended by #37): splits and bonuses none
+# of NSE's Corporate Action lists has, each announced by NSE circular.
+#
+# Every row is reviewed like code. It cites NSE's circulars only (a circular
+# number such as NSE/CML/44835, or its nseindia.com URL; several separated by
+# ";"), which together state both the ratio and the Ex-Date. An Ex-Date
+# inferred from prices, or a company's record date, does not qualify. The
+# subject is NSE's own wording, from which the factor is derived as for a
+# listed action; a row never states a factor. A row without a citation, with a
+# subject that gives no split or bonus factor, or with a date that is not
+# YYYY-MM-DD refuses the whole file. `tradeline ingest cited-actions` stores the
+# rows, refusing those whose factor is more than 20 percent from the Ex-Date
+# close over the previous close, and reporting as superseded those NSE's list
+# also has within 7 days. `tradeline.cited_actions` reads this file; its
+# location is `corporate_actions.cited` in tradeline.toml.
+#
+# Sources: docs/research.md, "Fund, SME, TIDEWATER and KARDA ISIN changes (#33)"
+# and "Splits and bonuses cited from NSE circulars (#37)". Each subject is the
+# Remarks of NSE's "Change in ISIN" circular, which says "The new ISIN shall be
+# effective for all trades done on and from the Ex-Date"; the clearing
+# circular cited beside it states the same Ex-Date and ratio. TIDEWATER's 2016
+# bonus has no row: no NSE circular states its Ex-Date (#15).
+symbol,ex_date,subject,citation
+# KOTAKGOLD: NSE/CML/29412, Ex-Date April 13, 2015; NSE/CMPT/29422. NSE's
+# fund-unit list files it under today's Symbol GOLD1, which this one cannot reach.
+KOTAKGOLD,2015-04-13,Face Value Split Rs.100/- to Rs.10/-,https://nsearchives.nseindia.com/content/circulars/CML29412.pdf; https://nsearchives.nseindia.com/content/circulars/CMPT29422.pdf
+# IGOLD: NSE/CML/32526, Ex-Date June 09, 2016; NSE/CMPT/32519.
+IGOLD,2016-06-09,Sub-division of Equity Shares from Rs. 100/- to Rs. 10/-,https://nsearchives.nseindia.com/content/circulars/CML32526.pdf; https://nsearchives.nseindia.com/content/circulars/CMPT32519.pdf
+# ICICIGOLD: NSE/CML/39383, Ex-Date November 15, 2018; NCL/CMPT/39367.
+ICICIGOLD,2018-11-15,Sub-Division from Rs. 10/- to Re. 1/-,https://nsearchives.nseindia.com/content/circulars/CML39383.pdf; https://nsearchives.nseindia.com/content/circulars/CMPT39367.pdf
+# KARDA: NSE/CML/44835, Ex-Date July 02, 2020 (NCL/CMPT/44827 sets the same in
+# the trade-for-trade market, but misprints the new face value "Re. 2/-").
+KARDA,2020-07-02,Sub-Division from Rs. 10/- to Rs. 2/-,https://nsearchives.nseindia.com/content/circulars/CML44835.pdf
+# ICICIBANKN: NSE/CML/53470, Ex-Date September 01, 2022; NCL/CMPT/53447.
+ICICIBANKN,2022-09-01,Sub-Division from Rs. 10/- to Re. 1/-,https://nsearchives.nseindia.com/content/circulars/CML53470.pdf; https://nsearchives.nseindia.com/content/circulars/CMPT53447.pdf
+# JSLL (SME): NSE/CML/68416, Ex-Date June 12, 2025; NCL/CMPT/68489; NSE/CMTR/68251
+# ("Split Ratio 5:1", "Ex-date/ Effective Date June 12, 2025").
+JSLL,2025-06-12,Sub-Division from Rs. 10/- to Rs. 2/-,https://nsearchives.nseindia.com/content/circulars/CML68416.pdf; https://nsearchives.nseindia.com/content/circulars/CMPT68489.pdf; https://nsearchives.nseindia.com/content/circulars/CMTR68251.pdf
+# GICL (SME): a split and a 1:1 bonus with one Ex-Date, October 15, 2025, which
+# only NSE/CMTR/70599 states for the bonus ("SPLIT and BONUS", "Bonus Ratio 1:1",
+# "Final Adjustment Factor (A x B) = 4"). The split's subject is NSE/CML/70656's,
+# the bonus's NSE/CMTR/70599's.
+GICL,2025-10-15,Sub-Division from Rs. 10/- to Rs. 5/-,https://nsearchives.nseindia.com/content/circulars/CML70656.pdf; https://nsearchives.nseindia.com/content/circulars/CMTR70599.pdf
+GICL,2025-10-15,Bonus Ratio 1:1,https://nsearchives.nseindia.com/content/circulars/CMTR70599.pdf
