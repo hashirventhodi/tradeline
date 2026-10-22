@@ -55,6 +55,23 @@ def test_the_application_role_can_insert_an_ingest_run(database_url: str) -> Non
     assert row == ("kite",)
 
 
+def test_the_application_role_can_read_the_applied_migrations(database_url: str) -> None:
+    # A login role that is only a member of tradeline_app (db.py) must still see
+    # whether a migration is pending.
+    with connect(database_url) as conn:
+        applied = applied_migrations(conn)
+    with app_connection(database_url) as conn:
+        assert applied_migrations(conn) == applied
+
+
+def test_the_application_role_cannot_record_a_migration(database_url: str) -> None:
+    with (
+        app_connection(database_url) as conn,
+        pytest.raises(psycopg.errors.InsufficientPrivilege),
+    ):
+        conn.execute("INSERT INTO schema_migrations (version) VALUES ('9999_forged')")
+
+
 def test_the_application_role_cannot_update_or_delete_ingest_runs(database_url: str) -> None:
     with app_connection(database_url) as conn:
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
