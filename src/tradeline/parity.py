@@ -20,7 +20,10 @@ before, per series.
 Each difference is then given the first Parity Reason that explains it, tried
 in the order ``REASONS`` lists for its kind, or is **unexplained**. A Parity
 Reason is a rule over data we hold, never a list of dates, and a new one needs
-ADR 0018 to agree it first.
+ADR 0018 to agree it first. A missing candle on a day the Trading Calendar
+(``parity.trading_calendar``, the file the Integrity Check reads) lists as a
+Special Session is explained as one; a calendar that does not load refuses
+the run, as it refuses the Integrity Check.
 
 A candle dated before its Instrument's Listing Age starts (the view
 ``instrument_listing_age``, ADR 0017) is a **Pre-listing Candle**: the
@@ -72,12 +75,14 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from enum import StrEnum
+from pathlib import Path
 from typing import Any, Literal
 
 import psycopg
 
 from tradeline import queries
 from tradeline.config import Config
+from tradeline.trading_calendar import load_trading_calendar
 
 Kind = Literal["missing", "extra", "close"]
 KINDS: tuple[Kind, ...] = ("missing", "extra", "close")
@@ -90,17 +95,23 @@ MAX_LISTED = 100
 class Reason(StrEnum):
     """A Parity Reason: a stated, checkable cause of a difference (ADR 0018).
 
-    None is in force yet. Each is added as a member, with its rule in
-    ``_rules`` and its place in ``REASONS``: a series move (#51), additive
-    adjustment and coarse rounding (#52), not fetched (#53), and a Special
-    Session (#55).
+    Each has its rule in ``_rules`` and its place in ``REASONS``. Still to
+    come: a series move (#51), additive adjustment and coarse rounding (#52),
+    and not fetched (#53).
     """
+
+    # A missing candle on a day the Trading Calendar lists as a Special Session.
+    SPECIAL_SESSION = "special_session"
 
 
 # Each kind's Parity Reasons, in the order they are tried; the first that applies is
 # recorded. ADR 0018's order: missing, a Special Session then not fetched; extra, a
 # series move; close, an additive adjustment over its stretch then coarse rounding.
-REASONS: Mapping[Kind, tuple[Reason, ...]] = {"missing": (), "extra": (), "close": ()}
+REASONS: Mapping[Kind, tuple[Reason, ...]] = {
+    "missing": (Reason.SPECIAL_SESSION,),
+    "extra": (),
+    "close": (),
+}
 
 
 @dataclass(frozen=True)
@@ -375,7 +386,10 @@ def _rules(
 
     A rule needing data beyond the compared rows (the Trading Calendar, the
     requested ranges, NSE's rows in other series) loads it here, once."""
-    return {}
+    special_sessions = load_trading_calendar(Path(settings.trading_calendar)).special_sessions
+    return {
+        Reason.SPECIAL_SESSION: lambda found: found.row.trade_date in special_sessions,
+    }
 
 
 def parity(
