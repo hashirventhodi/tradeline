@@ -176,7 +176,8 @@ def _record_stale_months(
     """
     months = conn.execute(
         "SELECT DISTINCT m.month, m.rule_version, (v.parameters->>'lookback_trading_days')::int,"
-        " (v.parameters->>'min_listing_trading_days')::int"
+        " (v.parameters->>'min_listing_trading_days')::int,"
+        " v.parameters->>'listing_age_from' IS NOT DISTINCT FROM 'earliest_evidence'"
         " FROM universe_membership m JOIN universe_rule_versions v ON v.version = m.rule_version"
         " WHERE v.parameters->>'rank_by' = 'instrument' AND NOT EXISTS ("
         "  SELECT 1 FROM universe_stale_months s"
@@ -192,15 +193,21 @@ def _record_stale_months(
         ).fetchall()
     ]
     old = [
-        (key, listed_on, Interval(symbol, series, isin, first, last))
-        for key, listed_on, symbol, series, isin, first, last in conn.execute(
-            "SELECT v.instrument_key, i.listed_on, v.symbol, v.series, v.isin, v.first_day,"
+        (key, (listed_on, first_row), Interval(symbol, series, isin, first, last))
+        for key, listed_on, first_row, symbol, series, isin, first, last in conn.execute(
+            "SELECT v.instrument_key, i.listed_on,"
+            " min(v.first_day) OVER (PARTITION BY v.instrument_key),"
+            " v.symbol, v.series, v.isin, v.first_day,"
             " v.last_day FROM instrument_intervals v JOIN instruments i ON i.key = v.instrument_key"
         ).fetchall()
     ]
-    new = [(i.key, i.listed_on, v) for i in built.instruments for v in i.intervals]
+    new = [
+        (i.key, (i.listed_on, min(v.first for v in i.intervals)), v)
+        for i in built.instruments
+        for v in i.intervals
+    ]
     stale = []
-    for month, version, lookback, min_listing in months:
+    for month, version, lookback, min_listing, earliest in months:
         end = bisect_left(calendar, month)
         if end == 0:
             continue
@@ -208,7 +215,9 @@ def _record_stale_months(
         # The latest listing date with ``min_listing`` trading days to the month, as the
         # Universe counts them; None when the calendar holds too few.
         listed_by = calendar[end - min_listing] if end >= min_listing else None
-        if _grouping(old, first, last, listed_by) != _grouping(new, first, last, listed_by):
+        if _grouping(old, first, last, listed_by, earliest) != _grouping(
+            new, first, last, listed_by, earliest
+        ):
             stale.append((month, version))
     for month, version in stale:
         log.warning(
@@ -225,18 +234,24 @@ def _record_stale_months(
 
 
 def _grouping(
-    intervals: Sequence[tuple[str, date, Interval]],
+    intervals: Sequence[tuple[str, tuple[date, date], Interval]],
     first: date,
     last: date,
     listed_by: date | None,
+    earliest: bool,
 ) -> frozenset[tuple[frozenset[tuple[str, str, date, date]], bool]]:
     """How the rows from ``first`` to ``last`` are grouped into Instruments, keys aside, each
-    group with whether its Instrument was listed by ``listed_by``, long enough for the month."""
+    group with whether its Instrument was listed by ``listed_by``, long enough for the month.
+
+    Each interval carries its Instrument's listing date and first row; under a rule
+    counting Listing Age from the earliest evidence (ADR 0017) the earlier of the two
+    is the Instrument's listing."""
     groups: defaultdict[str, set[tuple[str, str, date, date]]] = defaultdict(set)
     eligible: dict[str, bool] = {}
-    for key, listed_on, interval in intervals:
+    for key, (listed_on, first_row), interval in intervals:
         if interval.first <= last and interval.last >= first:
-            eligible[key] = listed_by is not None and listed_on <= listed_by
+            listed = min(listed_on, first_row) if earliest else listed_on
+            eligible[key] = listed_by is not None and listed <= listed_by
             groups[key].add(
                 (
                     interval.symbol,

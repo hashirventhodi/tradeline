@@ -169,6 +169,25 @@ def test_a_corrected_listing_date_that_changes_a_members_listing_age_makes_its_m
     assert kept == stored
 
 
+def test_a_corrected_listing_date_after_the_first_row_leaves_listing_age_and_its_month_alone(
+    fresh_database_url: str,
+) -> None:
+    # ADR 0017: RELIANCE's Listing Age counts from its first row, 17 March,
+    # whether the master dates it 25 March or 1995.
+    listing = replace(SHORT, min_listing_trading_days=5, listing_age_from="earliest_evidence")
+    with app_connection(fresh_database_url) as conn:
+        ingest_eod(conn, Playback(FIXTURES, EOD_FIXTURES, edit=listed_late), start=START, end=END)
+        ingest_symbol_changes(conn, Playback(INSTRUMENT_FIXTURES))
+        rebuild_instruments(conn)
+        stored = store(conn, [(listing, APRIL)])
+        ingest_eod(conn, Playback(FIXTURES, EOD_FIXTURES), start=END, end=END)
+        rebuild_instruments(conn)
+        report = instruments_report(conn)
+
+    assert "RELIANCE" in [m.symbol for m in stored]
+    assert report.stale == ()
+
+
 def test_a_late_link_that_only_renames_a_stored_members_instrument_is_reported_not_stale(
     split: psycopg.Connection,
 ) -> None:

@@ -14,10 +14,11 @@ the ``lookback_trading_days`` trading days before M. A symbol is eligible when:
   so a symbol moved to trade-for-trade (BE) or listed on SME is not;
 - its ISIN does not begin with ``excluded_isin_prefix`` (INF: ETFs and other
   fund units, which NSE trades in series EQ);
-- at least ``min_listing_trading_days`` trading days fall from its listing
-  date to the day before M. The listing date is the equity master's; a symbol
-  the master no longer lists (one since delisted) falls back to its first
-  end-of-day row, which is exact once history is loaded back to its listing.
+- its Listing Age, the trading days from its listing date to the day before
+  M, is at least ``min_listing_trading_days``. The listing date is the equity
+  master's; a symbol the master no longer lists (one since delisted) falls
+  back to its first end-of-day row, which is exact once history is loaded
+  back to its listing.
 
 Eligible symbols are ranked by traded value in the rule's series over the
 window, descending, ties broken by symbol ascending, and the top ``top_n`` are
@@ -33,13 +34,17 @@ listing. Each end-of-day row counts for the Instrument whose interval holds
 it: the window's days and traded value in the rule's series are summed over
 every Symbol the Instrument had, its most recent row (under any Symbol) gives
 the series and ISIN checks, and its listing date is the Instrument's
-(``instruments.listed_on``). The member's Symbol is that of its most recent
-row in the window, the Symbol in force on the window's last day, and the
-membership row also records the Instrument's key. The Instruments must be
-rebuilt over the whole window first: a month whose window has a row in an
-equity listing series that no Instrument holds is refused, never ranked
-without it. Rows stored under a rule that ranks Symbols are left as they are;
-that rule's version is unchanged.
+(``instruments.listed_on``). Under ``listing_age_from = "earliest_evidence"``
+(ADR 0017) Listing Age counts from the earlier of that date and the
+Instrument's first row in any listing series, since NSE's master gives a
+security's last admission to the main board, which can follow years of
+trading on NSE.
+The member's Symbol is that of its most recent row in the window, the Symbol
+in force on the window's last day, and the membership row also records the
+Instrument's key. The Instruments must be rebuilt over the whole window first:
+a month whose window has a row in an equity listing series that no Instrument
+holds is refused, never ranked without it. Rows stored under a rule that
+ranks Symbols are left as they are; that rule's version is unchanged.
 """
 
 from __future__ import annotations
@@ -321,6 +326,7 @@ def _instrument_candidates(
         "month": month,
         "series": rule.series,
         "listing_series": list(LISTING_SERIES),
+        "listing_age_from": rule.listing_age_from,
     }
     row = conn.execute(
         "SELECT count(*) FROM eod_bhavcopy e"
@@ -355,7 +361,10 @@ def _instrument_candidates(
         " SELECT l.symbol, st.days, st.traded_value, l.series,"
         "  COALESCE(l.isin, (SELECT isin FROM symbols s WHERE s.symbol = l.symbol"
         "   AND s.series = %(series)s)),"
-        "  (SELECT count(*) FROM calendar c WHERE c.trade_date >= ins.listed_on),"
+        "  (SELECT count(*) FROM calendar c WHERE c.trade_date >= CASE %(listing_age_from)s"
+        "   WHEN 'earliest_evidence' THEN LEAST(ins.listed_on, (SELECT min(f.first_day)"
+        "    FROM instrument_intervals f WHERE f.instrument_key = ins.key))"
+        "   ELSE ins.listed_on END),"
         "  st.instrument_key"
         " FROM stats st JOIN latest l USING (instrument_key)"
         " JOIN instruments ins ON ins.key = st.instrument_key"

@@ -106,6 +106,34 @@ def test_ranking_instruments_is_a_new_rule_version_that_records_it(tmp_path: Pat
     assert rule.parameters == UniverseRule().parameters | {"rank_by": "instrument"}
 
 
+def test_listing_age_from_the_earliest_evidence_is_a_new_rule_version_that_records_it(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text('[universe]\nrank_by = "instrument"\nlisting_age_from = "earliest_evidence"\n')
+
+    rule = load_config(path).universe
+    by_listing_date = UniverseRule(rank_by="instrument")
+
+    # ADR 0017. The rule ranking Instruments from the listing date keeps its version.
+    assert by_listing_date.version == (
+        "ded30b1014c4f6aa48ff01d83a7592077ab09fc718301f5ff3b275e9e12ef57e"
+    )
+    assert UniverseRule(rank_by="instrument", listing_age_from="listing_date") == by_listing_date
+    assert rule.version != by_listing_date.version
+    assert rule.parameters == by_listing_date.parameters | {"listing_age_from": "earliest_evidence"}
+
+
+def test_listing_age_from_the_earliest_evidence_is_refused_for_a_rule_ranking_symbols(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text('[universe]\nlisting_age_from = "earliest_evidence"\n')
+
+    with pytest.raises(ConfigError, match="universe.listing_age_from"):
+        load_config(path)
+
+
 def test_a_universe_rule_ranking_anything_else_is_refused_by_name(tmp_path: Path) -> None:
     path = tmp_path / "tradeline.toml"
     path.write_text('[universe]\nrank_by = "isin"\n')

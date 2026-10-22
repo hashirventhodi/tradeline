@@ -296,7 +296,7 @@ than the new Symbol's first row in NSE's files.
 | Fund ISIN changes (INF) | 71 | ETF units under a new ISIN, in batches on one day per fund house (six Reliance (now Nippon India) ETFs on 2019-12-20; five HDFC on 2023-10-20; four ICICI on 2024-03-01). Explained as a class, not cited row by row. No Corporate Action, and the Universe excludes INF ISINs, so no month depends on them. Left split. |
 | SME ISIN changes | 21 | SM and ST Symbols whose price falls four- to ten-fold on the new ISIN, which reads as SME bonuses and splits NSE's `index=equities` Corporate Action list does not carry. Inferred from the prices, not cited. No ever-member, and the Universe counts only EQ. Left split. |
 | Other equity ISIN changes | 12 | Relistings after long suspensions (KSE from 2015, DSKULKARNI from 2018, EASTSILK, BURNPUR, MBECL, SUMEETINDS, KAUSHALYA, SHEKHAWATI), VERTOZ's consolidation 16 days before its relisting, TIDEWATER (2016) and KARDA (2020), whose prices fall about four-fold with no action NSE lists (unexplained), and CCAVENUE (above). No ever-member except CCAVENUE's Instrument. |
-| Link Candidates | 11 | All end on 2015-01-29: BSE-listed companies that traded on NSE as "permitted to trade" until NSE withdrew the facility from 30 January 2015 (NSE/CML/28574), then listed on NSE directly. NSE dates them from that listing (AVANTIFEED 2015-04-15), so they are new listings, not renames. Left split. |
+| Link Candidates | 11 | All end on 2015-01-29: companies listed on another exchange that traded on NSE as "permitted to trade" until NSE withdrew the facility from 30 January 2015 (NSE/CML/28574, which names companies listed on the MSE and the Madhya Pradesh Stock Exchange; corrected by #32), then listed on NSE directly. NSE dates them from that listing (AVANTIFEED 2015-04-15), so they are new listings, not renames. Left split. |
 
 Before the run, 119 anomalies included the 14 "Fv Splt Frm" splits; CADILAHC's
 2015 ISIN change is now joined, so ZYDUSLIFE's history runs from 2015. No
@@ -311,7 +311,8 @@ manual link is unmatched.
 - **Listing dates later than an Instrument's first row** (#32): SUBEX (2020-11-05),
   NESTLEIND (2023-08-01), FORCEMOT, CAMS and SHAKTIPUMP among ever-members.
   No month changes here, but listing age from such a date understates a long
-  history.
+  history. Researched in "Listing dates later than an Instrument's first
+  row (#32)" below.
 - **Explained by inference, not citation** (#33): the 21 SME and 71 fund ISIN
   changes (as classes), and TIDEWATER's and KARDA's four-fold changes (not
   explained). None touches an ever-member or an EQ Universe month.
@@ -467,6 +468,197 @@ reason, not in place of it.
 | RELINFRA@1995-02-08 | **RELINFRA** | 2025-06-04 | series moved | Our rows continue in BE from 2025-06-05; Kite gives a token for EQ only |
 | STRTECH@2000-12-08 | **STRTECH**, STLTECH (renamed, #13's 38) | 2026-05-13 | series moved | Our rows continue in BE from 2026-05-14; Kite gives a token for EQ only |
 
+## Listing dates later than an Instrument's first row (#32)
+
+Researched on 2026-10-21 against the #29 database (4,449 Instruments), NSE's
+circulars (read through NSE's circular search and nsearchives), and seven
+archived copies of NSE's equity master (`EQUITY_L.csv`) from the Internet
+Archive, dated 2015-01-02, 2015-03-10, 2018-12-19, 2021-05-16, 2022-01-02,
+2023-04-28 and 2025-07-26. 197 Instruments have a listing date after their
+first Raw Series row, as #29 counted. No policy is decided here.
+
+### The five ever-members
+
+Each master date is the "with effect from" date of an NSE circular that
+admitted the shares to dealings. In four of the five the earlier rows are
+the same shares trading on NSE under the "permitted to trade" (PTT)
+category, open to companies listed on another exchange but not on NSE. The
+fifth is a readmission after a capital reduction.
+
+| Instrument | Master date | Our rows | What the date is | Source |
+|---|---|---|---|---|
+| SUBEX@2020-11-05 | 2020-11-05 | SUBEX (INE754A01014) 2015-01-01 to 2020-10-21; nothing for 10 trading days; SUBEXLTD (INE754A01055) from 2020-11-05 | Readmission after a capital reduction. The shares allotted under the NCLT-approved reduction (face value Rs 10 to Rs 5) were admitted from 2020-11-05 as SUBEXLTD in BE under a new ISIN, then moved to EQ from 2020-11-19. The only one of the five where the Symbol, ISIN and series all change on the date. | NSE/CML/46245 (2020-11-03); NSE/CML/46277 (2020-11-05) |
+| NESTLEIND@2023-08-01 | 2023-08-01 | EQ, INE239A01016, every trading day from 2015-01-01, with no break on the date | PTT to listed. The circular is titled "New Listing" and admits the shares from 2023-08-01. Nestlé's own disclosure says they were already traded at NSE as PTT in cash and F&O and were in the Nifty 50. The master now shows the date under INE239A01024, the ISIN from the split from Rs 10 to Re 1 (ex 2024-01-05 in NSE's Corporate Actions), so the date carried across the ISIN change. All six archived masters from 2015-01 to 2023-04 gave 08-JAN-2010. | NSE/CML/57743 (2023-07-28, ref 0946/2023); Nestlé India's Regulation 30 disclosure citing NSE letter NSE/LIST/123 (2023-07-28) |
+| FORCEMOT@2024-02-14 | 2024-02-14 | EQ 2019-08-19 to 2023-10-25; nothing for 76 trading days; EQ from 2024-02-14 | PTT, withdrawn, then listed. Admitted to PTT dealings from 2019-08-19, withdrawn from PTT from 2023-10-26, newly listed from 2024-02-14. The archived masters of 2021-05, 2022-01 and 2023-04 gave 03-NOV-1994, the day NSE's capital market segment opened, while it traded as PTT. | NSE/CML/41893 (2019-08-16); NSE/CML/58560 (withdrawal from 2023-10-26); NSE/CML/60618 (2024-02-12, ref 0245/2024) |
+| CAMS@2021-05-07 | 2021-05-07 | EQ, INE596I01012, from 2020-10-05, with no break on the date | PTT to listed. CAMS listed on BSE alone on 2020-10-01: NSE Investments had held shares before the IPO, which ruled out an NSE listing then (company press release). It was PTT on NSE from 2020-10-05 and listed from 2021-05-07 "on account of change in admission type from 'Permitted for Trade' category to 'Listed' category". The master now shows the date under INE596I01020, the ISIN from the 5-for-1 split (ex 2025-12-05). | NSE/CML/45904 (2020-10-01); NSE/CML/48190 (2021-05-05, ref 0477/2021); CAMS filing of 2021-05-07 |
+| SHAKTIPUMP@2015-01-29 | 2015-01-29 | EQ, INE908D01010, from 2015-01-01, with no break on the date | PTT to listed. A "New Listing" from 2015-01-29. Before that it was PTT as a company listed on the Madhya Pradesh Stock Exchange (MPSE): NSE/CML/28574 withdrew PTT dealing in MSE- and MPSE-listed companies from 2015-01-30, Shakti Pumps among them. The archived master of 2015-01-02 gave 25-OCT-2011; that of 2015-03-10 gave 29-JAN-2015. | NSE/CML/28696 (2015-01-27, ref 90/2015); NSE/CML/28574 (2015-01-06) |
+
+None of the five has a row before its master date that belongs to a
+different security. Before the date the ISIN is the same in all but SUBEX,
+whose earlier ISIN is the same company's shares before the reduction.
+
+### What NSE's "DATE OF LISTING" means
+
+No NSE definition of the field was found. NSE's "Securities Available for
+Trading" page links the file but defines none of its columns. NSE's data
+description (`Data_details_CM.pdf`) says only "Masters: Database masters,
+listing out symbols, series, ISINs, etc." What NSE's own documents do show:
+
+- **The date follows the latest admission to dealings, whatever its type.**
+  Listing circulars and PTT circulars use the same wording ("further
+  admitted to dealings on the National Stock Exchange (Capital Market
+  segment) with effect from", under Regulation 3.1.1). The master date
+  matches the latest such circular for each of the five. It also matches
+  for all 105 Instruments keyed 2026-04-20, which is the date of the
+  PTT admission in NSE/CML/73797, and for the eight of the 197 keyed
+  2026-08-17, the PTT admission in NSE/CML/75748. So the master gives PTT
+  admissions as "DATE OF LISTING" too.
+- **The date is overwritten when the admission changes.** The archived
+  masters show this directly. VALIANTORG was 05-OCT-2020 in May 2021 (its
+  PTT admission, NSE/CML/45904) and 23-JUL-2021 from January 2022.
+  WESTLIFE was 19-AUG-2019 (PTT, NSE/CML/41893) until April 2023 and
+  05-JUN-2023 by July 2025. SHAKTIPUMP went from 25-OCT-2011 to
+  29-JAN-2015, and FORCEMOT from 03-NOV-1994 to 14-FEB-2024.
+- **The date survives a split or a rename.** It stays with the security
+  while the Symbol or ISIN it is shown under changes. In 72 of the 197 the
+  master shows its date under a (Symbol, ISIN) pair whose first row comes
+  after that date (NESTLEIND and CAMS above, and renames such as
+  CNL/CREATIVE and WORTHPERI/WORTH).
+- **The file has no SME securities.** None of our 783 SM or 723 ST symbols
+  has a master date, and the July 2025 archived master has no SM row. An SME
+  company appears in the master only when it moves to the main board, with
+  the migration date. NSE's circulars call that a listing on the main board
+  "pursuant to migration from SME Emerge platform" (e.g. NSE/CML/41915,
+  Krishana Phoschem, from 2019-08-22).
+
+From these facts, the field reads as the date the security was last
+admitted to dealings in NSE's capital market segment (main board), and not
+as its first day of trading on NSE. That reading is inferred. NSE does not
+state it.
+
+What the older dates in the archived masters mean is not established:
+NESTLEIND's 2010-01-08, SHAKTIPUMP's 2011-10-25, SUBEX's 2003-09-05 (the
+2015 masters), and the 1994-11-03, 1994-12-28 and 2000-11-08 that
+FORCEMOT, KENNAMET, GOODYEAR and NOVARTIND carried while trading as PTT.
+FORCEMOT kept 1994-11-03 in 2021 although NSE/CML/41893 had admitted it
+afresh in 2019 and we hold no FORCEMOT row from 2015 to 2019-08-16.
+
+### The 197 by likely cause
+
+Read from local data only, comparing each Instrument's last row before its
+master date with its first row on or after it (rows through the
+Instrument's intervals; EQ preferred on a day with two series):
+
+| Cause, as the rows show it | Instruments |
+|---|---|
+| SME to main board: last row before the date in SM or ST, first on or after it in EQ or BE (150 SM to EQ, 2 SM to BE, 3 ST to BE) | 155 |
+| No change on the date: same Symbol and ISIN, a break of at most one trading day (NESTLEIND, CAMS, SHAKTIPUMP, VALIANTORG, WESTLIFE, ...; BEARDSELL and AMRUTANJAN also move EQ to BE that week) | 18 |
+| Same Symbol and ISIN, back after a break of 35 to 2,861 trading days | 23 |
+| Symbol, ISIN and series all change on the date (SUBEX) | 1 |
+| **Total** | **197** |
+
+- **Series change** on the date: 159 (the 155 SME migrations, BEARDSELL,
+  AMRUTANJAN, SAYAJIHOTL, SUBEX). **Symbol change**: 1. **ISIN change**: 1
+  (both SUBEX). 17 of the 197 had more than one Symbol and 70 more than one
+  ISIN over their history, but every such change falls away from the master
+  date, except SUBEX's.
+- **Breaks in rows before the date.** Of the 155 SME migrations, 129 have
+  no missing trading day, 16 miss 1 to 5, and 10 miss 6 to 102 (ARVEE 102,
+  PANSARI 84). Of the 42 main-board cases, 24 have a break of more than 5
+  trading days. Nine stop trading on or before 2015-01-29, the last day
+  before NSE/CML/28574 withdrew PTT dealing, and return in 2026 after 2,777
+  to 2,861 trading days (AMARJOTHI, BIMETAL, GKB, IPRINGLTD, LAKSHMIMIL,
+  MMWL, RAJPALAYAM, SAMBANDAM, SAYAJIHOTL, all named in that circular).
+  Nine stop on 2023-10-25, the withdrawal date of NSE/CML/58560, and return
+  later (FORCEMOT in 2024, the other eight in 2026). Six others: BESTAGRO
+  (withdrawn by NSE/CML/57699 from 2023-07-27), VISHAL, SICAGEN, ARIHANT,
+  DHANVARSHA, and SUBEX's 10 days.
+- **Clusters by date.** The 42 main-board first rows bunch on PTT admission
+  dates (2019-08-19: 7, 2020-10-05: 4, 2021-02-22, 2021-08-05 and
+  2022-05-10: 2 each). 20 of the 42 master dates are the 2026 PTT
+  readmissions (12 on 2026-04-20 and 8 on 2026-08-17). For those the
+  master date is a fresh PTT admission, not a listing.
+- **Archived masters.** For 35 of the 42 main-board cases an earlier
+  archived master gives an earlier date for the same Symbol, in every case
+  on or before the Instrument's first row. Three are in no earlier snapshot
+  and four show the same date. Of the 155 SME migrations, 131 show the same
+  date in every snapshot that has them and 24 are in none.
+
+No single row pattern covers the 197. Two causes explain all but SUBEX,
+both by NSE's own circulars. One is SME migration (155), where the earlier
+rows are an NSE SME listing. The other is a change of PTT status (41),
+where the earlier rows are NSE trading without an NSE listing, sometimes
+with a gap of up to eleven years. No row of the 197 before its master date
+was found to belong to a different security: the ISIN is the same either
+side of the date in all but SUBEX. The per-Instrument PTT reading for the
+main-board cases rests on the date patterns and the circulars named above.
+Every one of the 42 was not checked against its own circular.
+
+### Facts that bear on listing age
+
+- **The rule reads today's master for every month.** `symbols.listing_date`
+  holds one value per (Symbol, series), and each `ingest eod` overwrites it
+  with the master of that day. A month before the master date therefore
+  counts a listing age of zero (`count(*)` of calendar days on or after a
+  later date). ADR 0005 asks for "the instrument master as of then" in a
+  reconstructed Universe. Archived masters exist on the Internet Archive for
+  some months, not all.
+- **Months lost to it under `ded30b1014c4`.** Over the 120 stored months,
+  one of the 197 was barred by listing age alone (at least 114 of the
+  window's 126 days in EQ, last row in EQ, listed fewer than 126 trading
+  days)
+  in 836 Instrument-months, across 76 Instruments. 724 of those months come
+  before the master date itself. Only 91 of them had window traded value at
+  or above that month's 200th member. They are NESTLEIND, 87 months from
+  2016-11 to 2024-02 (its window value was 3 to 12 times the 200th member's
+  in 2020 and 2021), and CAMS, 4 months from 2021-08 to 2021-11. NESTLEIND
+  is a member under both stored rule versions only from 2024-03, and CAMS
+  only from 2021-12. #29's "none loses a month" compared the two versions
+  with each other, and both read the same master date.
+- **Listing age and history observed differ most in the PTT gaps.** The nine
+  2015-withdrawn Instruments have about 20 rows from January 2015 and then
+  none for eleven years. Their first row is 2,878 trading days before their
+  2026 PTT readmission, but their presence in any window comes only from
+  2026 rows. The SME 155 have their whole SME history before the date in
+  series the Universe does not rank (SM, ST).
+- **The equity master is not the only NSE source of a first date.** For
+  every PTT case the admission circulars give dated evidence. The first PTT
+  admission and the later listing are separate circulars (CAMS: NSE/CML/45904
+  then NSE/CML/48190). Tradeline ingests no circulars today.
+
+### Queries
+
+Run with `psql` on the #29 database. The 197:
+
+```sql
+SELECT i.key, i.listed_on, min(ii.first_day) AS first_row
+FROM instruments i JOIN instrument_intervals ii ON ii.instrument_key = i.key
+GROUP BY i.key, i.listed_on HAVING i.listed_on > min(ii.first_day);
+```
+
+For each, the last row before `listed_on` and the first on or after it are
+taken from `eod_bhavcopy` joined to the Instrument's intervals, and compared
+for Symbol, ISIN and series. The break between them is counted in trading
+days (distinct `trade_date`). The months lost were found by recomputing, for
+each stored month under `ded30b1014c4`, each of the 197's EQ days, last
+series, traded value and listing age over the 126-day window, and comparing
+the value with the month's lowest stored member. The archived masters were
+compared by Symbol, for every Symbol of the Instrument whose master date is
+its key.
+
+### Unresolved
+
+- What the earlier master dates mean (NESTLEIND 2010-01-08, SHAKTIPUMP
+  2011-10-25, SUBEX 2003-09-05, the 1994 and 2000 dates of FORCEMOT,
+  KENNAMET, GOODYEAR, NOVARTIND). No circular was found for them.
+- Whether `EQUITY_L.csv` lists a PTT security while it trades as PTT, in
+  general. The archived masters list FORCEMOT, GOODYEAR, VALIANTORG and
+  WESTLIFE during PTT periods, but NSE does not say so.
+- The 41 PTT cases other than the four ever-members are classed by date
+  patterns and the batch circulars named above (NSE/CML/28574, 41893, 45904,
+  58560, 57699, 73797, 75748), not each against its own listing circular.
+- NSE's own definition of "DATE OF LISTING": none found.
+
 ## US-market findings (for reference; not the chosen market)
 
 Alpaca offers free paper trading with IEX data and ₹99-equivalent full SIP data; Massive (formerly Polygon) runs 29 to 199 dollars a month; SEC EDGAR is free. These made the US the easier engineering choice. The Operator chose Indian equities, which cost more in friction (no sandbox, daily login, static IP) but is the market they trade.
@@ -501,3 +693,4 @@ Within the agreed ₹5,000 to ₹12,000 band with headroom for a paid data upgra
 - Lookahead bias: arxiv.org/pdf/2512.23847, arxiv.org/pdf/2601.13770
 - Alpha Arena: protos.com coverage, iweaver.ai season 1 results
 - US reference: docs.alpaca.markets market data plans, massive.com pricing (via third-party guides)
+- Listing dates (#32): NSE circulars NSE/CML/46245 and 46277 (SUBEX), 57743 (NESTLEIND), 41893, 58560 and 60618 (FORCEMOT), 45904 and 48190 (CAMS), 28696 and 28574 (SHAKTIPUMP), 57699, 73797, 75748 and 41915, at nsearchives.nseindia.com/content/circulars/CML<number>.pdf or .zip, found through nseindia.com/api/circulars; Nestlé India's Regulation 30 disclosure of the NSE listing (nestle.in, special announcements); CAMS's press release filing of 2021-05-07 (nsearchives.nseindia.com/corporate/CAMS_07052021180955_Pressrelease.pdf); NSE's "Securities Available for Trading" page (nseindia.com/static/products-services/equity-market-securities-available-for-trading); NSE's About Equities page for the capital market segment's opening on 1994-11-03 (nseindia.com/static/products-services/about-equity-market); NSE's data description (archives.nseindia.com/content/press/Data_details_CM.pdf); archived copies of NSE's EQUITY_L.csv at web.archive.org (snapshots 20150102124557, 20150310012511, 20181219143033, 20210516062344, 20220102154932, 20230428005156, 20250726163846)

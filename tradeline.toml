@@ -9,7 +9,7 @@ level = "INFO"
 [universe]
 top_n = 200
 lookback_trading_days = 126     # the trailing window before the month's first trading day
-min_listing_trading_days = 126  # trading days since listing
+min_listing_trading_days = 126  # trading days of Listing Age
 min_presence_percent = 90       # rows required on this share of the window's days
 series = "EQ"                   # excludes SME (SM, ST) and trade-for-trade (BE, BZ)
 excluded_isin_prefix = "INF"    # ETFs and other fund units trade in EQ with INF ISINs

@@ -27,3 +27,7 @@ Anything else splits the history and is reported as an anomaly: an unexplained I
 - **Join on ISIN.** Rejected: it breaks every split that issues a new ISIN, and ISINs have carried more than one Symbol.
 - **Join on Symbol continuity alone.** Rejected: a reused Symbol would join two companies.
 - **Infer renames from an unchanged ISIN.** Rejected as a link. Such cases are offered as candidates for a cited manual link instead.
+
+## Amendment (2026-10-21, #32): the key's date is not Listing Age
+
+NSE's equity-master listing date is the security's last admission to dealings on the main board, and can come years after its first trading day on NSE (NESTLEIND's is 2023-08-01, the day it moved from "permitted to trade" to listed). The key keeps that date: it is an identity, reproduced by every rebuild, and re-keying would change stored memberships and manual links. Listing Age no longer counts from it (ADR 0017).

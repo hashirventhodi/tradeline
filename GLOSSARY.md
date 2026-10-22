@@ -33,7 +33,10 @@ The set of Instruments eligible for trading on a given date, chosen by the Unive
 _Avoid_: Watchlist, basket, index
 
 **Universe Rule**:
-The deterministic rule that defines the Universe at a point in time (currently: top 200 NSE Instruments by trailing six-month traded value, recomputed monthly). An Instrument's traded value and listing age count across every Symbol it has had.
+The deterministic rule that defines the Universe at a point in time (currently: top 200 NSE Instruments by trailing six-month traded value, recomputed monthly). An Instrument's traded value and Listing Age count across every Symbol it has had.
+
+**Listing Age**:
+The trading days since an Instrument was first admitted to trading on NSE, measured from the earliest supported date established using NSE listing evidence and the Instrument's first Raw Series row. NSE's current master date may reflect a later admission to the main board rather than the original listing. Listing Age is distinct from the amount of historical data held, which may contain gaps.
 
 **Candidate**:
 An Instrument in the Universe that the Strategy's screen surfaced on a given Run.
