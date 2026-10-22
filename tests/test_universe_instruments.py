@@ -181,7 +181,7 @@ def test_listing_age_counts_from_the_first_row_when_the_listing_date_comes_after
 def test_an_instruments_listing_age_starts_at_the_earlier_of_its_listing_date_and_first_row(
     fresh_database_url: str,
 ) -> None:
-    # The one statement of it that the Universe and reconcile both read.
+    # The one statement of it that the Universe and Kite Parity both read.
     load(fresh_database_url, master=Playback(FIXTURES, EOD_FIXTURES, edit=admitted_late))
     with app_connection(fresh_database_url) as conn:
         starts: dict[str, date] = dict(

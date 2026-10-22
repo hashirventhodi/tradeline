@@ -1210,6 +1210,325 @@ delisting or suspension (2018 and 2020), and searching the text.
 - **How such candles are reported** is #34's second checkbox, for the
   Operator.
 
+## The Trading Calendar (#57)
+
+Researched on 2026-10-22 against NSE's circulars and checked against the #29
+database (end-of-day files 2015-01-01 to 2026-10-19). The circular search
+`nseindia.com/api/circulars` was read with `dept=CMTR` (which also returns
+some NSE/MSD circulars) and with `dept=MSD`, for December 2014 to October
+2026: 1,855 and 662 circulars. Every subject naming a holiday, muhurat, live
+or Special Session, Saturday or Sunday, budget or election was read, and the
+PDFs at `nsearchives.nseindia.com/content/circulars/<dept><number>.pdf` were
+fetched and read for each row of `trading_calendar.csv`.
+
+### Sources
+
+- **Holidays.** The Capital Market segment's annual "Trading holidays for the
+  calendar year" circular: NSE/CMTR/28337 (2015), 31297 (2016), 33746
+  (2017), 36475 (2018), 39612 (2019), 42877 (2020), 46623 (2021), 50560
+  (2022), 54757 (2023), 59722 (2024), 65587 (2025) and 71775 (2026). Only
+  the weekday holidays are rows; each circular also lists those falling on a
+  weekend.
+- **Holidays added or moved later**: NSE/CMTR/40536 (2019-04-29,
+  Parliamentary Elections), NSE/MSD/42319 (2019-10-21, Maharashtra Assembly
+  Elections), NSE/CMTR/57285 (Bakri Id moved from 2023-06-28 to 2023-06-29),
+  NSE/CMTR/60338 (2024-01-22, a public holiday under the Negotiable
+  Instruments Act), NSE/CMTR/61518 (2024-05-20, Parliamentary Elections),
+  NSE/CMTR/64960 (2024-11-20, Maharashtra Assembly Elections) and
+  NSE/CMTR/72260 (2026-01-15, Maharashtra Municipal Corporation Elections).
+- **Muhurat sessions**, each cited with the annual circular that names its
+  day: NSE/CMTR/31047 (2015-11-11), 33424 (2016-10-30), 35993 (2017-10-19),
+  39216 (2018-11-07), 42403 and its revised timings 42483 (2019-10-27; 42403
+  is a scanned PDF with no text), 46230 (2020-11-14), 50050 (2021-11-04),
+  54023 (2022-10-24), 59124 (2023-11-12), 64628 (2024-11-01), 70319
+  (2025-10-21) and 76941 (2026-11-08).
+- **Union Budget sessions**: NSE/CMTR/28939 (Saturday 2015-02-28), 43290
+  (Saturday 2020-02-01), 65729 and NSE/MSD/66381 (Saturday 2025-02-01), and
+  NSE/CMTR/72349 (Sunday 2026-02-01).
+- **Saturday sessions of 2024**: NSE/MSD/59999 announced 2024-01-20 as a
+  live session with an intraday switch to the DR site, and NSE/MSD/60340
+  held it on the primary site at regular timings instead. NSE/MSD/60677
+  (2024-03-02) and 61893 (2024-05-18) were held with the switch to DR.
+
+The calendar has 170 holidays and 19 Special Sessions. A weekday muhurat
+(2015, 2017, 2018, 2021, 2022, 2024, 2025) is a Special Session, not a
+holiday, though the annual circular lists its day among the holidays as
+"Diwali Laxmi Pujan*": NSE published an end-of-day file for each. NSE's
+extended live sessions on weekdays (NSE/CMTR/32304 and the "Extended LIVE
+TRADING session" circulars) and its weekday live sessions from the DR site are normal trading days, so they
+are not rows. Mock trading sessions publish no file and are not rows.
+
+### Circulars and files
+
+Every one of the 166 weekdays without a file from 2015-01-01 to 2026-10-19
+is a holiday a circular names, and every one of the 11 weekend files is a
+Special Session a circular announced. #13's 167 weekdays ran to 2026-10-20,
+Dussehra. No file is lost and none was re-ingested.
+
+No circular and file disagree once the later circulars are read. Three
+days would disagree with the annual circular alone:
+
+- **2023-06-28 and 2023-06-29.** NSE/CMTR/54757 made 2023-06-28 the Bakri Id
+  holiday; NSE/CMTR/57285 moved it to 2023-06-29 the day before, after
+  Maharashtra's notification. The files agree with the move: 2023-06-28 has
+  a file and 2023-06-29 has none.
+- **2024-01-22** is in no annual circular. NSE/CMTR/60338 declared it on the
+  Friday before (2024-01-19), when the Saturday 2024-01-20 session had
+  already been called; the files have 2024-01-20 and not 2024-01-22.
+
+The election holidays (2019-04-29, 2019-10-21, 2024-05-20, 2024-11-20,
+2026-01-15) are likewise absent from their annual circulars and named in a
+later one.
+
+### Outcome
+
+`tradeline integrity --from 2015-01-01 --to 2026-10-19` on the #29 database,
+on 2026-10-22: PASS, 2,923 trading days checked, 0 day failures. The
+calendar covers the rest of 2026 from NSE/CMTR/71775 and 76941: holidays
+2026-10-20, 2026-11-10, 2026-11-24 and 2026-12-25, and the muhurat session
+on Sunday 2026-11-08.
+
+### Unresolved
+
+- **Later changes to 2026.** A holiday NSE adds or moves after 2026-10-22,
+  or a session it calls, is not in the calendar; the file check names such a
+  day once its file is ingested (or found missing).
+
+## Large Move records (#58)
+
+Reviewed on 2026-10-22 against the #29 database (end-of-day files 2015-01-01
+to 2026-10-19). `tradeline integrity --from 2015-01-01 --to 2026-10-19`
+with a header-only `large_moves.csv` found 43 Large Moves among the 517
+ever-members, all unexplained: no split or bonus falls on any of them, since
+the Adjusted Series takes out every split and bonus it has. The spec's 82
+were raw EQ closes; read as #56 measures them (the Adjusted Series, across
+the listing series), a split's day and a series move no longer show, and 43
+remain. A move on 2015-01-01, the range's first day, would not be seen.
+
+For each, NSE's circulars from 30 days before to 3 days after the move
+(`nseindia.com/api/circulars`, every department) were searched by company
+name, and NSE's corporate announcements for the Symbol around the day
+(`nseindia.com/api/corporate-announcements`). Each cited circular or filing
+was fetched and read; the three image-only circulars (NSE/CMTR/39430,
+NSE/SURV/40123, NSE/SURV/41288) were read as images.
+
+### Counts by reason
+
+| Reason | Moves |
+|---|---|
+| demerger | 26 |
+| market | 14 |
+| rights | 1 |
+| dividend | 1 |
+| resumed | 1 |
+| unexplained | 0 |
+
+- **demerger (26).** Each is the Ex-Date of a scheme in NSE's Corporate Action
+  list ("Scheme Of Arrangement", "Composite Scheme Of Arrangement" or
+  "Demerger"), and an NSE circular names the day. For an F&O stock, either
+  NSE's F&O adjustment "on account of scheme of arrangement" states the
+  ex-date (ADANIENT 2015, IDFC 2015, ARVIND 2018, PEL 2022) or NSE held a
+  pre-open call auction for the scheme that day (ABIRLANUVO, CROMPGREAV,
+  SINTEX, KPIT, CENTURYTEX, TATACHEM; from 2025 a Special Pre-Open Session:
+  SIEMENS, ABFRL, TATAMOTORS, VEDL). Otherwise NSE moved the stock to
+  trade-for-trade (BE) "Pursuant to Scheme of Arrangement" from that day
+  (JSL, IIFL, TATACOMM, ANANTRAJ, EDELWEISS, NIITLTD, SANOFI, RAYMOND twice,
+  STAR, SHANKARA, HEG). That is why 12 of the 26 moves are in BE.
+- **rights (1).** IDEA 2019-03-29, its 87:38 rights issue at Rs 12.50. The
+  theoretical ex-rights price, (38 x 29 + 87 x 12.50) / 125 = 17.50, is
+  close to the 18.25 close. NCL/CMPT/40552 adjusts F&O for it.
+- **dividend (1).** MAJESCO 2020-12-23, the interim dividend of Rs 974 per
+  share paid from the sale of its US business. The board outcome was filed
+  with NSE on 2020-12-15. The close fell from 985.65 to 12.20.
+- **resumed (1).** BCG 2025-07-14 (the Instrument LYCOS named). It was
+  suspended from 2024-06-14 and resumed in BE (NSE/CML/68967). The 241 gap
+  days of LYCOS below are that suspension.
+- **market (14).** None has a corporate action. Each cites the exchange's
+  record of the day where one exists: NSE's news verification or
+  price-movement query and the company's reply, an NSE circular, or a
+  regulator's release.
+  - UNITECH 2015-06-03: loan default rumours. NSE's press release of
+    2015-06-04 records the clarification.
+  - RCOM 2018-05-17: up on talk of a settlement with Ericsson. NSE's news
+    verification records it.
+  - DHFL 2018-09-21: default rumours. NSE's news verification records them,
+    and DHFL's reply says it had not defaulted.
+  - INFIBEAM 2018-09-28: Infibeam filed a voluntary clarification that day.
+  - RCOM and RPOWER 2019-02-04: RCOM's board chose NCLT resolution
+    (NSE/SURV/40123). Reliance Power's press release said the move did not
+    affect it.
+  - JETAIRWAYS 2019-06-18 and 2019-06-20: lenders took it to insolvency, and
+    the NCLT admitted it two days later. NSE queried the news and the price
+    move, and moved it to trade-for-trade (NSE/SURV/41288).
+  - IBULHSGFIN 2019-09-30: the Delhi High Court PIL. The company's filing of
+    2019-09-27 records it.
+  - YESBANK 2020-03-06: the RBI moratorium (its press release of
+    2020-03-05).
+  - YESBANK 2020-03-17: the Reconstruction Scheme in force, and trading in
+    the new ISIN (NSE/CML/43833).
+  - IDEA 2020-03-18: the Supreme Court's AGR order that day. Vodafone Idea's
+    filing of 2020-03-19 records it.
+  - IBULHSGFIN 2020-03-19: no exchange record of the day was found. The
+    reviewer's note cites the March 2020 market-wide fall and the company's
+    filings on its Yes Bank loans.
+  - POLICYBZR 2026-09-24: IRDAI's consultation paper "Recalibrating Economics
+    of Insurance Distribution". PB Fintech's reply to NSE's price-movement
+    query calls the fall market-driven.
+
+No move turned out to be a split or bonus missing from NSE's lists, so no
+Cited Action was added and none is unresolved.
+
+### Outcome
+
+`tradeline integrity --from 2015-01-01 --to 2026-10-19` with the 43 records,
+on 2026-10-22, gave PASS:
+
+- 2,923 trading days, 0 day failures;
+- 517 ever-members and 43 Large Moves, all explained (26 demerger, 14 market,
+  1 rights, 1 dividend, 1 resumed);
+- 0 unexplained, 0 unresolved records and 0 unmatched records.
+
+The 2,675 gaps fall across 21 Instruments. They are reported and never
+failed: FCEL 449, HDIL 334, RCOM 295, LYCOS 241, JPASSOCIAT 227, FRETAIL 218,
+RELCAPITAL 194, SINTEX 180, EROSMEDIA 108, SREINFRA 103, RELINFRA 79,
+FORCEMOT 76, MEP 61, ABAN 50, PIPAVAVDOC 27, IBREALEST 12, SUBEX 10,
+UPERGANGES 5, PRAKASH 3, BEPL 2 and GOLDINFRA 1.
+
+### Unresolved
+
+- **No Large Move is left unexplained.**
+- **Weaker citations.** Two market records rest on a reviewer's note rather
+  than an exchange record of the day. IBULHSGFIN 2020-03-19 has none at all.
+  For RPOWER 2019-02-04 the only record is its own press release that RCOM's
+  move did not affect it.
+- **Later moves.** A Large Move after 2026-10-19, or a new ever-member's
+  earlier one, fails the check until a record is added.
+
+## Ten-year Integrity Check and Kite Parity (#59)
+
+Run on 2026-10-22 on the #29 database, with #17's code (ADR 0018), the
+reviewed Trading Calendar (#57) and the Large Move records (#58), against
+live Kite responses. The range is #13's and #29's, 2016-10-21 to 2026-10-20.
+
+| Step | Result | Runtime |
+|---|---|---|
+| `migrate` | 0025 (`candle_requests`), applied before the run. | under 1 s |
+| `integrity` (it reads no candles, so it ran first) | **Pass.** Below. | 22 s |
+| `ingest candles --interval day --from 2016-10-21 --to 2026-10-20`, naming each of the 464 Symbols already holding candles | 928 requests, each recorded: 464 (Symbol, series) pairs, merged to one range each. 1,007,665 bars seen, **1,435 written** (expected 0; BAFNAPH, below). 823 (Symbol, series) pairs without a token, skipped and not recorded. 0 anomalies. | 5 min |
+| `parity` | **Fail: 2.09 percent** unexplained against 0.1. Below. | 2 min 19 s |
+
+### The re-fetch wrote BAFNAPH's history
+
+A named Symbol is fetched under every series it has a token for. BAFNAPH
+had candles only for July and August 2024, which is why #13 and #29
+counted 998 of its NSE rows as missing candles. Its BE
+token returned 1,435 bars more, from 2020-03-02. The spec put fetching its
+history out of scope, but the bars are kept: their requests are recorded,
+so without them every one of those days would read as a bar Kite was asked
+for and did not return. BAFNAPH is now compared like any other Instrument,
+which is why "not fetched" is 0 below.
+
+### Integrity
+
+`tradeline integrity --from 2016-10-21 --to 2026-10-20`: PASS.
+
+- 2,478 trading days, 0 day failures; the calendar covers the range.
+- 517 ever-members; 37 Large Moves in the range, all explained by records
+  (21 demerger, 13 market, 1 rights, 1 dividend, 1 resumed). 0 unexplained,
+  0 unresolved, 0 unmatched and 0 duplicate records. #58's other six moves
+  fall before 2016-10-21.
+- 2,667 gaps across 18 Instruments, reported and never failed: FCEL 449,
+  HDIL 334, RCOM 295, LYCOS 241, JPASSOCIAT 227, FRETAIL 218, RELCAPITAL
+  194, SINTEX 180, EROSMEDIA 108, SREINFRA 103, RELINFRA 79, FORCEMOT 76,
+  MEP 61, ABAN 50, PIPAVAVDOC 27, IBREALEST 12, SUBEX 10, PRAKASH 3.
+
+### Parity beside #29
+
+`tradeline parity --from 2016-10-21 --to 2026-10-20`: 1,008,709 rows
+compared, 44,755 differences, 21,069 unexplained (**2.09 percent**): FAIL.
+
+| Kind | Parity Reason | #29 (reconcile) | #59 |
+|---|---|---|---|
+| extra | series move | 13,596 | 14,033 |
+| extra | unexplained | 8 (MAZDOCK) | 0 (MAZDOCK's 8 are Pre-listing Candles, #34) |
+| missing | Special Session | 1,044 (muhurat) | 1,044 |
+| missing | not fetched | 998 (BAFNAPH) | 0 (BAFNAPH fetched, above) |
+| missing | unexplained | 8 | 8 |
+| close | additive adjustment | 29,670 (both causes, not split out) | 5,238 |
+| close | coarse rounding | (in the row above) | 3,371 |
+| close | unexplained | (not split out) | 21,061 |
+| | **total** | **45,324 (4.50 percent)** | **44,755; unexplained 21,069 (2.09 percent)** |
+
+Series moves rose by 437 with BAFNAPH's BE history in the comparison.
+
+- **Missing, unexplained (8).** The same single days as #29: CEBBCO
+  2018-12-03 to 2018-12-05, DWARKESH 2019-01-08, SUBEX 2019-01-08, FORCEMOT
+  2019-08-19, IIFLWAM 2019-10-04 and MCDOWELL-N 2019-11-08. NSE has a row,
+  and Kite has no bar inside a requested range. Cause not found.
+- **Close, unexplained (21,061),** in 274 stretches of 45 Instruments. Every
+  stretch has at least five bars, so none fails the additive rule for being
+  short. Each fails it on the half-tick limit:
+
+| Max distance from the least-squares fit, per stretch | Unexplained closes |
+|---|---|
+| at most 3 paisa | 6,817 |
+| over 3, at most 5 paisa | 4,109 |
+| over 5, at most 10 paisa | 7,906 |
+| over 10 paisa | 2,229 |
+
+  - **Additive, then rounded (18,931).** Kite's close is a × NSE's close − b
+    (ADR 0018's additive adjustment: a scale a and an offset b), and one a
+    and b hold across consecutive stretches, often for years: GNFC a = 0.932,
+    b = 43.33 (1,742 closes); BANKBARODA 0.936, 7.11 (1,668); CANBK 0.187,
+    3.01 (1,641); ASHOKLEY 0.500, 2.48 (1,149). The same holds for HINDPETRO,
+    VEDL, MPHASIS, M&MFIN, BPCL, TECHM, TATASTEEL, HEROMOTOCO, POWERGRID,
+    NMDC, IOC and GAIL. Kite's closes there are on a 5 paisa tick
+    (BANKBARODA, ASHOKLEY, GNFC, HINDPETRO), a 10 paisa one (MPHASIS,
+    TECHM), or finer (CANBK, TATASTEEL, IOC, GAIL). A rounded price can be
+    half its tick from the true line, and a least-squares line drawn through
+    rounded prices is itself a little off it, so the largest gap lands just
+    above 2.5 paisa: 2.7 to 3.1 paisa for CANBK, TATASTEEL, BANKBARODA and
+    ASHOKLEY. On a 10 paisa tick it reaches about 10 paisa (MPHASIS,
+    TECHM). GNFC, HINDPETRO, M&MFIN and BPCL reach 5.2 to 9.1 paisa on a
+    5 paisa tick, more than rounding alone accounts for; why was not
+    established. The rule as written (ADR 0018) cannot pass any of these.
+  - **Additive with coarser rounding (2,076).** OFSS (1,531, up to
+    51 paisa), BSE, NIITTECH, GODFRYPHLP, TATAINVEST, MCX and NAUKRI: fits
+    off by 25 to 57 paisa, on a 10 paisa tick or coarser. These look like
+    additive history rounded coarser than Kite's usual tick, to the rupee or
+    the half-rupee. ADR 0018 agrees only rounding to ₹1, and only on its
+    own, never after an additive fit.
+  - **Isolated closes (54).** 16 Instruments with at most three unexplained
+    closes each (34 closes: DMART, SBILIFE, PNBHOUSING, AUBANK, TEJASNET,
+    DIXON, HINDZINC and others), and 20 SHANKARA closes in one stretch whose
+    fit is about ₹6 off. Cause not found.
+
+### Outcome
+
+The Integrity Check passes: nothing in NSE's data as we hold it is lost or
+unexplained. Kite Parity fails at 2.09 percent, and nearly all of that is
+one cause, Kite's additive adjustment rounded to its own tick, which the
+half-tick limit was set too tight to recognise. Even a limit of one 10 paisa
+tick would explain 18,832 of the 21,061 and leave 2,229 close mismatches
+and the 8 missing days unexplained (0.22 percent), still a fail.
+
+### Unresolved
+
+- **The additive rule's limit.** Half a tick from a least-squares fit does
+  not allow for Kite's rounding of the adjusted price. A rule that does,
+  for example a fit within one of Kite's ticks, or one a and b shared
+  across an Instrument's consecutive stretches, needs ADR 0018 to agree
+  it. It is not given here.
+- **Additive history rounded coarser** (OFSS, BSE, MCX, TATAINVEST,
+  GODFRYPHLP, NIITTECH, NAUKRI): a follow-up decides whether one reason may
+  combine the additive fit with rupee rounding.
+- **The 8 missing single days and the 54 isolated close mismatches**:
+  causes not found.
+- **Fetching every series of a named Symbol** filled BAFNAPH's BE history
+  on a run meant to write nothing. A re-fetch meant only to record requests
+  would need the (Symbol, series) pairs already held, which `ingest candles`
+  cannot be asked for today.
+
 ## US-market findings (for reference; not the chosen market)
 
 Alpaca offers free paper trading with IEX data and ₹99-equivalent full SIP data; Massive (formerly Polygon) runs 29 to 199 dollars a month; SEC EDGAR is free. These made the US the easier engineering choice. The Operator chose Indian equities, which cost more in friction (no sandbox, daily login, static IP) but is the market they trade.
@@ -1246,3 +1565,5 @@ Within the agreed ₹5,000 to ₹12,000 band with headroom for a paid data upgra
 - US reference: docs.alpaca.markets market data plans, massive.com pricing (via third-party guides)
 - Listing dates (#32): NSE circulars NSE/CML/46245 and 46277 (SUBEX), 57743 (NESTLEIND), 41893, 58560 and 60618 (FORCEMOT), 45904 and 48190 (CAMS), 28696 and 28574 (SHAKTIPUMP), 57699, 73797, 75748 and 41915, at nsearchives.nseindia.com/content/circulars/CML<number>.pdf or .zip, found through nseindia.com/api/circulars; Nestlé India's Regulation 30 disclosure of the NSE listing (nestle.in, special announcements); CAMS's press release filing of 2021-05-07 (nsearchives.nseindia.com/corporate/CAMS_07052021180955_Pressrelease.pdf); NSE's "Securities Available for Trading" page (nseindia.com/static/products-services/equity-market-securities-available-for-trading); NSE's About Equities page for the capital market segment's opening on 1994-11-03 (nseindia.com/static/products-services/about-equity-market); NSE's data description (archives.nseindia.com/content/press/Data_details_CM.pdf); archived copies of NSE's EQUITY_L.csv at web.archive.org (snapshots 20150102124557, 20150310012511, 20181219143033, 20210516062344, 20220102154932, 20230428005156, 20250726163846)
 - ISIN changes (#33): NSE's Corporate Action API (nseindia.com/api/corporates-corporateActions with `index=equities`, `sme` and `mf`); NSE circulars NSE/CML/29389, 29412, 31924, 31978, 32044, 32517, 32526, 35394, 35452, 39361, 39363, 39383, 39385, 42873, 42888, 44773, 44835, 45054, 45074, 47279, 47320, 47344, 47347, 47665, 47721, 48556, 48595, 48928, 48964, 50053, 50106, 50329, 50382, 50496, 50529, 50859, 50905, 53206, 53260, 53404, 53470, 58455, 58523, 58972, 59009, 60421, 60492, 60740, 60870, 61766, 61914, 66863, 68231, 68416, 70527, 70656, 70874, 72553, 72617, 72620, 72718, 72916, 72980, 73020, 73115, 73816, 73909, 74765, 74911, 74912, 75102, 75236, 75432, 75678, 75868, NSE/CMPT/31946 and NCL/CMPT/44827, at nsearchives.nseindia.com/content/circulars/, found through nseindia.com/api/circulars; Jeena Sikho Lifecare's and Globe International Carriers' filings at nsearchives.nseindia.com/corporate/, found through nseindia.com/api/corporate-announcements
+- Trading Calendar (#57): NSE's circular search (nseindia.com/api/circulars, `dept=CMTR` and `dept=MSD`, December 2014 to October 2026); NSE circulars NSE/CMTR/28337, 28939, 31047, 31297, 33424, 33746, 35993, 36475, 39216, 39612, 40536, 42403, 42483, 42877, 43290, 46230, 46623, 50050, 50560, 54023, 54757, 57285, 59124, 59722, 60338, 61518, 64628, 64960, 65587, 65729, 70319, 71775, 72260, 72349, 76941 and NSE/MSD/42319, 59999, 60340, 60677, 61893, 66381, at nsearchives.nseindia.com/content/circulars/<dept><number>.pdf (57285 and 60338 are .zip)
+- Large Move records (#58): NSE's circular search (nseindia.com/api/circulars, all departments, 30 days before to 3 days after each move) and corporate announcements (nseindia.com/api/corporate-announcements); NSE circulars NSE/CMPT/29829, 30815, NSE/CMTR/30850, 31553, 31832, 34910, 39430, 39976, 42322, 43646, 67392, 68037, 70614, 73856, NSE/SURV/31133, 40123, 41288, NSE/CML/41079, 42085, 43833, 45883, 56859, 56872, 62383, 62751, 65322, 67935, 68967, 70275, 76106, NCL/CMPT/39442, 40552 and 53443, at nsearchives.nseindia.com/content/circulars/<dept><number>.pdf; NSE's press release of 2015-06-04 (nsearchives.nseindia.com/content/press/04062015.htm); company filings at nsearchives.nseindia.com/corporate/ (DHFL, RCOM, RPOWER, IHFL/IBULHSGFIN, YESBANK, IDEA, MAJESCO, POLICYBZR, as cited in large_moves.csv) and Infibeam Avenues' voluntary clarification of 2018-09-28 (avenuesai.com); RBI press release of 2020-03-05 (rbi.org.in, prid=49476)

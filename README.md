@@ -22,7 +22,8 @@ uv run tradeline universe --month 2024-08                       # needs 126 trad
 uv run tradeline ingest candles --interval minute --from 2024-07-01 --to 2024-07-31   # the current month's Universe; --universe-month YYYY-MM for another
 uv run tradeline sectors                                        # NSE's sector classification, in force from today
 uv run tradeline verify-universe                                # this month's Universe against the NIFTY 200 (a report)
-uv run tradeline reconcile --from 2024-07-01 --to 2024-07-31   # Kite's daily candles against NSE's end-of-day files
+uv run tradeline parity --from 2024-07-01 --to 2024-07-31      # Kite Parity: Kite's daily candles against NSE's end-of-day files
+uv run tradeline integrity --from 2024-07-01 --to 2024-07-31   # NSE's files against the Trading Calendar, and Large Moves explained; never a broker
 uv run tradeline compare-adjusted --from 2024-07-01 --symbol RELIANCE   # our adjusted series against Kite's candles, bar by bar
 uv run tradeline ingest news   # every feed in [news.feeds]; --feed NAME for one
 uv run tradeline ingest announcements --from 2024-07-23   # NSE and BSE filings, matched to symbols

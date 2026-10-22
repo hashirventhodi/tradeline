@@ -21,6 +21,7 @@ import pytest
 
 from playback import (
     Playback,
+    drop_bar,
     in_requested_range,
     kite_candles,
     no_candles,
@@ -41,6 +42,7 @@ START, END = date(2024, 7, 1), date(2024, 8, 30)
 TRADING_DAYS = 43
 SYMBOLS = 4  # the EQ series symbols; BAFNAPH is BE and is loaded only when named
 INFY_TOKEN = "408065"
+TCS_TOKEN = "2953217"
 RECORDED = recorded_range(START.isoformat(), END.isoformat())
 
 
@@ -140,6 +142,27 @@ def test_a_second_run_over_the_same_range_writes_nothing_and_records_zero_new_ro
     assert len(queries.daily_candles(conn, "INFY", start=START, end=END)) == TRADING_DAYS
 
 
+def test_a_second_run_over_the_same_range_records_its_request_again(
+    conn: psycopg.Connection,
+) -> None:
+    # The fixture's two runs are the module's oldest.
+    first, second = reversed(queries.ingest_runs(conn, source="kite_candles_daily")[-2:])
+    runs = {first.id, second.id}
+    requests = [
+        r
+        for r in queries.candle_requests(conn, "BAJAJ-AUTO", series="EQ")
+        if r.ingest_run_id in runs
+    ]
+
+    assert requests == [
+        queries.CandleRequest(first.id, "BAJAJ-AUTO", "EQ", "day", START, END),
+        queries.CandleRequest(second.id, "BAJAJ-AUTO", "EQ", "day", START, END),
+    ]
+    assert queries.requested_candle_ranges(conn, "BAJAJ-AUTO", series="EQ") == [
+        queries.RequestedRange(START, END)
+    ]
+
+
 def test_the_query_layer_returns_raw_daily_candles_for_a_symbol_and_range(
     conn: psycopg.Connection,
 ) -> None:
@@ -191,7 +214,7 @@ def test_a_be_series_symbol_is_not_loaded_by_default_but_is_when_named(
     assert eq == []
 
 
-def test_a_range_longer_than_kites_limit_is_fetched_in_chunks_of_two_thousand_days(
+def test_a_range_longer_than_kites_limit_is_fetched_and_recorded_in_chunks_read_back_as_one(
     database_url: str, two_runs: TwoRuns
 ) -> None:
     """Kite answers one request with at most 2000 days; the service asks in pieces.
@@ -207,12 +230,25 @@ def test_a_range_longer_than_kites_limit_is_fetched_in_chunks_of_two_thousand_da
         result = ingest_candles(
             conn, session, start=date(2019, 1, 1), end=date(2024, 8, 30), symbols=["INFY"]
         )
+        run = queries.ingest_runs(conn, source="kite_candles_daily")[0]
+        requests = [
+            (r.start, r.end)
+            for r in queries.candle_requests(conn, "INFY", series="EQ")
+            if r.ingest_run_id == run.id
+        ]
+        ranges = queries.requested_candle_ranges(conn, "INFY", series="EQ")
 
     assert result.requests == 2
     assert [request.url.split("?")[1] for request in kite.calls] == [
         "from=2019-01-01&to=2024-06-22",  # 2000 days inclusive
         "from=2024-06-23&to=2024-08-30",
     ]
+    assert requests == [
+        (date(2019, 1, 1), date(2024, 6, 22)),
+        (date(2024, 6, 23), date(2024, 8, 30)),
+    ]
+    # Every other run in this module asks for INFY inside it.
+    assert ranges == [queries.RequestedRange(date(2019, 1, 1), date(2024, 8, 30))]
 
 
 def test_a_resent_bar_with_a_changed_close_keeps_the_stored_bar_and_records_an_anomaly(
@@ -315,3 +351,27 @@ def test_a_range_that_ends_before_it_starts_is_refused(database_url: str) -> Non
     transport = TimedPlayback(FIXTURES, clock)
     with app_connection(database_url) as conn, pytest.raises(ValueError, match="before start"):
         ingest_candles(conn, kite_session(transport, clock), start=END, end=START)
+
+
+def test_a_run_records_each_range_it_asks_kite_for_even_where_kite_returns_no_bars(
+    fresh_database_url: str,
+) -> None:
+    """TCS's recorded response is played back emptied of its bars; it is still recorded."""
+    kite = Playback(FIXTURES, edit=kite_candles(drop_bar(TCS_TOKEN, "")))
+    clock = FakeClock()
+    with app_connection(fresh_database_url) as conn:
+        ingest_eod(conn, PlaybackTransport(EOD_FIXTURES), start=START, end=END)
+        result = ingest_candles(
+            conn, kite_session(kite, clock), start=START, end=END, symbols=["INFY", "TCS"]
+        )
+        (run,) = queries.ingest_runs(conn, source="kite_candles_daily")
+        infy = queries.candle_requests(conn, "INFY", series="EQ")
+        tcs = queries.candle_requests(conn, "TCS", series="EQ")
+        tcs_bars = queries.daily_candles(conn, "TCS", start=START, end=END)
+        tcs_ranges = queries.requested_candle_ranges(conn, "TCS", series="EQ")
+
+    assert result.rows_written == TRADING_DAYS
+    assert tcs_bars == []
+    assert infy == [queries.CandleRequest(run.id, "INFY", "EQ", "day", START, END)]
+    assert tcs == [queries.CandleRequest(run.id, "TCS", "EQ", "day", START, END)]
+    assert tcs_ranges == [queries.RequestedRange(START, END)]

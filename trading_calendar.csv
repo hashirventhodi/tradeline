@@ -1,0 +1,219 @@
+# The Trading Calendar (ADR 0018): the weekdays NSE's equity segment was
+# closed and the Special Sessions it held, 2015-01-01 to 2026-12-31.
+#
+# Every row is reviewed like code and cites NSE's circulars by number (several
+# separated by ";"). Each is at
+# https://nsearchives.nseindia.com/content/circulars/<DEPT><NUMBER>.pdf, for
+# example NSE/CMTR/71775 at .../CMTR71775.pdf. Holidays come from the annual
+# "Trading holidays for the calendar year" circular of the Capital Market
+# segment, and from the circulars that later added or moved one. A Special
+# Session cites the circular announcing it; a muhurat session also cites the
+# annual circular that named its day. A weekday muhurat is a Special Session,
+# never a holiday, though the annual circular lists its day among the
+# holidays: NSE published an end-of-day file for it. Weekend holidays are not
+# listed. The sources and checks are in docs/research.md under "The Trading
+# Calendar (#57)". `tradeline.trading_calendar` reads this file; its location
+# is `integrity.trading_calendar` in tradeline.toml.
+covers,2015-01-01,2026-12-31
+date,kind,citation
+# 2015: NSE/CMTR/28337 (December 12, 2014), Trading holidays for the calendar year 2015
+2015-01-26,holiday,NSE/CMTR/28337
+2015-02-17,holiday,NSE/CMTR/28337
+2015-02-28,special_session,NSE/CMTR/28939
+2015-03-06,holiday,NSE/CMTR/28337
+2015-04-02,holiday,NSE/CMTR/28337
+2015-04-03,holiday,NSE/CMTR/28337
+2015-04-14,holiday,NSE/CMTR/28337
+2015-05-01,holiday,NSE/CMTR/28337
+2015-09-17,holiday,NSE/CMTR/28337
+2015-09-25,holiday,NSE/CMTR/28337
+2015-10-02,holiday,NSE/CMTR/28337
+2015-10-22,holiday,NSE/CMTR/28337
+2015-11-11,special_session,NSE/CMTR/28337; NSE/CMTR/31047
+2015-11-12,holiday,NSE/CMTR/28337
+2015-11-25,holiday,NSE/CMTR/28337
+2015-12-25,holiday,NSE/CMTR/28337
+# 2016: NSE/CMTR/31297 (December 07, 2015), Trading holidays for the calendar year 2016
+2016-01-26,holiday,NSE/CMTR/31297
+2016-03-07,holiday,NSE/CMTR/31297
+2016-03-24,holiday,NSE/CMTR/31297
+2016-03-25,holiday,NSE/CMTR/31297
+2016-04-14,holiday,NSE/CMTR/31297
+2016-04-15,holiday,NSE/CMTR/31297
+2016-04-19,holiday,NSE/CMTR/31297
+2016-07-06,holiday,NSE/CMTR/31297
+2016-08-15,holiday,NSE/CMTR/31297
+2016-09-05,holiday,NSE/CMTR/31297
+2016-09-13,holiday,NSE/CMTR/31297
+2016-10-11,holiday,NSE/CMTR/31297
+2016-10-12,holiday,NSE/CMTR/31297
+2016-10-30,special_session,NSE/CMTR/31297; NSE/CMTR/33424
+2016-10-31,holiday,NSE/CMTR/31297
+2016-11-14,holiday,NSE/CMTR/31297
+# 2017: NSE/CMTR/33746 (December 05, 2016), Trading holidays for the calendar year 2017
+2017-01-26,holiday,NSE/CMTR/33746
+2017-02-24,holiday,NSE/CMTR/33746
+2017-03-13,holiday,NSE/CMTR/33746
+2017-04-04,holiday,NSE/CMTR/33746
+2017-04-14,holiday,NSE/CMTR/33746
+2017-05-01,holiday,NSE/CMTR/33746
+2017-06-26,holiday,NSE/CMTR/33746
+2017-08-15,holiday,NSE/CMTR/33746
+2017-08-25,holiday,NSE/CMTR/33746
+2017-10-02,holiday,NSE/CMTR/33746
+2017-10-19,special_session,NSE/CMTR/33746; NSE/CMTR/35993
+2017-10-20,holiday,NSE/CMTR/33746
+2017-12-25,holiday,NSE/CMTR/33746
+# 2018: NSE/CMTR/36475 (December 12, 2017), Trading holidays for the calendar year 2018
+2018-01-26,holiday,NSE/CMTR/36475
+2018-02-13,holiday,NSE/CMTR/36475
+2018-03-02,holiday,NSE/CMTR/36475
+2018-03-29,holiday,NSE/CMTR/36475
+2018-03-30,holiday,NSE/CMTR/36475
+2018-05-01,holiday,NSE/CMTR/36475
+2018-08-15,holiday,NSE/CMTR/36475
+2018-08-22,holiday,NSE/CMTR/36475
+2018-09-13,holiday,NSE/CMTR/36475
+2018-09-20,holiday,NSE/CMTR/36475
+2018-10-02,holiday,NSE/CMTR/36475
+2018-10-18,holiday,NSE/CMTR/36475
+2018-11-07,special_session,NSE/CMTR/36475; NSE/CMTR/39216
+2018-11-08,holiday,NSE/CMTR/36475
+2018-11-23,holiday,NSE/CMTR/36475
+2018-12-25,holiday,NSE/CMTR/36475
+# 2019: NSE/CMTR/39612 (December 07, 2018), Trading holidays for the calendar year 2019
+2019-03-04,holiday,NSE/CMTR/39612
+2019-03-21,holiday,NSE/CMTR/39612
+2019-04-17,holiday,NSE/CMTR/39612
+2019-04-19,holiday,NSE/CMTR/39612
+2019-04-29,holiday,NSE/CMTR/40536
+2019-05-01,holiday,NSE/CMTR/39612
+2019-06-05,holiday,NSE/CMTR/39612
+2019-08-12,holiday,NSE/CMTR/39612
+2019-08-15,holiday,NSE/CMTR/39612
+2019-09-02,holiday,NSE/CMTR/39612
+2019-09-10,holiday,NSE/CMTR/39612
+2019-10-02,holiday,NSE/CMTR/39612
+2019-10-08,holiday,NSE/CMTR/39612
+2019-10-21,holiday,NSE/MSD/42319
+2019-10-27,special_session,NSE/CMTR/39612; NSE/CMTR/42403; NSE/CMTR/42483
+2019-10-28,holiday,NSE/CMTR/39612
+2019-11-12,holiday,NSE/CMTR/39612
+2019-12-25,holiday,NSE/CMTR/39612
+# 2020: NSE/CMTR/42877 (December 11, 2019), Trading holidays for the calendar year 2020
+2020-02-01,special_session,NSE/CMTR/43290
+2020-02-21,holiday,NSE/CMTR/42877
+2020-03-10,holiday,NSE/CMTR/42877
+2020-04-02,holiday,NSE/CMTR/42877
+2020-04-06,holiday,NSE/CMTR/42877
+2020-04-10,holiday,NSE/CMTR/42877
+2020-04-14,holiday,NSE/CMTR/42877
+2020-05-01,holiday,NSE/CMTR/42877
+2020-05-25,holiday,NSE/CMTR/42877
+2020-10-02,holiday,NSE/CMTR/42877
+2020-11-14,special_session,NSE/CMTR/42877; NSE/CMTR/46230
+2020-11-16,holiday,NSE/CMTR/42877
+2020-11-30,holiday,NSE/CMTR/42877
+2020-12-25,holiday,NSE/CMTR/42877
+# 2021: NSE/CMTR/46623 (December 11, 2020), Trading holidays for the calendar year 2021
+2021-01-26,holiday,NSE/CMTR/46623
+2021-03-11,holiday,NSE/CMTR/46623
+2021-03-29,holiday,NSE/CMTR/46623
+2021-04-02,holiday,NSE/CMTR/46623
+2021-04-14,holiday,NSE/CMTR/46623
+2021-04-21,holiday,NSE/CMTR/46623
+2021-05-13,holiday,NSE/CMTR/46623
+2021-07-21,holiday,NSE/CMTR/46623
+2021-08-19,holiday,NSE/CMTR/46623
+2021-09-10,holiday,NSE/CMTR/46623
+2021-10-15,holiday,NSE/CMTR/46623
+2021-11-04,special_session,NSE/CMTR/46623; NSE/CMTR/50050
+2021-11-05,holiday,NSE/CMTR/46623
+2021-11-19,holiday,NSE/CMTR/46623
+# 2022: NSE/CMTR/50560 (December 10, 2021), Trading holidays for the calendar year 2022
+2022-01-26,holiday,NSE/CMTR/50560
+2022-03-01,holiday,NSE/CMTR/50560
+2022-03-18,holiday,NSE/CMTR/50560
+2022-04-14,holiday,NSE/CMTR/50560
+2022-04-15,holiday,NSE/CMTR/50560
+2022-05-03,holiday,NSE/CMTR/50560
+2022-08-09,holiday,NSE/CMTR/50560
+2022-08-15,holiday,NSE/CMTR/50560
+2022-08-31,holiday,NSE/CMTR/50560
+2022-10-05,holiday,NSE/CMTR/50560
+2022-10-24,special_session,NSE/CMTR/50560; NSE/CMTR/54023
+2022-10-26,holiday,NSE/CMTR/50560
+2022-11-08,holiday,NSE/CMTR/50560
+# 2023: NSE/CMTR/54757 (December 08, 2022), Trading holidays for the calendar year 2023
+2023-01-26,holiday,NSE/CMTR/54757
+2023-03-07,holiday,NSE/CMTR/54757
+2023-03-30,holiday,NSE/CMTR/54757
+2023-04-04,holiday,NSE/CMTR/54757
+2023-04-07,holiday,NSE/CMTR/54757
+2023-04-14,holiday,NSE/CMTR/54757
+2023-05-01,holiday,NSE/CMTR/54757
+2023-06-29,holiday,NSE/CMTR/54757; NSE/CMTR/57285
+2023-08-15,holiday,NSE/CMTR/54757
+2023-09-19,holiday,NSE/CMTR/54757
+2023-10-02,holiday,NSE/CMTR/54757
+2023-10-24,holiday,NSE/CMTR/54757
+2023-11-12,special_session,NSE/CMTR/54757; NSE/CMTR/59124
+2023-11-14,holiday,NSE/CMTR/54757
+2023-11-27,holiday,NSE/CMTR/54757
+2023-12-25,holiday,NSE/CMTR/54757
+# 2024: NSE/CMTR/59722 (December 12, 2023), Trading holidays for the calendar year 2024
+2024-01-20,special_session,NSE/MSD/59999; NSE/MSD/60340
+2024-01-22,holiday,NSE/CMTR/60338
+2024-01-26,holiday,NSE/CMTR/59722
+2024-03-02,special_session,NSE/MSD/60677
+2024-03-08,holiday,NSE/CMTR/59722
+2024-03-25,holiday,NSE/CMTR/59722
+2024-03-29,holiday,NSE/CMTR/59722
+2024-04-11,holiday,NSE/CMTR/59722
+2024-04-17,holiday,NSE/CMTR/59722
+2024-05-01,holiday,NSE/CMTR/59722
+2024-05-18,special_session,NSE/MSD/61893
+2024-05-20,holiday,NSE/CMTR/61518
+2024-06-17,holiday,NSE/CMTR/59722
+2024-07-17,holiday,NSE/CMTR/59722
+2024-08-15,holiday,NSE/CMTR/59722
+2024-10-02,holiday,NSE/CMTR/59722
+2024-11-01,special_session,NSE/CMTR/59722; NSE/CMTR/64628
+2024-11-15,holiday,NSE/CMTR/59722
+2024-11-20,holiday,NSE/CMTR/64960
+2024-12-25,holiday,NSE/CMTR/59722
+# 2025: NSE/CMTR/65587 (December 13, 2024), Trading holidays for the calendar year 2025
+2025-02-01,special_session,NSE/CMTR/65729; NSE/MSD/66381
+2025-02-26,holiday,NSE/CMTR/65587
+2025-03-14,holiday,NSE/CMTR/65587
+2025-03-31,holiday,NSE/CMTR/65587
+2025-04-10,holiday,NSE/CMTR/65587
+2025-04-14,holiday,NSE/CMTR/65587
+2025-04-18,holiday,NSE/CMTR/65587
+2025-05-01,holiday,NSE/CMTR/65587
+2025-08-15,holiday,NSE/CMTR/65587
+2025-08-27,holiday,NSE/CMTR/65587
+2025-10-02,holiday,NSE/CMTR/65587
+2025-10-21,special_session,NSE/CMTR/65587; NSE/CMTR/70319
+2025-10-22,holiday,NSE/CMTR/65587
+2025-11-05,holiday,NSE/CMTR/65587
+2025-12-25,holiday,NSE/CMTR/65587
+# 2026: NSE/CMTR/71775 (December 12, 2025), Trading holidays for the calendar year 2026
+2026-01-15,holiday,NSE/CMTR/72260
+2026-01-26,holiday,NSE/CMTR/71775
+2026-02-01,special_session,NSE/CMTR/72349
+2026-03-03,holiday,NSE/CMTR/71775
+2026-03-26,holiday,NSE/CMTR/71775
+2026-03-31,holiday,NSE/CMTR/71775
+2026-04-03,holiday,NSE/CMTR/71775
+2026-04-14,holiday,NSE/CMTR/71775
+2026-05-01,holiday,NSE/CMTR/71775
+2026-05-28,holiday,NSE/CMTR/71775
+2026-06-26,holiday,NSE/CMTR/71775
+2026-09-14,holiday,NSE/CMTR/71775
+2026-10-02,holiday,NSE/CMTR/71775
+2026-10-20,holiday,NSE/CMTR/71775
+2026-11-08,special_session,NSE/CMTR/71775; NSE/CMTR/76941
+2026-11-10,holiday,NSE/CMTR/71775
+2026-11-24,holiday,NSE/CMTR/71775
+2026-12-25,holiday,NSE/CMTR/71775

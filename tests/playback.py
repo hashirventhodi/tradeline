@@ -6,14 +6,18 @@ real recording back through ``Playback`` with an ``ask`` that maps its request
 onto the recorded one, an ``edit`` that changes the recorded body, or both.
 """
 
+import io
 import json
+import re
+import zipfile
 from collections.abc import Callable
-from datetime import datetime
-from decimal import Decimal
+from datetime import date, datetime
+from decimal import ROUND_HALF_EVEN, Decimal
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+from tradeline.sources.nse import bhavcopy_url
 from tradeline.transport import PlaybackTransport, Request, Response, UnrecordedRequest
 
 Ask = Callable[[Request], Request]
@@ -138,6 +142,39 @@ def zero_prices(token: str, stamp: str) -> CandleEdit:
     return edit
 
 
+def affine_prices(token: str, times: str, minus: str) -> CandleEdit:
+    """Instrument ``token``'s every price ``p`` replaced by ``p * times - minus``, as an
+    additive adjustment of Kite's would leave it (#17)."""
+
+    def edit(request: Request, candles: list[Candle]) -> list[Candle]:
+        if f"/historical/{token}/" not in request.url:
+            return candles
+        for candle in candles:
+            candle[1:5] = [
+                float(Decimal(str(p)) * Decimal(times) - Decimal(minus)) for p in candle[1:5]
+            ]
+        return candles
+
+    return edit
+
+
+def whole_rupees(token: str, times: str) -> CandleEdit:
+    """Instrument ``token``'s every price ``p`` replaced by ``p * times`` rounded to the
+    rupee, half to even, as Kite rounds some adjusted histories (#17)."""
+
+    def edit(request: Request, candles: list[Candle]) -> list[Candle]:
+        if f"/historical/{token}/" not in request.url:
+            return candles
+        for candle in candles:
+            candle[1:5] = [
+                float((Decimal(str(p)) * Decimal(times)).quantize(Decimal(1), ROUND_HALF_EVEN))
+                for p in candle[1:5]
+            ]
+        return candles
+
+    return edit
+
+
 def add_bar(token: str, bar: Candle) -> CandleEdit:
     """Instrument ``token``'s bars with ``bar`` added, in timestamp order."""
 
@@ -191,3 +228,85 @@ def corporate_actions_in_requested_range(request: Request, body: bytes) -> bytes
         if r["exDate"] != "-" and start <= datetime.strptime(r["exDate"], "%d-%b-%Y").date() <= end
     ]
     return json.dumps(records).encode()
+
+
+def bhavcopy_as_of(day: date, recorded: date) -> tuple[Ask, Edit]:
+    """NSE's end-of-day file for ``recorded`` served as ``day``'s, its dates moved to ``day``.
+
+    Both days must be in the same file format (UDiFF from 2024-07-08). Every
+    other request is asked and served as recorded.
+    """
+    url = bhavcopy_url(day)
+
+    def ask(request: Request) -> Request:
+        if request.url != url:
+            return request
+        return Request(request.method, bhavcopy_url(recorded), request.headers, request.body)
+
+    def edit(request: Request, body: bytes) -> bytes:
+        if request.url != url:
+            return body
+        with zipfile.ZipFile(io.BytesIO(body)) as archive:
+            (name,) = archive.namelist()
+            text = archive.read(name).decode()
+        moved = io.BytesIO()
+        with zipfile.ZipFile(moved, "w") as archive:
+            archive.writestr(name, text.replace(recorded.isoformat(), day.isoformat()))
+        return moved.getvalue()
+
+    return ask, edit
+
+
+def bhavcopy_series(day: date, symbol: str, series: str | None) -> Edit:
+    """NSE's end-of-day file for ``day`` with ``symbol``'s row moved to ``series``, or
+    left out where ``series`` is None, as a day NSE lists it elsewhere or not at all.
+
+    The file must be in UDiFF, where the series follows the Symbol. Every other
+    body is served as recorded.
+    """
+    url = bhavcopy_url(day)
+
+    def edit(request: Request, body: bytes) -> bytes:
+        if request.url != url:
+            return body
+        with zipfile.ZipFile(io.BytesIO(body)) as archive:
+            (name,) = archive.namelist()
+            rows = archive.read(name).decode().split("\n")
+        kept = []
+        for row in rows:
+            if f",{symbol}," not in row:
+                kept.append(row)
+            elif series is not None:
+                before, after = row.split(f",{symbol},", 1)
+                kept.append(f"{before},{symbol},{series},{after.split(',', 1)[1]}")
+        moved = io.BytesIO()
+        with zipfile.ZipFile(moved, "w") as archive:
+            archive.writestr(name, "\n".join(kept))
+        return moved.getvalue()
+
+    return edit
+
+
+def bhavcopy_rows(edit: Callable[[date, list[str]], list[str]]) -> Edit:
+    """An edit of the CSV lines of each UDiFF end-of-day file (from 2024-07-08), given its day.
+
+    Every other body, and a day NSE has no file for, is served as recorded.
+    """
+
+    def edit_body(request: Request, body: bytes) -> bytes:
+        found = _UDIFF_DAY.search(request.url)
+        if found is None or not zipfile.is_zipfile(io.BytesIO(body)):
+            return body
+        day = datetime.strptime(found.group(1), "%Y%m%d").date()
+        with zipfile.ZipFile(io.BytesIO(body)) as archive:
+            (name,) = archive.namelist()
+            text = archive.read(name).decode()
+        edited = io.BytesIO()
+        with zipfile.ZipFile(edited, "w") as archive:
+            archive.writestr(name, "\n".join(edit(day, text.split("\n"))))
+        return edited.getvalue()
+
+    return edit_body
+
+
+_UDIFF_DAY = re.compile(r"/BhavCopy_NSE_CM_0_0_0_(\d{8})_F_0000\.csv\.zip$")

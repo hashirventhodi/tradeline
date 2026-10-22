@@ -124,6 +124,20 @@ def _end_of_day(
     return [EndOfDayRow(*row) for row in rows]
 
 
+def end_of_day_dates(conn: psycopg.Connection, *, start: date, end: date) -> list[date]:
+    """The days from ``start`` to ``end`` inclusive that have an end-of-day file, oldest first.
+
+    A day has its file when any row of it is stored: ``ingest eod`` loads a
+    file whole or not at all.
+    """
+    rows = conn.execute(
+        "SELECT DISTINCT trade_date FROM eod_bhavcopy WHERE trade_date BETWEEN %s AND %s"
+        " ORDER BY trade_date",
+        (start, end),
+    ).fetchall()
+    return [day for (day,) in rows]
+
+
 def symbols(conn: psycopg.Connection, *, symbol: str | None = None) -> list[Symbol]:
     """The instrument master, or the rows (one per series) for one symbol."""
     rows = conn.execute(
@@ -196,6 +210,65 @@ def daily_candles(
         (symbol, start, end, series, series),
     ).fetchall()
     return [DailyCandle(*row) for row in rows]
+
+
+@dataclass(frozen=True)
+class CandleRequest:
+    """One range candle ingest asked Kite for, under the Symbol it fetched."""
+
+    ingest_run_id: uuid.UUID
+    symbol: str
+    series: str
+    interval: str
+    start: date
+    end: date
+
+
+@dataclass(frozen=True)
+class RequestedRange:
+    """Days, ``start`` to ``end`` inclusive, that candle ingest has asked Kite for."""
+
+    start: date
+    end: date
+
+    def covers(self, day: date) -> bool:
+        return self.start <= day <= self.end
+
+
+def candle_requests(conn: psycopg.Connection, symbol: str, *, series: str) -> list[CandleRequest]:
+    """Every range of daily candles asked of Kite for ``symbol`` in ``series``, in the order
+    asked; Kite Parity reads only the daily ones.
+
+    One per request, so a range longer than Kite serves at once is several,
+    and a re-run asks, and is recorded, again."""
+    rows = conn.execute(
+        "SELECT ingest_run_id, symbol, series, interval, range_start, range_end"
+        " FROM candle_requests WHERE (symbol, series, interval) = (%s, %s, 'day')"
+        " ORDER BY requested_at, range_start",
+        (symbol, series),
+    ).fetchall()
+    return [CandleRequest(*row) for row in rows]
+
+
+def requested_candle_ranges(
+    conn: psycopg.Connection, symbol: str, *, series: str
+) -> list[RequestedRange]:
+    """The days ever asked of Kite for daily candles of ``symbol`` in ``series``, merged,
+    oldest first.
+
+    Overlapping and adjoining requests read as one range; whether Kite
+    returned bars for them does not matter."""
+    merged: list[RequestedRange] = []
+    for request in sorted(
+        candle_requests(conn, symbol, series=series),
+        key=lambda r: (r.start, r.end),
+    ):
+        if merged and request.start <= merged[-1].end + timedelta(days=1):
+            last = merged[-1]
+            merged[-1] = RequestedRange(last.start, max(last.end, request.end))
+        else:
+            merged.append(RequestedRange(request.start, request.end))
+    return merged
 
 
 def corporate_actions(
@@ -510,6 +583,32 @@ def universe_membership(
         (month, rule_version),
     ).fetchall()
     return [UniverseMember(*row) for row in rows]
+
+
+@dataclass(frozen=True)
+class EverMember:
+    """A Symbol stored in some Universe month, under any rule version, and its Instrument now.
+
+    ``instrument`` is the stored key when the last rebuild still has it, else the
+    Instrument the Symbol named on the day before the month (``resolve_symbol``'s
+    rule): a rule ranking Symbols stores no key, and a later rebuild can retire
+    one (``obsolete_universe_keys``). None when no Instrument answers for it.
+    """
+
+    symbol: str
+    instrument: str | None
+
+
+def universe_ever_members(conn: psycopg.Connection) -> list[EverMember]:
+    """Every distinct (Symbol, Instrument) of every stored Universe month, by Instrument key
+    (those with none last), then Symbol."""
+    rows = conn.execute(
+        "SELECT DISTINCT m.symbol, CASE WHEN EXISTS"
+        "  (SELECT 1 FROM instruments i WHERE i.key = m.instrument_key) THEN m.instrument_key"
+        f"  ELSE ({_named_by('m.symbol', 'm.month - 1')}) END AS instrument"
+        " FROM universe_membership m ORDER BY instrument, m.symbol"
+    ).fetchall()
+    return [EverMember(*row) for row in rows]
 
 
 def universe_rule_versions(conn: psycopg.Connection) -> list[UniverseRuleVersion]:

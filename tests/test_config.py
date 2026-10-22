@@ -177,3 +177,64 @@ def test_the_committed_config_names_at_least_two_news_feeds() -> None:
 
     assert len(config.news.feeds) >= 2
     assert all(url.startswith("https://") for url in config.news.feeds.values())
+
+
+def test_the_committed_config_states_kite_paritys_tolerance_and_gate() -> None:
+    config = load_config(Path(__file__).resolve().parents[1] / "tradeline.toml")
+
+    assert config.parity == Config.Parity(
+        close_tolerance=0.001, max_unexplained_pct=0.1, additive_min_bars=5
+    )
+
+
+def test_the_committed_config_gives_parity_and_integrity_one_trading_calendar() -> None:
+    config = load_config(Path(__file__).resolve().parents[1] / "tradeline.toml")
+
+    assert config.parity.trading_calendar == config.integrity.trading_calendar
+
+
+def test_parity_settings_load_from_their_own_section(tmp_path: Path) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text(
+        "[parity]\nclose_tolerance = 0.002\nmax_unexplained_pct = 0.5\nadditive_min_bars = 7\n"
+    )
+
+    assert load_config(path).parity == Config.Parity(
+        close_tolerance=0.002, max_unexplained_pct=0.5, additive_min_bars=7
+    )
+
+
+def test_a_config_with_the_retired_reconcile_section_is_refused_naming_parity(
+    tmp_path: Path,
+) -> None:
+    # ADR 0018: the word is kept for Phase 6's reconciliation of positions against the Ledger.
+    path = tmp_path / "tradeline.toml"
+    path.write_text("[reconcile]\nmax_discrepancy_pct = 0.1\n")
+
+    with pytest.raises(ConfigError, match=r"\[reconcile\] is retired.*\[parity\]"):
+        load_config(path)
+
+
+def test_the_integrity_section_names_the_trading_calendar_file(tmp_path: Path) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text(
+        '[parity]\ntrading_calendar = "data/calendar.csv"\n'
+        '[integrity]\ntrading_calendar = "data/calendar.csv"\n'
+    )
+
+    assert load_config(path).integrity == Config.Integrity(trading_calendar="data/calendar.csv")
+
+
+def test_a_config_whose_two_trading_calendars_differ_is_refused_naming_both(
+    tmp_path: Path,
+) -> None:
+    # One Trading Calendar serves the Integrity Check and Kite Parity (ADR 0018).
+    path = tmp_path / "tradeline.toml"
+    path.write_text('[integrity]\ntrading_calendar = "data/calendar.csv"\n')
+
+    with pytest.raises(
+        ConfigError,
+        match=r"parity.trading_calendar \(trading_calendar.csv\)"
+        r" and integrity.trading_calendar \(data/calendar.csv\)",
+    ):
+        load_config(path)

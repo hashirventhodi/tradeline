@@ -107,15 +107,38 @@ class Config:
         feeds: dict[str, str] = field(default_factory=dict)
 
     @dataclass(frozen=True)
-    class Reconcile:
+    class Parity:
         # A candle's close differs from the end-of-day close when it is further
         # from it, once Kite's own adjustment factor is taken out, than this
         # fraction of the price plus half of Kite's 5 paisa tick.
         close_tolerance: float = 0.001
-        # ``reconcile`` passes only when missing, extra, and close-mismatched
-        # rows together are under this percentage of the rows compared; a run
-        # exactly at it fails (Phase 1: under 0.1).
-        max_discrepancy_pct: float = 0.1
+        # Kite Parity passes only when the differences no Parity Reason
+        # explains are under this percentage of the rows compared; a run
+        # exactly at it fails (Phase 1: under 0.1, ADR 0018).
+        max_unexplained_pct: float = 0.1
+        # A stretch's close mismatches are an additive adjustment only when it
+        # has at least this many compared bars to fit a x NSE - b over.
+        additive_min_bars: int = 5
+        # The Trading Calendar whose Special Sessions explain a missing candle:
+        # the same file as ``integrity.trading_calendar`` (a config naming two
+        # is refused), relative to the working directory.
+        trading_calendar: str = "trading_calendar.csv"
+
+    @dataclass(frozen=True)
+    class Integrity:
+        # The checked-in Trading Calendar (``tradeline.trading_calendar``),
+        # relative to the working directory.
+        trading_calendar: str = "trading_calendar.csv"
+        # The checked-in Large Move records (``tradeline.large_move_records``),
+        # relative to the working directory.
+        large_moves: str = "large_moves.csv"
+        # A close more than this many times the previous close, either way,
+        # is a Large Move.
+        large_move_ratio: float = 1.5
+
+        def __post_init__(self) -> None:
+            if not self.large_move_ratio > 1:
+                raise ConfigError("integrity.large_move_ratio must be more than 1")
 
     @dataclass(frozen=True)
     class Instruments:
@@ -131,14 +154,33 @@ class Config:
 
     logging: Logging = field(default_factory=Logging)
     universe: UniverseRule = field(default_factory=UniverseRule)
-    reconcile: Reconcile = field(default_factory=Reconcile)
+    parity: Parity = field(default_factory=Parity)
     news: News = field(default_factory=News)
     instruments: Instruments = field(default_factory=Instruments)
     corporate_actions: CorporateActions = field(default_factory=CorporateActions)
+    integrity: Integrity = field(default_factory=Integrity)
+
+    def __post_init__(self) -> None:
+        # One Trading Calendar serves both checks (ADR 0018); two paths could drift apart.
+        parity, integrity = self.parity.trading_calendar, self.integrity.trading_calendar
+        if parity != integrity:
+            raise ConfigError(
+                f"parity.trading_calendar ({parity}) and integrity.trading_calendar"
+                f" ({integrity}) must name the same Trading Calendar file"
+            )
 
 
 def default_config_path() -> Path:
     return Path(os.environ.get(CONFIG_PATH_VAR, DEFAULT_CONFIG_PATH))
+
+
+# Sections that were removed, each with what replaced it, so an old file is told where
+# its settings went rather than only that the section is unknown.
+RETIRED_SECTIONS = {
+    "reconcile": "[reconcile] is retired; Kite Parity's settings are in [parity]"
+    " (close_tolerance, max_unexplained_pct, additive_min_bars) and the Integrity Check's"
+    " in [integrity], ADR 0018",
+}
 
 
 def load_config(path: Path) -> Config:
@@ -146,6 +188,9 @@ def load_config(path: Path) -> Config:
         raise ConfigError(f"config file {path} does not exist")
     with path.open("rb") as f:
         raw = tomllib.load(f)
+    for section, message in RETIRED_SECTIONS.items():
+        if section in raw:
+            raise ConfigError(f"{path}: {message}")
     return _build(Config, raw, prefix="")
 
 

@@ -19,13 +19,21 @@ excluded_isin_prefix = "INF"    # ETFs and other fund units trade in EQ with INF
 # rule the #13 memberships were stored under.
 rank_by = "instrument"
 
-[reconcile]
-# A close mismatch: further than this fraction of the price (plus half a
-# 5 paisa tick) from the end-of-day close, after Kite's own adjustment.
+[parity]
+# Kite Parity (ADR 0018). A close mismatch: further than this fraction of the
+# price (plus half a 5 paisa tick) from the end-of-day close, after Kite's own
+# adjustment.
 close_tolerance = 0.001
-# The command fails at or above this percentage of discrepant rows (missing,
-# extra, and close mismatches together).
-max_discrepancy_pct = 0.1
+# The command fails at or above this percentage of the rows compared whose
+# difference (missing, extra, or close) no Parity Reason explains.
+max_unexplained_pct = 0.1
+# A stretch's close mismatches are explained as Kite's additive adjustment when
+# one fit of a x NSE - b puts every bar within half a tick, over at least this
+# many compared bars.
+additive_min_bars = 5
+# The Trading Calendar, the file [integrity] checks against (the two must name
+# the same file): a missing candle on one of its Special Sessions is explained.
+trading_calendar = "trading_calendar.csv"
 
 # RSS feeds for `ingest news`: a name for each feed and its URL. Items carried
 # by more than one feed are stored once, under the first feed listed.
@@ -44,3 +52,14 @@ manual_links = "manual_links.csv"
 # The checked-in splits and bonuses NSE's lists omit, each citing NSE's
 # circulars (see the file's header); stored by `ingest cited-actions`.
 cited = "cited_corporate_actions.csv"
+
+[integrity]
+# The checked-in Trading Calendar: the weekdays NSE was closed and the Special
+# Sessions it held, each citing NSE's circular, and the dates it covers (see
+# src/tradeline/trading_calendar.py).
+trading_calendar = "trading_calendar.csv"
+# The checked-in Large Move records: the reviewed reason and source of each
+# Large Move no split or bonus explains (see src/tradeline/large_move_records.py).
+large_moves = "large_moves.csv"
+# A close more than this many times the previous close, either way, is a Large Move.
+large_move_ratio = 1.5

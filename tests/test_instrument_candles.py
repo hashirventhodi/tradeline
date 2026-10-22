@@ -1,4 +1,4 @@
-"""Kite's daily candles by Instrument across a rename: fetched, read, and reconciled.
+"""Kite's daily candles by Instrument across a rename: fetched, read, and compared for Kite Parity.
 
 The evidence is recorded: NSE's end-of-day files for 7 to 11 April 2025
 trimmed to ZOMATO and ETERNAL (ZOMATO trades to the 8th, ETERNAL from the
@@ -26,6 +26,9 @@ from playback import (
     Edit,
     Playback,
     add_bar,
+    bhavcopy_series,
+    drop_bar,
+    in_requested_range,
     kite_candles,
     lines,
     recorded_range,
@@ -38,8 +41,8 @@ from tradeline.db import app_connection
 from tradeline.ingest.candles import CandleIngestResult, ingest_candles
 from tradeline.ingest.eod import ingest_eod
 from tradeline.ingest.symbol_changes import ingest_symbol_changes
+from tradeline.parity import ParityReport, PreListingCandle, Reason, parity
 from tradeline.rebuild_instruments import rebuild_instruments
-from tradeline.reconcile import PreListingCandle, ReconcileReport, reconcile
 from tradeline.sources.kite import INSTRUMENTS_URL, KiteSession
 from tradeline.transport import PlaybackTransport, Request
 
@@ -49,7 +52,11 @@ NSE = FIXTURES_DIR / "instruments"
 START, END = date(2025, 4, 7), date(2025, 4, 11)
 ETERNAL = "ZOMATO@2021-07-23"
 ETERNAL_TOKEN = "1304833"
-SETTINGS = Config.Reconcile(close_tolerance=0.001, max_discrepancy_pct=0.1)
+SETTINGS = Config.Parity(
+    close_tolerance=0.001,
+    max_unexplained_pct=0.1,
+    trading_calendar=str(FIXTURES_DIR / "trading_calendar.csv"),
+)
 # Kite's candles as recorded: (day, close).
 KITE_CLOSES = [
     (date(2025, 4, 7), "209.63"),
@@ -101,29 +108,45 @@ def test_an_old_symbol_is_fetched_through_the_current_symbols_token_and_stored_u
     assert zomato == []
 
 
-def reconciled(conn: psycopg.Connection) -> ReconcileReport:
-    return reconcile(conn, SETTINGS, start=START, end=END)
+def compared(conn: psycopg.Connection) -> ParityReport:
+    return parity(conn, SETTINGS, start=START, end=END)
 
 
-def test_reconcile_by_instrument_counts_no_extras_for_a_rename_that_by_symbol_shows(
+def test_parity_by_instrument_counts_no_extras_for_a_rename_that_by_symbol_shows(
     fresh_database_url: str,
 ) -> None:
     with app_connection(fresh_database_url) as conn:
         load_nse(conn)
         fetch(conn, Playback(KITE), "ETERNAL")
-        by_symbol = reconciled(conn)
+        by_symbol = compared(conn)
         rebuild_instruments(conn)
-        by_instrument = reconciled(conn)
-        by_old_name = reconcile(conn, SETTINGS, start=START, end=END, symbols=["ZOMATO"])
+        by_instrument = compared(conn)
+        by_old_name = parity(conn, SETTINGS, start=START, end=END, symbols=["ZOMATO"])
 
     # Kite's two bars from before the rename are ETERNAL's; NSE named those days ZOMATO.
     assert [(d.symbol, d.trade_date) for d in by_symbol.extra] == [
         ("ETERNAL", date(2025, 4, 7)),
         ("ETERNAL", date(2025, 4, 8)),
     ]
-    assert (by_instrument.rows, by_instrument.discrepancies) == (4, 0)
+    assert (by_instrument.rows, by_instrument.differences) == (4, 0)
     # Naming the old Symbol compares its Instrument, whose candles are under the new one.
-    assert (by_old_name.rows, by_old_name.discrepancies) == (4, 0)
+    assert (by_old_name.rows, by_old_name.differences) == (4, 0)
+
+
+def test_a_series_move_is_found_under_any_symbol_of_the_instrument_not_just_the_candles(
+    fresh_database_url: str,
+) -> None:
+    # NSE lists ZOMATO in BE on the 8th; Kite's candle that day is under ETERNAL.
+    with app_connection(fresh_database_url) as conn:
+        load_nse(conn, dump=bhavcopy_series(date(2025, 4, 8), "ZOMATO", "BE"))
+        rebuild_instruments(conn)
+        fetch(conn, Playback(KITE), "ETERNAL")
+        report = compared(conn)
+
+    assert [(d.symbol, d.series, d.trade_date, d.reason) for d in report.extra] == [
+        ("ETERNAL", "EQ", date(2025, 4, 8), Reason.SERIES_MOVE)
+    ]
+    assert report.unexplained == ()
 
 
 def test_an_instrument_day_stored_under_two_kite_names_reads_the_newer_and_reports_a_disagreement(
@@ -139,7 +162,7 @@ def test_an_instrument_day_stored_under_two_kite_names_reads_the_newer_and_repor
         rebuild_instruments(conn)
         fetch(conn, readjusted, "ETERNAL")
         read = queries.instrument_daily_candles(conn, ETERNAL, start=START, end=END)
-        report = reconciled(conn)
+        report = compared(conn)
 
     assert closes(read.candles) == [
         ("ETERNAL", date(2025, 4, 7), "209.63"),
@@ -151,7 +174,7 @@ def test_an_instrument_day_stored_under_two_kite_names_reads_the_newer_and_repor
     assert (disagreement.kept.symbol, disagreement.other.symbol) == ("ETERNAL", "ZOMATO")
     assert (disagreement.trade_date, disagreement.series) == (date(2025, 4, 8), "EQ")
     assert (str(disagreement.kept.close), str(disagreement.other.close)) == ("214.19", "215.19")
-    # Reconcile compares one candle per Instrument-day, the newer, and reports the other.
+    # Parity compares one candle per Instrument-day, the newer, and reports the other.
     assert (report.rows, len(report.missing), len(report.extra)) == (4, 0, 0)
     assert report.candle_disagreements == (disagreement,)
     summary = report.summary()
@@ -198,7 +221,7 @@ def test_a_candle_dated_before_the_instruments_listing_is_a_pre_listing_candle_n
         load_nse(conn)
         rebuild_instruments(conn)
         fetch_from(conn, EARLIER, bar)
-        report = reconcile(conn, SETTINGS, start=EARLIER, end=END)
+        report = parity(conn, SETTINGS, start=EARLIER, end=END)
 
     assert report.pre_listing_candles == (
         PreListingCandle(
@@ -211,10 +234,10 @@ def test_a_candle_dated_before_the_instruments_listing_is_a_pre_listing_candle_n
         ),
     )
     # Not compared: the four days of the recorded week are the rows, with nothing discrepant.
-    assert (report.rows, report.discrepancies) == (4, 0)
+    assert (report.rows, report.differences) == (4, 0)
     assert report.passed
     summary = report.summary()
-    assert (summary["rows"], summary["extra"]) == (4, 0)
+    assert (summary["rows"], summary["differences"]) == (4, 0)
     assert summary["pre_listing_candles"] == 1
     assert summary["listed_pre_listing_candles"] == [
         {
@@ -240,14 +263,14 @@ def test_a_candle_from_the_listing_day_on_with_no_nse_row_is_still_an_extra(
         load_nse(conn)
         rebuild_instruments(conn)
         fetch_from(conn, EARLIER, on_listing)
-        report = reconcile(conn, SETTINGS, start=EARLIER, end=END)
+        report = parity(conn, SETTINGS, start=EARLIER, end=END)
 
     assert [(d.symbol, d.trade_date) for d in report.extra] == [("ETERNAL", LISTED)]
     assert report.pre_listing_candles == ()
     assert report.rows == 5
 
 
-def test_a_range_holding_only_pre_listing_candles_is_refused_as_nothing_to_reconcile(
+def test_a_range_holding_only_pre_listing_candles_is_refused_as_nothing_to_compare(
     fresh_database_url: str,
 ) -> None:
     bar = ["2021-07-22T00:00:00+0530", 0, 0, 0, 0, 7154666]
@@ -257,7 +280,7 @@ def test_a_range_holding_only_pre_listing_candles_is_refused_as_nothing_to_recon
         fetch_from(conn, EARLIER, bar)
 
         with pytest.raises(ValueError, match="1 pre-listing candle"):
-            reconcile(conn, SETTINGS, start=EARLIER, end=date(2021, 7, 31))
+            parity(conn, SETTINGS, start=EARLIER, end=date(2021, 7, 31))
 
 
 def test_a_pre_listing_day_under_two_kite_names_is_no_candle_disagreement(
@@ -273,7 +296,7 @@ def test_a_pre_listing_day_under_two_kite_names_is_no_candle_disagreement(
         load_nse(conn)
         rebuild_instruments(conn)
         fetch_from(conn, EARLIER, ["2021-07-22T00:00:00+0530", 0.05, 0.05, 0.05, 0.05, 3577333])
-        report = reconcile(conn, SETTINGS, start=EARLIER, end=END)
+        report = parity(conn, SETTINGS, start=EARLIER, end=END)
 
     assert [c.trade_date for c in report.pre_listing_candles] == [date(2021, 7, 22)]
     assert report.candle_disagreements == ()
@@ -296,3 +319,38 @@ def test_an_instruments_candles_read_through_a_symbol_are_those_of_the_instrumen
     assert closes(by_key.candles) == [("ETERNAL", day, close) for day, close in KITE_CLOSES]
     assert by_new_name == by_key
     assert by_old_name == by_key
+
+
+def fetch_range(
+    conn: psycopg.Connection, symbol: str, start: date, end: date, *, dropped: str
+) -> None:
+    """Kite asked for ``symbol`` from ``start`` to ``end``, its bars dated ``dropped`` left out."""
+    transport = Playback(
+        KITE,
+        ask=recorded_range("2025-04-07", "2025-04-11"),
+        edit=kite_candles(then(in_requested_range, drop_bar(ETERNAL_TOKEN, dropped))),
+    )
+    session = KiteSession(transport, api_key="key", access_token="tok", sleep=lambda _: None)
+    ingest_candles(conn, session, start=start, end=end, symbols=[symbol])
+
+
+def test_a_range_requested_under_an_instruments_earlier_or_later_symbol_counts_as_fetched(
+    fresh_database_url: str,
+) -> None:
+    """Kite is asked for the 11th as ZOMATO before the rename and for the 7th and 8th
+    as ETERNAL after it; the 8th's and 11th's bars are dropped, the 9th never asked."""
+    with app_connection(fresh_database_url) as conn:
+        load_nse(conn, dump=as_before_the_rename)
+        fetch_range(conn, "ZOMATO", date(2025, 4, 11), date(2025, 4, 11), dropped="2025-04-11")
+        load_nse(conn)
+        rebuild_instruments(conn)
+        fetch_range(conn, "ETERNAL", date(2025, 4, 7), date(2025, 4, 8), dropped="2025-04-08")
+        report = compared(conn)
+
+    assert [(d.symbol, d.trade_date, d.reason) for d in report.missing] == [
+        # NSE's ZOMATO day, asked for as ETERNAL: the later Symbol counts.
+        ("ZOMATO", date(2025, 4, 8), None),
+        ("ETERNAL", date(2025, 4, 9), Reason.NOT_FETCHED),
+        # NSE's ETERNAL day, asked for as ZOMATO: the earlier Symbol counts.
+        ("ETERNAL", date(2025, 4, 11), None),
+    ]

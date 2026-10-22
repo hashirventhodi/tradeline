@@ -74,7 +74,7 @@ def test_a_command_on_a_database_with_a_pending_migration_is_refused_with_the_fi
         conn.execute("DELETE FROM schema_migrations WHERE version = %s", (latest,))
     capsys.readouterr()
 
-    assert main(["reconcile", "--from", "2024-07-01"]) == 1
+    assert main(["parity", "--from", "2024-07-01"]) == 1
 
     (line,) = json_lines(capsys.readouterr().out)
     assert line["level"] == "ERROR"
@@ -95,7 +95,7 @@ def test_a_member_only_login_role_meeting_a_database_without_0022_is_told_to_mig
         conn.execute("REVOKE SELECT ON schema_migrations FROM tradeline_app")
     monkeypatch.setenv("DATABASE_URL", member_only_url(empty_database_url))
 
-    assert main(["reconcile", "--from", "2024-07-01"]) == 1
+    assert main(["parity", "--from", "2024-07-01"]) == 1
 
     (line,) = json_lines(capsys.readouterr().out)
     assert line["level"] == "ERROR"
@@ -117,7 +117,7 @@ def test_a_login_role_that_is_not_a_member_of_tradeline_app_is_told_to_grant_it(
     outsider = str(psycopg.conninfo.conninfo_to_dict(outsider_url)["user"])
     monkeypatch.setenv("DATABASE_URL", outsider_url)
 
-    assert main(["reconcile", "--from", "2024-07-01"]) == 1
+    assert main(["parity", "--from", "2024-07-01"]) == 1
 
     (line,) = json_lines(capsys.readouterr().out)
     assert line["level"] == "ERROR"
@@ -133,6 +133,15 @@ def test_an_unknown_command_is_refused(capsys: pytest.CaptureFixture[str]) -> No
 
     assert exit_info.value.code == 2
     assert "invalid choice" in capsys.readouterr().err
+
+
+def test_reconcile_is_no_longer_a_command(capsys: pytest.CaptureFixture[str]) -> None:
+    # ADR 0018: retired, not aliased, so Phase 6's reconciliation can have the word.
+    with pytest.raises(SystemExit) as exit_info:
+        main(["reconcile", "--from", "2024-07-01"])
+
+    assert exit_info.value.code == 2
+    assert "invalid choice: 'reconcile'" in capsys.readouterr().err
 
 
 FIXTURES = REPO_ROOT / "tests" / "fixtures" / "ingest_eod"
