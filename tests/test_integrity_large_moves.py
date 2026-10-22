@@ -23,13 +23,15 @@ from pathlib import Path
 import pytest
 
 from playback import Playback, bhavcopy_rows
+from tradeline import queries
 from tradeline.config import Config, UniverseRule
 from tradeline.db import app_connection
 from tradeline.ingest.corporate_actions import ingest_corporate_actions
 from tradeline.ingest.eod import ingest_eod
+from tradeline.ingest.symbol_changes import ingest_symbol_changes
 from tradeline.integrity import Gap, IntegrityReport, LargeMove, integrity
 from tradeline.rebuild_instruments import rebuild_instruments
-from tradeline.transport import Request
+from tradeline.transport import PlaybackTransport, Request
 from tradeline.universe import compute_universe
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -104,14 +106,22 @@ def moves(database_url: str) -> str:
     return database_url
 
 
-def run(url: str, tmp_path: Path, records: str = "") -> IntegrityReport:
-    calendar = tmp_path / "trading_calendar.csv"
-    calendar.write_text(CALENDAR)
+def run(
+    url: str,
+    tmp_path: Path,
+    records: str = "",
+    *,
+    calendar: str = CALENDAR,
+    start: date = START,
+    end: date = END,
+) -> IntegrityReport:
+    calendar_file = tmp_path / "trading_calendar.csv"
+    calendar_file.write_text(calendar)
     large_moves = tmp_path / "large_moves.csv"
     large_moves.write_text(RECORDS_HEADER + records)
-    settings = Config.Integrity(trading_calendar=str(calendar), large_moves=str(large_moves))
+    settings = Config.Integrity(trading_calendar=str(calendar_file), large_moves=str(large_moves))
     with app_connection(url) as conn:
-        return integrity(conn, settings, start=START, end=END)
+        return integrity(conn, settings, start=start, end=end)
 
 
 def test_a_large_move_with_no_split_bonus_or_record_fails_and_is_listed(
@@ -227,3 +237,72 @@ def test_a_member_whose_symbol_names_no_instrument_fails_the_check(
     assert not report.passed
     assert report.unresolved_members == ("INFY", "RELIANCE", "TCS")
     assert report.ever_members == 0
+
+
+def test_a_second_record_naming_the_same_instrument_and_day_is_reported_and_explains_nothing(
+    fresh_database_url: str, tmp_path: Path
+) -> None:
+    # The records file refuses a second row for one Symbol and day; two Symbols can still
+    # name one Instrument on a day. ZOMATO trades to 2025-04-08 and ETERNAL from the 9th
+    # (``fixtures/instruments``), and on the 9th each names the one Instrument.
+    with app_connection(fresh_database_url) as conn:
+        nse = Playback(FIXTURES / "candles_rename", FIXTURES / "instruments")
+        ingest_eod(conn, nse, start=date(2025, 4, 7), end=date(2025, 4, 11))
+        ingest_symbol_changes(conn, PlaybackTransport(FIXTURES / "instruments"))
+        rebuild_instruments(conn)
+    records = (
+        "ETERNAL,2025-04-09,market,reviewer: no filing found\n"
+        "ZOMATO,2025-04-09,demerger,NSE/CML/12345\n"
+    )
+
+    report = run(
+        fresh_database_url,
+        tmp_path,
+        records,
+        calendar=(
+            "covers,2025-01-01,2025-12-31\ndate,kind,citation\n2025-04-10,holiday,NSE/CMTR/65587\n"
+        ),
+        start=date(2025, 4, 7),
+        end=date(2025, 4, 11),
+    )
+
+    assert [(r.line, r.symbol) for r in report.unmatched_records] == [(2, "ETERNAL")]
+    assert [(r.line, r.symbol) for r in report.duplicate_records] == [(3, "ZOMATO")]
+    assert report.passed
+    assert report.summary()["duplicate_records"] == [
+        {"line": 3, "symbol": "ZOMATO", "trade_date": "2025-04-09", "reason": "demerger"}
+    ]
+    assert (
+        "record line 3 (ZOMATO 2025-04-09): names the Instrument and day of an earlier record;"
+        " not read" in report.text()
+    )
+
+
+def test_a_day_with_rows_in_two_listing_series_is_read_in_eq_and_not_compared_within_itself(
+    fresh_database_url: str, tmp_path: Path
+) -> None:
+    # RELIANCE has a BE row beside its EQ row on 2024-07-15, at three times the price: the
+    # day's EQ row is the one read, so neither the BE row nor the next day moves.
+    day = date(2024, 7, 15)
+
+    def also_in_be(on: date, rows: list[str]) -> list[str]:
+        extra = []
+        for row in rows:
+            fields = row.split(",")
+            if on == day and len(fields) > 17 and fields[7] == "RELIANCE" and fields[8] == "EQ":
+                fields[8], fields[17] = "BE", str(Decimal(fields[17]) * 3)
+                extra.append(",".join(fields))
+        return rows + extra
+
+    with app_connection(fresh_database_url) as conn:
+        eod = Playback(FIXTURES / "ingest_eod", edit=bhavcopy_rows(also_in_be))
+        ingest_eod(conn, eod, start=START, end=END)
+        rebuild_instruments(conn)
+        compute_universe(conn, BY_SYMBOL, month=AUGUST)
+        (be,) = queries.end_of_day(conn, RELIANCE, start=day, end=day, series="BE")
+
+    report = run(fresh_database_url, tmp_path)
+
+    assert be.close == D("3194.45") * 3  # the BE row is stored beside the EQ one
+    assert report.large_moves == ()
+    assert report.passed

@@ -21,15 +21,22 @@ that is silently short.
 **Large Moves.** Every Instrument ever in a stored Universe month, under any
 rule version, is an ever-member. Its Adjusted Series in the range, as of the
 range's end, is read in its listing series (EQ, BE, BZ, SM, ST) together, by
-day: a close more than ``large_move_ratio`` times the previous row's close in
-any of them, either way, is a Large Move, so a series move neither hides a
-move nor starts a new one. The first row in the range has no previous row.
+day: a close more than ``large_move_ratio`` times the previous trading day's
+close in any of them, either way, is a Large Move, so a series move neither
+hides a move nor starts a new one. A day with rows in two listing series is
+read in the first of ``MOVE_SERIES`` it has (EQ, then BE, BZ, SM, ST), so a
+day's rows are never compared with each other. The first day in the range
+has no previous day.
 A split or bonus of the Instrument with that Ex-Date explains it, and so does
 a row of the Large Move records (``tradeline.large_move_records``) whose
 Symbol named the Instrument that day. Any other fails the check (an
 unexplained Large Move may be a split or bonus the Adjusted Series lacks).
 A record in the range whose Symbol named no Instrument that day, or that
-matches no Large Move, is reported and does not fail. A member whose Symbol
+matches no Large Move, is reported and does not fail. So is a second record
+whose Symbol named the same Instrument on the same day as an earlier one
+(the file refuses one Symbol and day twice, but two Symbols can name one
+Instrument after a rename): only the first is read, since which names it
+depends on the Instruments' last rebuild, not on the file alone. A member whose Symbol
 names no Instrument (the Instruments were not rebuilt) fails the check, since
 its moves cannot be checked.
 
@@ -67,6 +74,9 @@ DayFailureKind = Literal[
 DAY_FAILURE_KINDS: tuple[DayFailureKind, ...] = get_args(DayFailureKind)
 # Every failure is counted; this many are listed in a summary.
 MAX_LISTED = 100
+# The listing series (``LISTING_SERIES``), in the order a day's close is read for Large
+# Moves: of a day's priced rows, the first of these it has.
+MOVE_SERIES = ("EQ", "BE", "BZ", "SM", "ST")
 
 
 @dataclass(frozen=True)
@@ -168,6 +178,8 @@ class IntegrityReport:
     # records that match no Large Move: reported, never failures.
     unresolved_records: tuple[LargeMoveRecord, ...]
     unmatched_records: tuple[LargeMoveRecord, ...]
+    # Records naming the Instrument and day of an earlier one: reported, never read.
+    duplicate_records: tuple[LargeMoveRecord, ...]
     # Never failures.
     gaps: tuple[Gap, ...]
 
@@ -208,6 +220,7 @@ class IntegrityReport:
             "listed_unexplained_large_moves": [m.summary() for m in unexplained[:MAX_LISTED]],
             "unresolved_records": [_record_summary(r) for r in self.unresolved_records],
             "unmatched_records": [_record_summary(r) for r in self.unmatched_records],
+            "duplicate_records": [_record_summary(r) for r in self.duplicate_records],
             "gaps": len(self.gaps),
             "gaps_by_instrument": dict(sorted(Counter(g.instrument for g in self.gaps).items())),
             "listed_gaps": [g.summary() for g in self.gaps[:MAX_LISTED]],
@@ -249,6 +262,11 @@ class IntegrityReport:
         lines += [
             f"  record line {r.line} ({r.symbol} {r.trade_date}): matches no Large Move"
             for r in self.unmatched_records
+        ]
+        lines += [
+            f"  record line {r.line} ({r.symbol} {r.trade_date}): names the Instrument and day"
+            " of an earlier record; not read"
+            for r in self.duplicate_records
         ]
         lines.append(f"Gaps (never failures): {len(self.gaps)}")
         lines += [f"  gap {g.trade_date} {g.instrument}" for g in self.gaps[:MAX_LISTED]]
@@ -302,7 +320,7 @@ def integrity(
         ]
         moves += _large_moves(conn, instrument, bars, ratio=ratio, end=end)
         gaps += _gaps(calendar, instrument, bars, covered)
-    resolved, unresolved_records = _resolve(conn, records, start=start, end=end)
+    resolved, unresolved_records, duplicate_records = _resolve(conn, records, start=start, end=end)
     explained = _explain(moves, resolved)
     matched = {(m.instrument, m.trade_date) for m in moves}
     return IntegrityReport(
@@ -318,6 +336,7 @@ def integrity(
         large_moves=tuple(sorted(explained, key=lambda m: (m.trade_date, m.instrument))),
         unresolved_records=unresolved_records,
         unmatched_records=tuple(r for key, r in resolved.items() if key not in matched),
+        duplicate_records=duplicate_records,
         gaps=tuple(sorted(gaps, key=lambda g: (g.trade_date, g.instrument))),
     )
 
@@ -336,7 +355,8 @@ def _large_moves(
         for a in queries.corporate_actions(conn, instrument, end=end)
         if a.kind in ADJUSTED_KINDS
     }
-    priced = [b for b in bars if b.close]  # a row with no close, or a zero one, has no move
+    # A row with no close, or a zero one, has no move.
+    priced = _one_per_day([b for b in bars if b.close])
     moves = []
     for previous, bar in zip(priced, priced[1:], strict=False):
         assert previous.close is not None and bar.close is not None
@@ -355,6 +375,16 @@ def _large_moves(
     return moves
 
 
+def _one_per_day(bars: list[AdjustedBar]) -> list[AdjustedBar]:
+    """Each day's row in the first of ``MOVE_SERIES`` the day has, oldest first."""
+    by_day: dict[date, AdjustedBar] = {}
+    for bar in bars:
+        kept = by_day.get(bar.trade_date)
+        if kept is None or MOVE_SERIES.index(bar.series) < MOVE_SERIES.index(kept.series):
+            by_day[bar.trade_date] = bar
+    return [by_day[day] for day in sorted(by_day)]
+
+
 def _gaps(
     calendar: TradingCalendar, instrument: str, bars: list[AdjustedBar], covered: Span
 ) -> list[Gap]:
@@ -369,11 +399,16 @@ def _gaps(
 
 def _resolve(
     conn: psycopg.Connection, records: Iterable[LargeMoveRecord], *, start: date, end: date
-) -> tuple[dict[tuple[str, date], LargeMoveRecord], tuple[LargeMoveRecord, ...]]:
-    """The records in the range by (the Instrument their Symbol named that day, day), and
-    those whose Symbol named none."""
+) -> tuple[
+    dict[tuple[str, date], LargeMoveRecord],
+    tuple[LargeMoveRecord, ...],
+    tuple[LargeMoveRecord, ...],
+]:
+    """The records in the range by (the Instrument their Symbol named that day, day);
+    those whose Symbol named none; and those keyed like an earlier one, which is kept."""
     resolved: dict[tuple[str, date], LargeMoveRecord] = {}
     unresolved = []
+    duplicates = []
     for record in records:
         if not start <= record.trade_date <= end:
             continue
@@ -382,8 +417,12 @@ def _resolve(
         except queries.NoInstrument:
             unresolved.append(record)
             continue
-        resolved[named.key, record.trade_date] = record
-    return resolved, tuple(unresolved)
+        key = (named.key, record.trade_date)
+        if key in resolved:
+            duplicates.append(record)
+            continue
+        resolved[key] = record
+    return resolved, tuple(unresolved), tuple(duplicates)
 
 
 def _explain(

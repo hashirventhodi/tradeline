@@ -31,8 +31,8 @@ max_unexplained_pct = 0.1
 # one fit of a x NSE - b puts every bar within half a tick, over at least this
 # many compared bars.
 additive_min_bars = 5
-# The Trading Calendar, the file [integrity] checks against: a missing candle
-# on one of its Special Sessions is explained.
+# The Trading Calendar, the file [integrity] checks against (the two must name
+# the same file): a missing candle on one of its Special Sessions is explained.
 trading_calendar = "trading_calendar.csv"
 
 # RSS feeds for `ingest news`: a name for each feed and its URL. Items carried

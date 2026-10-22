@@ -165,8 +165,10 @@ def integrity_command(
     capsys: pytest.CaptureFixture[str],
 ) -> tuple[int, list[dict[str, Any]], str]:
     config = tmp_path / "tradeline.toml"
+    path = calendar(tmp_path, rows)
     config.write_text(
-        f'[integrity]\ntrading_calendar = "{calendar(tmp_path, rows)}"\n'
+        f'[parity]\ntrading_calendar = "{path}"\n'
+        f'[integrity]\ntrading_calendar = "{path}"\n'
         f'large_moves = "{no_large_move_records(tmp_path)}"\n'
     )
     monkeypatch.setenv("TRADELINE_CONFIG", str(config))
@@ -209,6 +211,7 @@ def test_the_command_exits_zero_when_the_check_passes_with_a_summary_and_a_table
         "listed_unexplained_large_moves": [],
         "unresolved_records": [],
         "unmatched_records": [],
+        "duplicate_records": [],
         "gaps": 0,
         "gaps_by_instrument": {},
         "listed_gaps": [],

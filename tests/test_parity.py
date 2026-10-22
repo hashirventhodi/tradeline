@@ -656,12 +656,18 @@ def test_the_command_exits_non_zero_above_the_configured_threshold(
     load(fresh_database_url, drop_bar(INFY_TOKEN, "2024-07-15"))
     config = tmp_path / "tradeline.toml"
 
-    config.write_text(f'[parity]\nmax_unexplained_pct = 0.1\ntrading_calendar = "{CALENDAR}"\n')
+    config.write_text(
+        f'[parity]\nmax_unexplained_pct = 0.1\ntrading_calendar = "{CALENDAR}"\n'
+        f'[integrity]\ntrading_calendar = "{CALENDAR}"\n'
+    )
     monkeypatch.setenv("TRADELINE_CONFIG", str(config))
     strict_code, strict_lines, strict_table = parity_command(
         fresh_database_url, monkeypatch, capsys
     )
-    config.write_text(f'[parity]\nmax_unexplained_pct = 1.0\ntrading_calendar = "{CALENDAR}"\n')
+    config.write_text(
+        f'[parity]\nmax_unexplained_pct = 1.0\ntrading_calendar = "{CALENDAR}"\n'
+        f'[integrity]\ntrading_calendar = "{CALENDAR}"\n'
+    )
     lenient_code, _, _ = parity_command(fresh_database_url, monkeypatch, capsys)
 
     assert strict_code == 1
@@ -719,7 +725,10 @@ def test_the_command_refuses_a_malformed_calendar_naming_the_line(
     load(fresh_database_url)
     settings = calendar(tmp_path, "2024-07-15,special_session\n")
     config = tmp_path / "tradeline.toml"
-    config.write_text(f'[parity]\ntrading_calendar = "{settings.trading_calendar}"\n')
+    config.write_text(
+        f'[parity]\ntrading_calendar = "{settings.trading_calendar}"\n'
+        f'[integrity]\ntrading_calendar = "{settings.trading_calendar}"\n'
+    )
     monkeypatch.setenv("TRADELINE_CONFIG", str(config))
 
     code, lines, _ = parity_command(fresh_database_url, monkeypatch, capsys)

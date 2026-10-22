@@ -217,6 +217,24 @@ def test_a_config_with_the_retired_reconcile_section_is_refused_naming_parity(
 
 def test_the_integrity_section_names_the_trading_calendar_file(tmp_path: Path) -> None:
     path = tmp_path / "tradeline.toml"
-    path.write_text('[integrity]\ntrading_calendar = "data/calendar.csv"\n')
+    path.write_text(
+        '[parity]\ntrading_calendar = "data/calendar.csv"\n'
+        '[integrity]\ntrading_calendar = "data/calendar.csv"\n'
+    )
 
     assert load_config(path).integrity == Config.Integrity(trading_calendar="data/calendar.csv")
+
+
+def test_a_config_whose_two_trading_calendars_differ_is_refused_naming_both(
+    tmp_path: Path,
+) -> None:
+    # One Trading Calendar serves the Integrity Check and Kite Parity (ADR 0018).
+    path = tmp_path / "tradeline.toml"
+    path.write_text('[integrity]\ntrading_calendar = "data/calendar.csv"\n')
+
+    with pytest.raises(
+        ConfigError,
+        match=r"parity.trading_calendar \(trading_calendar.csv\)"
+        r" and integrity.trading_calendar \(data/calendar.csv\)",
+    ):
+        load_config(path)

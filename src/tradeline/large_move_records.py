@@ -22,7 +22,8 @@ checked. Lines starting with ``#`` are comments, and blank lines are skipped.
 A malformed row, an unknown reason, a missing citation, or a second row for
 one Symbol and day refuses the whole file, naming the line. The Integrity
 Check (``tradeline.integrity``) reports a record whose Symbol named no
-Instrument that day, or that matches no Large Move; neither fails it.
+Instrument that day, one that matches no Large Move, and one whose Symbol named
+the Instrument of an earlier record on its day; none fails it.
 """
 
 from __future__ import annotations

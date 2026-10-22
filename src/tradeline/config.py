@@ -120,8 +120,8 @@ class Config:
         # has at least this many compared bars to fit a x NSE - b over.
         additive_min_bars: int = 5
         # The Trading Calendar whose Special Sessions explain a missing candle:
-        # the same file as ``integrity.trading_calendar``, relative to the
-        # working directory.
+        # the same file as ``integrity.trading_calendar`` (a config naming two
+        # is refused), relative to the working directory.
         trading_calendar: str = "trading_calendar.csv"
 
     @dataclass(frozen=True)
@@ -159,6 +159,15 @@ class Config:
     instruments: Instruments = field(default_factory=Instruments)
     corporate_actions: CorporateActions = field(default_factory=CorporateActions)
     integrity: Integrity = field(default_factory=Integrity)
+
+    def __post_init__(self) -> None:
+        # One Trading Calendar serves both checks (ADR 0018); two paths could drift apart.
+        parity, integrity = self.parity.trading_calendar, self.integrity.trading_calendar
+        if parity != integrity:
+            raise ConfigError(
+                f"parity.trading_calendar ({parity}) and integrity.trading_calendar"
+                f" ({integrity}) must name the same Trading Calendar file"
+            )
 
 
 def default_config_path() -> Path:
