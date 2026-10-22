@@ -234,3 +234,30 @@ def test_a_listed_action_with_a_different_factor_beside_a_row_is_an_anomaly(
     assert (result.superseded, result.anomalies) == (1, 1)
     (anomaly,) = details["anomalies"]
     assert (anomaly["cited_factor"], anomaly["listed_factor"]) == ("1/5", "1/2")
+
+
+def test_a_row_reworded_after_it_was_stored_is_superseded_with_it_and_applied_never(
+    fresh_database_url: str,
+) -> None:
+    # The table keeps the first wording: a reworded row is a second stored row on the Ex-Date.
+    with app_connection(fresh_database_url) as conn:
+        karda_rows(conn)
+        ingest_cited_actions(conn, [karda_split()])
+        conn.execute(
+            "INSERT INTO corporate_actions (symbol, series, ex_date, subject, kind,"
+            " factor_numerator, factor_denominator, nse_list)"
+            " VALUES ('KARDA', 'BE', '2020-07-03',"
+            " 'Face Value Split From Rs 10 To Rs 2', 'split', 1, 5, 'equities')"
+        )
+        conn.commit()
+
+        reworded = ingest_cited_actions(
+            conn, [karda_split(subject="Face Value Split (Sub-Division) From Rs 10 To Rs 2")]
+        )
+        (before,) = queries.adjusted_daily_candles(
+            conn, "KARDA", start=date(2020, 7, 1), end=date(2020, 7, 1), as_of=date(2020, 7, 3)
+        )
+
+        assert len([row for row in stored(conn) if row[8] is not None]) == 2
+    assert (reworded.rows_written, reworded.superseded, reworded.anomalies) == (1, 1, 0)
+    assert before.factor == Fraction(1, 5)  # the listed split once; neither cited row

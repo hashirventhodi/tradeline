@@ -209,7 +209,8 @@ def superseded(actions: Iterable[CorporateAction]) -> list[Supersession]:
 def _product(actions: Iterable[CorporateAction]) -> Fraction:
     factor = Fraction(1)
     for a in actions:
-        assert a.factor is not None
+        if a.factor is None:
+            raise ValueError(f"{a.kind} action for {a.symbol} on {a.ex_date} has no factor")
         factor *= a.factor
     return factor
 
