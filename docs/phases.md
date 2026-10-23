@@ -19,6 +19,25 @@ Accept when:
 - Announcements and RSS ingestion run for five consecutive trading days without a missed window, with duplicates removed.
 - Test suite: unit tests for adjustment math and the Universe Rule; integration tests against recorded Kite and NSE fixtures; no network in tests.
 
+### Revisions (proposed)
+
+**#18, 2026-10-23, proposed; adopted when the Operator approves the pull request that builds it.** The original line was:
+
+> The current Universe overlaps the current NIFTY 200 by at least 85%; disagreements are listed with reasons.
+
+#13 measured 77 percent (154 of 200) and failed it. The Universe Rule ranks by six-month traded value and NSE builds the NIFTY 200 by free-float market capitalisation, so their overlap measures the market as much as the rule, and every one of the 92 differences has a reason the rule gives (`docs/research.md`, "Universe acceptance criteria revisited (#18)"). The line is retired as a gate. The proposed replacement is:
+
+- The Conformance Check passes for every stored month under the configured rule, run by `tradeline check-universe` over stored data with no network. A month passes only when:
+  - every member is eligible under the rule;
+  - members are ranked 1 to 200 (or every eligible Instrument, if fewer) by descending traded value, recomputed independently of the rule's ranking query, with ties broken by Symbol;
+  - each member's stored traded value equals the recomputed one exactly;
+  - every non-member with more traded value than the last member is ineligible for a reason the rule states (series, fund unit, Listing Age or presence). One with no reason fails the month.
+
+  The check reports the excluded Instruments counted by reason, and any tie at the cut. It runs in under five minutes for the 120 months, against the ADR 0017 version once that version's months are stored.
+- The current Universe is compared with the current NIFTY 200 as a report, not a gate: `verify-universe` gives the overlap and both difference lists, each name with its rank or the reason the rule excludes it.
+
+Liquidity coverage and monthly turnover were measured and not proposed (`docs/research.md`). Reproducibility stays as written above.
+
 ## Phase 2: Engine, Strategy, backtester, Gates
 
 Build: event-driven engine with a simulated clock, Strategy interface and `pullback_v1`, cost model for Indian delivery, Paper Broker fill model against historical opens, Walk-Forward and Holdout protocol, Backtest Gate evaluation, backtest report.

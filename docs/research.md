@@ -183,6 +183,8 @@ rule, not the data: the NIFTY 200 is chosen by free-float market capitalisation,
 the Universe by six-month traded value (ADR 0005). Heavily traded small and
 mid caps come in (NETWEB, HSCL, CUPID, IFCI, OLAELEC, PCJEWELLER) and thinly
 traded large caps drop out (MRF, PAGEIND, COLPAL, DABUR, BAJAJHLDNG, IRCTC).
+#18 retires the 85 percent target as a gate; see "Universe acceptance criteria
+revisited (#18)" below.
 
 ### Reproducibility
 
@@ -1657,6 +1659,178 @@ Nothing in this run needs two computed stages in one gap, and the search costs n
 - **NMDC before 2024-02-27:** Kite's close wanders 0.2 to 2 percent from any constant multiple of NSE's.
 - **Listing-month closes** (SHANKARA, DMART, SBILIFE, AUBANK, PNBHOUSING and others): ₹1.5 to ₹6 off in either direction, while the rest of each stretch is reproduced.
 - **Which dividends Kite adjusts,** and how it picks a tie rule.
+
+## Universe acceptance criteria revisited (#18)
+
+Phase 1 asked that the current Universe overlap the current NIFTY 200 by at least 85 percent, with the differences listed with reasons. #13's run measured 77 percent (154 of 200) and failed it. That target and that result stand as recorded, in the #13 section above and on #1 (comment 6314182016): the criterion failed. This section explains why the criterion cannot measure whether the Universe Rule is right, gives the full October 2026 lists, and records the figures behind the replacement criteria proposed in `docs/phases.md`. The figures are read-only measurements made on 2026-10-23 on the #59 database, and neither NSE nor Kite was called.
+
+### Why traded value and the NIFTY 200 cannot agree to 85 percent
+
+The two lists are chosen by different measures. The Universe Rule (ADR 0005) takes the top 200 EQ Instruments by trailing six-month traded value, after its listing-age, presence, series and fund-unit filters. NSE builds the NIFTY 200 by free-float market capitalisation, with its own eligibility and liquidity screens. The two agree on the large, heavily traded stocks and part ways at both edges. Heavily traded small and mid caps come into the Universe (NETWEB at rank 18, HSCL 23, CUPID 31, OLAELEC 39), while thinly traded large caps drop out (MRF 335, BAJAJHLDNG 441, IRCTC 448). How far the two lists overlap depends on how the market trades in a given half-year as much as on our code, so no fixed overlap can say whether the rule was applied correctly.
+
+Every difference in October 2026 has a reason the rule itself gives:
+
+- All 46 NIFTY 200 constituents outside the Universe rank 201 to 448 by traded value, except VAML, which is barred by Listing Age (76 trading days against 126).
+- The 46 members outside the index rank 18 to 197.
+- None of the 92 differences is a data or implementation error.
+
+`verify-universe`'s output from the #13 run, copied from #1:
+
+```
+Universe 2026-10 (rule 53181efb8726) against NIFTY 200 as of 2026-10-21
+Overlap: 154 of 200 NIFTY 200 constituents (77.00%)
+
+In the Universe, not in NIFTY 200: 46
+   rank  symbol               traded value  note
+     18  NETWEB            956823551060.80
+     23  HSCL              784422189421.80
+     25  ATHERENERG        740864818992.25
+     28  APOLLO            706911514587.01
+     31  CUPID             683630964422.16
+     35  KAYNES            638924484746.70
+     39  OLAELEC           624696170619.68
+     41  IFCI              615817384569.41
+     47  DATAPATTNS        573796576134.30
+     64  PINELABS          494910581209.52
+     84  GRSE              402007383308.70
+     87  ZEEL              393424892795.15
+     91  WOCKPHARMA        384428233854.30
+     95  TEJASNET          365500969923.65
+     96  WELCORP           364353198515.55
+    106  PARAS             344869967011.65
+    107  PCJEWELLER        340592929449.83
+    114  AMBER             317614205194.00
+    120  BANDHANBNK        307071206205.28
+    122  CHENNPETRO        306855050294.80
+    123  ANGELONE          306272135611.49
+    130  CDSL              294287675438.10
+    132  SYRMA             286228595564.70
+    140  AEGISLOG          264827115443.15
+    142  SAMMAANCAP        262004507077.67
+    146  FORCEMOT          258219765456.00
+    147  MRPL              255136815402.33
+    148  SCI               254604162277.87
+    150  JPPOWER           251447349215.23
+    156  BLUESTONE         242740287106.05
+    159  REDINGTON         236886262121.43
+    160  RBLBANK           236545423610.90
+    162  CARTRADE          231774474087.60
+    167  TDPOWERSYS        224793579051.35
+    169  KPITTECH          223199803568.85
+    174  GMDCLTD           216609123946.00
+    175  DELHIVERY         216326442350.50
+    177  GESHIP            207420415172.90
+    178  SONACOMS          205148454727.75
+    190  GLAND             194708230376.90
+    191  ANANTRAJ          194448022803.40
+    192  MANAPPURAM        194018666099.45
+    194  IIFL              192552111169.80
+    195  NAVINFLUOR        192476959132.00
+    196  AZAD              189606151929.30
+    197  ZENSARTECH        189018624754.75
+
+In NIFTY 200, not in the Universe: 46
+   rank  symbol               traded value  note
+    201  MAHABANK          186133899318.24  ranked below the top 200
+    202  GODREJPROP        186133741322.40  ranked below the top 200
+    203  GLENMARK          184281280195.40  ranked below the top 200
+    204  PIDILITIND        184271325807.00  ranked below the top 200
+    205  JUBLFOOD          182158435547.05  ranked below the top 200
+    208  VMM               178545337576.96  ranked below the top 200
+    213  VOLTAS            170981942953.90  ranked below the top 200
+    214  JINDALSTEL        170741557813.20  ranked below the top 200
+    216  UNITDSPR          168915816122.60  ranked below the top 200
+    217  APLAPOLLO         168307639091.40  ranked below the top 200
+    218  FORTIS            167813360603.40  ranked below the top 200
+    219  UPL               167479486179.75  ranked below the top 200
+    221  MFSL              164185949707.20  ranked below the top 200
+    222  BANKINDIA         163558355364.69  ranked below the top 200
+    223  MPHASIS           163464394627.90  ranked below the top 200
+    226  ASTRAL            162126122954.60  ranked below the top 200
+    227  HAVELLS           161572195732.20  ranked below the top 200
+    228  MANKIND           161187424067.70  ranked below the top 200
+    231  SRF               160217871121.50  ranked below the top 200
+    234  M&MFIN            158662698199.70  ranked below the top 200
+    236  360ONE            157191373484.80  ranked below the top 200
+    243  AMBUJACEM         154257045597.60  ranked below the top 200
+    245  GODFRYPHLP        152901518749.90  ranked below the top 200
+    254  PAGEIND           148312393005.00  ranked below the top 200
+    256  LGEINDIA          145903056341.50  ranked below the top 200
+    259  LICHSGFIN         144226336716.70  ranked below the top 200
+    261  PRESTIGE          143702584184.60  ranked below the top 200
+    267  SBICARD           141464484975.80  ranked below the top 200
+    271  IRFC              138112064222.02  ranked below the top 200
+    277  PHOENIXLTD        133569268759.60  ranked below the top 200
+    283  MOTILALOFS        130514987592.25  ranked below the top 200
+    296  TIINDIA           121283929933.20  ranked below the top 200
+    301  BLUESTARCO        118725312617.40  ranked below the top 200
+    303  DABUR             118246675819.30  ranked below the top 200
+    306  OBEROIRLTY        117777985147.70  ranked below the top 200
+    309  TATACOMM          115966443685.30  ranked below the top 200
+    317  CONCOR            110188630123.95  ranked below the top 200
+    318  PIIND             110036604037.10  ranked below the top 200
+    320  IREDA             109853298653.42  ranked below the top 200
+    323  COLPAL            109242058791.40  ranked below the top 200
+    327  TATACAP           104213739373.95  ranked below the top 200
+    335  MRF               100769029220.00  ranked below the top 200
+    337  SUPREMEIND        100476565196.80  ranked below the top 200
+    441  BAJAJHLDNG         66320303845.50  ranked below the top 200
+    448  IRCTC              64285635288.85  ranked below the top 200
+      -  VAML              279383088743.68  listed 76 trading days, fewer than 126
+
+Universe members without a sector: 0
+```
+
+October 2026 is identical under `ded30b1014c4`, the Instrument-ranked version configured today: the same 200 members, ranks and traded values. So the overlap is still 154 of 200, with the same two lists. Below the top, ranks from about 270 shift by one (MRF 336, BAJAJHLDNG 442, IRCTC 449). This was checked against the stored rows, not by fetching NSE's list again.
+
+### Rule conformance under `ded30b1014c4`
+
+The rule's own claim is testable on stored data: every member is eligible and ranked by traded value, and anything that traded more than the 200th member was left out for a reason the rule states. Recomputed for all 120 months:
+
+- The recomputed top 200 equals the stored membership in every month, reading SUBEXLTD's obsolete key (2021-07 to 2021-12) as current.
+- No eligible non-member ever has more traded value than the 200th member.
+- 984 Instrument-months above the 200th are excluded, from 2 to 22 a month (median 8; October 2026, 10). Every one has a reason: Listing Age 499, fund unit 262, series 115, presence 108. `universe._excluded` gives only the first failing filter, in that order. Most Listing Age exclusions also fail presence: 356 fail both.
+- **91 of the Listing Age exclusions are the error ADR 0017 corrects.** NESTLEIND reads "listed 0 trading days" in every month from 2016-11 to 2024-02 (87 months), and CAMS from 2021-08 to 2021-11. A check that asks only whether a reason exists passes these months under `ded30b1014c4`: the version applies its own rule faithfully, and the rule is what was wrong. Under the ADR 0017 version (`f4997f66b273`, recomputed but not stored), both Instruments enter, 884 Instrument-months are excluded, and none lacks a reason. That version is the one the Conformance Check should be run against.
+- Reusing `universe.standings` costs 15 to 25 seconds a month under Instrument ranking (`_instrument_candidates`), about 40 minutes for 120 months run one after another.
+
+October 2026's exclusions above the 200th: Listing Age DHOOTTRANS (32 days, ₹22,791 crore), INDOMIM (44, ₹19,626 crore), VAML (76, ₹27,938 crore); fund units SILVERBEES, LIQUIDBEES, GOLDBEES, LIQUIDCASE, NIFTYBEES; series HFCL and MTARTECH, both last traded in BE.
+
+### Liquidity coverage and turnover
+
+These were measured as candidate criteria and not proposed. The figures are kept here because they bear on the Universe's purpose and on Phase 2's costs.
+
+**Coverage** is the members' traded value over the window as a share of all EQ traded value, and as a share of the traded value of every eligible Instrument, across the 120 months:
+
+| Members' share of | Min | 10th percentile | Median | Max | October 2026 |
+|---|---|---|---|---|---|
+| all EQ traded value | 61.5% | 65.9% | 78.7% | 92.3% | 61.5% |
+| eligible traded value | 66.6% | 71.3% | 82.4% | 94.1% | 66.6% |
+
+October 2026 is the ten-year low, and the yearly mean has fallen every year since 2020: 93.1% of eligible in 2020, then 86.9%, 82.3%, 77.5%, 73.5%, 71.5% and 70.1% in 2026. The number of eligible Instruments grew from a median of 1,327 to 1,786 in October 2026. In October 2026 the top 100 eligible hold 48.9% of eligible traded value, and the top 300 76.9%. A fixed threshold set from the ten-year median would fail the current month. Coverage describes how the market's trading has spread, not whether the rule was applied.
+
+**Turnover** counts the members that enter and leave each month. Entries equal exits, since the Universe always has 200 members.
+
+| Entries a month | Min | 10th percentile | Median | 90th percentile | Max |
+|---|---|---|---|---|---|
+| count | 1 | 4 | 7 | 11 | 17 |
+| share of 200 | 0.5% | 2.0% | 3.5% | 5.5% | 8.5% |
+
+- The worst months were 2024-02 (17), 2025-02 (15), 2023-01 and 2025-08 (14 each). October 2026 had 8.
+- One-way yearly turnover rose every year from 24.0% in 2019 to 61.5% in 2025, the mirror of coverage's fall.
+- Most of it is at the boundary: 714 of the 871 entries and 778 of the 871 exits touch ranks 180 to 220 on one side. Only 84 entries and 48 exits move between deeper than 220 and better than 180.
+- Under the ADR 0017 version the maximum is 18 (2024-02, NESTLEIND's entry). Coverage moves by under 0.1 points.
+
+### Outcome
+
+- The 85 percent line is retired as a gate, and stays recorded as failed.
+- `docs/phases.md` proposes the Conformance Check (every stored month), with the NIFTY 200 overlap kept as a report only. The proposal is adopted when the Operator approves the pull request that builds it.
+- Coverage and turnover are not proposed.
+- ADR 0005 is unchanged: `verify-universe` lists every disagreement with its reason, which is how ADR 0005's "large disagreements are flagged" is met.
+
+### Unresolved
+
+- The ADR 0017 version's 120 months are not stored, so `tradeline.toml` still points at `ded30b1014c4`. The acceptance run stores them, moves the configuration, runs the Conformance Check, and reruns `verify-universe` against NSE's live list.
+- #13's Universe lines are re-scored against the revised wording once that run is recorded.
 
 ## US-market findings (for reference; not the chosen market)
 
