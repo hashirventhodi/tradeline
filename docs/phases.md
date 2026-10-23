@@ -13,19 +13,19 @@ Build: Kite candle ingestion (daily and minute), NSE end-of-day file ingestion, 
 Accept when:
 - Ten years of NSE end-of-day files pass the Integrity Check: a file for every day in the Trading Calendar, and every Large Move of an ever-member explained (ADR 0018).
 - Ten years of daily candles for every Instrument that was ever in the Universe are loaded, and Kite Parity against NSE's end-of-day files has unexplained differences under 0.1% (ADR 0018).
-- Our adjusted series matches the broker's displayed adjusted chart on a sample of 20 symbols with known splits or bonuses, to the paisa.
+- Factor Agreement holds for every ever-member over the ten years: no split or bonus Ex-Date disagrees, run by `tradeline compare-adjusted` (ADR 0018; #68, below).
 - The Universe Rule, run for every month in the last ten years, is reproducible: two runs produce byte-identical membership tables.
-- The current Universe overlaps the current NIFTY 200 by at least 85%; disagreements are listed with reasons.
+- The Conformance Check passes for every stored month under the configured rule, run by `tradeline check-universe`; the current Universe is compared with the current NIFTY 200 as a report, not a gate (#18, below).
 - Announcements and RSS ingestion run for five consecutive trading days without a missed window, with duplicates removed.
 - Test suite: unit tests for adjustment math and the Universe Rule; integration tests against recorded Kite and NSE fixtures; no network in tests.
 
-### Revisions (proposed)
+### Revisions
 
-**#18, 2026-10-23, proposed; adopted when the Operator approves the pull request that builds it.** The original line was:
+**#18, 2026-10-23, adopted with PR #64.** The original line was:
 
 > The current Universe overlaps the current NIFTY 200 by at least 85%; disagreements are listed with reasons.
 
-#13 measured 77 percent (154 of 200) and failed it. The Universe Rule ranks by six-month traded value and NSE builds the NIFTY 200 by free-float market capitalisation, so their overlap measures the market as much as the rule, and every one of the 92 differences has a reason the rule gives (`docs/research.md`, "Universe acceptance criteria revisited (#18)"). The line is retired as a gate. The proposed replacement is:
+#13 measured 77 percent (154 of 200) and failed it. The Universe Rule ranks by six-month traded value and NSE builds the NIFTY 200 by free-float market capitalisation, so their overlap measures the market as much as the rule, and every one of the 92 differences has a reason the rule gives (`docs/research.md`, "Universe acceptance criteria revisited (#18)"). The line is retired as a gate. Its replacement is:
 
 - The Conformance Check passes for every stored month under the configured rule, run by `tradeline check-universe` over stored data with no network. A month passes only when:
   - every member is eligible under the rule;
@@ -38,11 +38,11 @@ Accept when:
 
 Liquidity coverage and monthly turnover were measured and not proposed (`docs/research.md`). Reproducibility stays as written above.
 
-**#68, 2026-10-23, proposed; adopted when the Operator approves the pull request that builds it.** The original line was:
+**#68, 2026-10-23, adopted with PR #69.** The original line was:
 
 > Our adjusted series matches the broker's displayed adjusted chart on a sample of 20 symbols with known splits or bonuses, to the paisa.
 
-#13 measured 26,310 of 48,699 bars equal and failed it. The line cannot pass by design. ADR 0006 adjusts splits and bonuses only, and Kite also adjusts dividends from 2023-07-01 and demergers. Kite rounds each stage to its own tick (#62), and our rounding is kept by convention, not to match Kite. Agreement with Kite's closes is already gated by Kite Parity (ADR 0018). What our adjustment claims, and Kite can check, is the factor at each split and bonus. The line is retired. The proposed replacement is:
+#13 measured 26,310 of 48,699 bars equal and failed it. The line cannot pass by design. ADR 0006 adjusts splits and bonuses only, and Kite also adjusts dividends from 2023-07-01 and demergers. Kite rounds each stage to its own tick (#62), and our rounding is kept by convention, not to match Kite. Agreement with Kite's closes is already gated by Kite Parity (ADR 0018). What our adjustment claims, and Kite can check, is the factor at each split and bonus. The line is retired. Its replacement is:
 
 - Factor Agreement holds for every ever-member over the ten years, run by `tradeline compare-adjusted` over stored data with no network. Each split (either direction) and bonus Ex-Date of an ever-member, followed across renames, gets one outcome from Kite's Adjustment:
   - **agrees:** Kite's Adjustment stands with that Ex-Date's computed stage, our ratio exact or rounded to two decimals (ADR 0018);

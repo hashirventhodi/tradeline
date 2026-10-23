@@ -81,7 +81,7 @@ This ADR twice says `compare-adjusted` is unchanged, the bar-by-bar check of our
 
 ### Consequences of the amendment
 
-- Phase 1's adjusted-chart line in `docs/phases.md` is replaced by Factor Agreement, proposed until the pull request that builds it is approved.
+- Phase 1's adjusted-chart line in `docs/phases.md` is replaced by Factor Agreement, adopted with PR #69.
 - Our rounding, 5 paisa with ties to even, is no longer checked against Kite by anything. ADR 0006 already keeps it by convention.
 - A computed stage's ratio is read from the same stored action as our factor. Agreement shows that Kite's closes are reproduced with that ratio, so a misread subject shows as a disagreement or as a stretch that does not stand. It does not show that NSE's subject is right.
 

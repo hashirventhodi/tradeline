@@ -1844,7 +1844,7 @@ Run on 2026-10-23 on the same database, with `tradeline check-universe` (`src/tr
 
 ## Factor Agreement (#68)
 
-Phase 1's line "our adjusted series matches the broker's displayed adjusted chart on a sample of 20 symbols with known splits or bonuses, to the paisa" is replaced, as a proposal, by Factor Agreement (ADR 0018, amended by #68; `docs/phases.md`). #13 failed the old line at 26,310 of 48,699 bars. It cannot pass by design: ADR 0006 adjusts splits and bonuses only, and Kite also adjusts dividends and demergers and rounds each stage to its own tick (#62).
+Phase 1's line "our adjusted series matches the broker's displayed adjusted chart on a sample of 20 symbols with known splits or bonuses, to the paisa" is replaced by Factor Agreement, adopted with PR #69 (ADR 0018, amended by #68; `docs/phases.md`). #13 failed the old line at 26,310 of 48,699 bars. It cannot pass by design: ADR 0006 adjusts splits and bonuses only, and Kite also adjusts dividends and demergers and rounds each stage to its own tick (#62).
 
 ### The acceptance run
 
