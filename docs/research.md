@@ -1529,6 +1529,135 @@ and the 8 missing days unexplained (0.22 percent), still a fail.
   would need the (Symbol, series) pairs already held, which `ingest candles`
   cannot be asked for today.
 
+## Kite's Adjustment as a chain of stages (#62)
+
+These are read-only measurements on the #59 database (above). They cover the refit of the 274 unexplained stretches, the prototype on `prototype/kite-adjustment-chain` (8ba0bb5), and one measurement under the rules ADR 0018 now agrees. Nothing was written to the database, and neither Kite nor NSE was called. The findings were first posted on #62 (comments 6347194917 and 6347839034).
+
+### Two corrections to #59
+
+- **"A least-squares line drawn through rounded prices is itself a little off it, so the largest gap lands just above 2.5 paisa."** Wrong. The exact minimax line, the one with the smallest possible worst gap, is barely closer: CANBK 2.58 to 2.73 paisa against least squares' 2.69 to 2.94, BANKBARODA 2.70 to 2.85 against 2.88 to 3.06. Minimax within half a 5 paisa tick explains 2,693 of the 21,061 closes. Minimax within half the tick a stretch's own closes show explains 2,497 (parity 1.84 percent). The gap is Kite rounding more than once.
+  - TATASTEEL: 99.8 percent of its closes are 0.97721 × v rounded to the paisa, where v lies on a 5 paisa grid and fits one line within 2.25 paisa.
+  - INOXWIND and TRIDENT match the same test on 100 percent of their closes.
+  - The prototype reproduces CANBK, IOC and GAIL exactly as chains of 4, 7 and 7 stages. GNFC, HINDPETRO and BPCL need 4 to 6 stages, mixing subtracted and divided dividends.
+- **"Fits off by 25 to 57 paisa, on a 10 paisa tick or coarser" (OFSS, BSE, NIITTECH, GODFRYPHLP, TATAINVEST, MCX, NAUKRI).** Wrong for five of the seven. Their closes show a ₹0.50 tick (OFSS, BSE, NIITTECH, NAUKRI) or a ₹1 tick (GODFRYPHLP, TATAINVEST, MCX). The minimax line sits within half that tick for NIITTECH (25.00 paisa), NAUKRI (24.50 to 24.96), GODFRYPHLP, TATAINVEST and MCX (at most 50.00). It does not for OFSS (37.7 to 46.8 paisa against 25) or for 5 of BSE's 12 stretches. The replay reproduces OFSS's 1,531 closes and 716 of BSE's 717.
+  - Several isolated misses in this group are exact half-tick ties of the median factor. One is NSE 1112.5 × 0.2 = 222.5, where Kite shows 222.
+
+Also: the 274 stretches belong to 44 Instruments (46 Symbols), not 45.
+
+### What a stage is
+
+At each Ex-Date Kite adjusts for, it rewrites every older close as round(close / r − b) to that stage's tick and tie rule. Older closes pass through every later stage.
+
+- **Splits and bonuses** divide by their own ratio, sometimes rounded to two decimals. A 1:3 bonus divides by 1.33 (ASTRAL twice, GAIL twice, OIL, WIPRO).
+- **Dividends with an Ex-Date before July 2023** were never adjusted. MAJESCO's 98.8 percent payout looked like an exception: its divisor turned up as a fitted stage at a buyback six weeks earlier, which the amended rules refuse (below).
+- **From July 2023 to September 2024**, a dividend was usually subtracted. That is the whole of #59's "additive adjustment": TATASTEEL ₹3.60, OFSS ₹240, GNFC ₹30 and then ₹16.50. ONGC (2023-11-21), PETRONET (2023-11-10), BPCL (2024-08-09) and SSLT (2024-09-10) were divided by the ratio instead. Forcing subtraction there fails them, and every older stage in their chains.
+- **From October 2024**, a dividend divides by P / (P − D) rounded to six decimals. With the exact divisor, ITC is a paisa off on one close.
+- **Which dividends Kite adjusts** has no sharp edge. Roughly those of 2 percent or more of P are adjusted, but some of 1.8 to 2 percent are and some of 2 to 4.5 percent are not.
+- **Rights issues, demergers and other actions** have no rule for the ratio, so it is read from Kite's closes.
+- **Ticks** come from the ladder 1p, 5p, 10p, ₹0.50, ₹1 and ₹5 (ABBOTINDIA). A later stage can be finer than an earlier one (TATASTEEL: 5p, then 1p).
+- **Ties** follow one rule per stage. Of the prototype's 351 standing stages, 295 round half to even, 32 half down (TATASTEEL's 2022 split, GAIL's and HDFCBANK's 2019 actions) and 24 half up. Floating-point division with ties to even leaves 2,338 of 20,834 closes off on the split and bonus stages where ties show. Exact arithmetic with a tie rule per stage leaves 3 of 26,577.
+
+### Measurement under ADR 0018's amended rules
+
+| | |
+|---|---|
+| Dataset | The #59 development database: migrations to `0025_candle_requests`, 928 `candle_requests`, latest candle 2026-10-21 |
+| Range | 2016-10-21 to 2026-10-20: 1,008,709 rows compared, 6,468 stretches, 464 Instruments |
+| Code | `prototype/kite-adjustment-chain` at 599126f (`replay_run.py`'s `final_strict` rule set, `score.py`) |
+| Unexplained | **841 (0.0834 percent)**: 833 closes and the 8 missing days |
+
+The 745 unexplained (0.0739 percent) first posted on #62 came from the prototype's earlier strict run, before these rules were settled. That count included closes in a Kite Basis of any size. Requiring 20 bars raises it to 842 (the prototype's `report.py` against `score.py` on the same replay), and the amended rules give 841.
+
+```sh
+O=prototypes/kite_adjustment_chain/out; mkdir -p $O   # git-ignored: the pickles hold Kite's closes
+uv run --env-file .env python prototypes/kite_adjustment_chain/extract_all.py $O/all.pkl   # read-only, about 40 s
+uv run --with scipy python prototypes/kite_adjustment_chain/replay_run.py $O/all.pkl $O/baseline.pkl 0.05 strict
+RULES=final uv run --with scipy python prototypes/kite_adjustment_chain/replay_run.py $O/all.pkl $O/final.pkl 0.05 strict
+RULES=final_strict uv run --with scipy python prototypes/kite_adjustment_chain/replay_run.py $O/all.pkl $O/final_strict.pkl 0.05 strict   # about 6 min
+uv run python prototypes/kite_adjustment_chain/score.py $O/final_strict.pkl $O/final.pkl
+```
+
+| #59's outcome | Explained by Kite's Adjustment |
+|---|---|
+| unexplained | 20,469 of 21,061 |
+| additive adjustment | 5,237 of 5,238 |
+| coarse rounding | 3,131 of 3,371 |
+| all close mismatches | 28,837 of 29,670 |
+
+- **Unexplained by cause:** 782 closes in the 112 stretches (of 6,468) that do not stand. 43 off the replay in standing stretches. 8 on a listing day. 8 missing days. None from a Kite Basis under 20 bars.
+- **Unexplained by Instrument:** NMDC 546, BAJFINANCE 215, SHANKARA 20, M&MFIN 16, SSLT 6, VBL 4, and at most 3 each for the rest.
+- **Computed stages:** 189 split or bonus at its exact ratio, 6 at a ratio rounded to two decimals, 23 subtracted dividends, 83 divided dividends, and no stage that only rounds again (3 of the 301 are in a Kite Basis under 20 bars).
+- **Fitted stages:** 50: 28 at rights issues, 21 at demergers and schemes, and 1 at a general meeting (COALINDIA 2020-09-14, r = 1.008698, 0.5 percent from the nearest value a computed action gives).
+- **Closes depending on a fitted stage:** 2,848 explained closes (0.28 percent of rows) go through at least one.
+
+**Fitted stages that stood in for computed ones.** Under the first reading of the rules (`final`), a fitted stage could sit at any Ex-Date between two stretches and fold in a split or dividend from another Ex-Date there. Of `final`'s 56 fitted stages, 49 had a gap to themselves (every rights and demerger stage among them). The other 7 had a split, bonus or dividend in their gap. The table shows them, with every fit the amended rules refuse because it only rounds again:
+
+| Instrument | Fitted at | r in `final` | What it did | Under the amended rules |
+|---|---|---|---|---|
+| IIFLWAM | 2022-09-22 AGM | 4.000221 | absorbed the 2023-03-02 1:1 bonus and 2-for-1 split (r = 4) | the split is its own computed stage; the AGM's remaining fit, r = 1.000000, is refused |
+| MAJESCO | 2020-11-12 buyback | 84.597234 | absorbed the ₹974 dividend of 2020-12-23, P/(P − D) = 84.605150 | refused; 7 more stretches (1,004 bars) do not stand |
+| MOTHERSUMI | 2022-01-14 demerger | 1.676522 | absorbed the 2018-10-30 1:2 bonus (1.5) | the bonus is its own stage; the demerger's fit is 1.117684 |
+| COALINDIA | 2020-09-14 AGM | 1.008696 | nothing: 0.5 percent from the nearest dividend's value | kept, 1.008698 |
+| COALINDIA | 2017-08-31, 2018-09-04 AGMs; 2019-02-14 buyback | 0.999949, 0.999983, 1.000023 | only rounded again | refused |
+| TATACOMM | 2019-09-17 | 1.0005 | only rounded again, in a gap of its own | refused |
+
+None of these changes a close Kite Parity flags: `final` and the amended rules both leave 841 unexplained. What changes is which matched closes the replay reproduces, and which stretches stand. A bounding run allowing no fitted stage at all where a computed action shares the gap (`final_nofit_in_mixed_gaps`: 49 fitted stages, 116 stretches not standing) also leaves 841.
+
+The repository's tests pass on the prototype branch (508, `uv run pytest -q`; they use throwaway `tradeline_test_*` databases).
+
+A fitted stage's ratio is chosen to reproduce the closes it explains. That those closes match is therefore not independent evidence for it, and the replay has not been checked against data it was not fitted on.
+
+### The implementation's acceptance run
+
+These are the results of `tradeline parity` itself, not the prototype. Its one reason for a close mismatch is Kite's Adjustment (`tradeline.kite_adjustment`). The run uses the same database and range as the measurement above.
+
+| | |
+|---|---|
+| Command | `uv run tradeline parity --from 2016-10-21 --to 2026-10-20` (read-only) |
+| Result | 1,008,709 rows, 44,755 differences, **841 unexplained (0.0834 percent): PASS** |
+| Missing | 1,052: 1,044 Special Sessions, 8 unexplained |
+| Extra | 14,033, all series moves |
+| Close | 29,670: 28,837 Kite's Adjustment, 833 unexplained |
+| Through a fitted stage | **2,848** of the explained closes (0.28 percent of rows) |
+| Kite Bases | 111 in the JSON summary (the text lists 100): 106 with stages, and 5 of Kite's raw closes that leave a close unexplained |
+| Where the 833 unexplained closes are | 783 in 45 stretches that do not stand (NMDC 546, BAJFINANCE 215, SHANKARA 20, HINDZINC 1, MAJESCO 1), 37 in Kite Bases with stages, 13 in Kite's raw closes: the first days after listing of DMART and HUDCO (3 each), SBILIFE and TEJASNET (2 each), and CROMPGREAV's 8 to 10 March 2017 (3), the CGPOWER closes noted above under that key |
+| Ambiguous fits, bounded searches | 0 and 0 |
+| Time | 14 min 49 s wall, 587 s of CPU, on the development machine with other work running (load average 7 at the start, 13 at the end). An earlier run of the same rules under lighter load took 11 min 59 s and 543 s, with identical output. NMDC's replay is most of it: about 520 s of CPU on its own. |
+
+The count matches the prototype's, but that alone does not show each choice below is right.
+
+**Where the implementation departs from `final_strict`.** Each change was measured with the same extract replayed both ways, and none moved a count.
+
+- **Arithmetic and actions.** Arithmetic is exact throughout. An action filed under two Symbols or series is applied once. Dividends on one Ex-Date are summed before the guard against an amount at or above NSE's close; the prototype guarded each amount separately.
+- **A dividend's P** is NSE's close on the last day before the Ex-Date that NSE has one, whether or not Kite has a candle that day. The prototype took the last day with both closes. This is an inferred rule: it reproduces Kite's closes exactly (ITC's 343 among them), but Kite publishes no reference-price convention.
+- **A fitted stage is placed only where one Ex-Date of its gap could hold it.** The prototype put the ratio at the latest of several. Where several could hold it and one would let the stretch stand, nothing in Kite's closes says which action the ratio belongs to. So none is placed, the stretch's closes stay unexplained, and the report lists the case as an ambiguous fit. This run has none: every fitted stage behind the 2,848 closes sits in a gap with one fittable Ex-Date.
+- **A gap with more than 64 layouts** is still searched one Ex-Date's choice at a time. The report now lists each such search and whether its stretch stood. That includes a search at one Ex-Date for an ambiguous fit, which the report marks with that Ex-Date. This run has none: every gap the replay searched has 64 layouts or fewer.
+- **A fitted ratio is refused where it repeats any split, bonus, consolidation or dividend of its gap, staged or not.** The prototype compared it only with the gap's actions left without a stage, so a fitted ratio could apply a staged action a second time.
+- **The report gives every unexplained close mismatch its place.** Each sits in a stretch that does not stand, in a Kite Basis with stages, or in a basis of Kite's raw closes, and each of the three is listed with its days.
+
+**Every split, bonus, consolidation and dividend of a gap can have its own stage.** The prototype gave a gap with no fittable action at most one computed stage, against ADR 0018's "every split, bonus, consolidation and dividend among them has its own computed stage". The implementation now searches each such Ex-Date's choice for every gap: one of its computed stages, or none where the rules allow none. This was measured on the same extract (the 47 Instruments and series with a close mismatch) both ways:
+
+| | One stage per such gap (`159df3e`) | A stage per action |
+|---|---|---|
+| Unexplained | 841 | 841 |
+| Explained through a fitted stage | 2,848 | 2,848 |
+| Groups of more than one stage | 0 | 0 |
+| Bounded searches | 0 | 0 |
+| NMDC's replay, CPU, run back to back | 530 s | 522 s |
+| Acceptance run | 10 min 53 s, 524 s CPU | 11 min 59 s, 543 s CPU, under heavier load |
+| Report output | | identical: every JSON key, and every text line after the first |
+
+Nothing in this run needs two computed stages in one gap, and the search costs no more. The whole runs differ in time only by the machine's load: NMDC, timed back to back, does not. A test covers a gap of two subtracted dividends, which only two stages reproduce.
+
+**The stages of one gap share their rounding.** They take one tick for the computed stages, the fitted stage's own tick, and one tie rule. ADR 0018 now says so. With a stage per action, a gap can hold a group of several stages, but none stands in this run, among 106 Kite Bases with stages. A tick and tie rule per stage would multiply the search by 18 for each stage after the first, and no group of more than one stage stands here, so no close shows Kite rounding the stages of one gap differently. A test pins the rule: a bonus rounded to the rupee followed by a dividend subtracted to the paisa, in one gap, is not reproduced.
+
+### Unresolved
+
+- **BAJFINANCE before mid-2025:** closes on ₹0.50 some days and ₹1 on others (893.5 and 942.5, but 899 for 898.7). No stage, tick or tie rule reproduces them.
+- **NMDC before 2024-02-27:** Kite's close wanders 0.2 to 2 percent from any constant multiple of NSE's.
+- **Listing-month closes** (SHANKARA, DMART, SBILIFE, AUBANK, PNBHOUSING and others): ₹1.5 to ₹6 off in either direction, while the rest of each stretch is reproduced.
+- **Which dividends Kite adjusts,** and how it picks a tie rule.
+
 ## US-market findings (for reference; not the chosen market)
 
 Alpaca offers free paper trading with IEX data and ₹99-equivalent full SIP data; Massive (formerly Polygon) runs 29 to 199 dollars a month; SEC EDGAR is free. These made the US the easier engineering choice. The Operator chose Indian equities, which cost more in friction (no sandbox, daily login, static IP) but is the market they trade.

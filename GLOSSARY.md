@@ -188,8 +188,16 @@ The comparison of Kite's daily candles with the Raw Series, in presence and clos
 _Avoid_: Reconcile, reconciliation, chart check
 
 **Parity Reason**:
-A stated, checkable cause of a difference Kite Parity finds: a series move (NSE lists the Instrument in another series that day), a Special Session Kite has no candle for, a day outside every range Kite was asked for, Kite's additive adjustment, or Kite's coarser rounding. A difference without one is unexplained.
+A stated, checkable cause of a difference Kite Parity finds: a series move (NSE lists the Instrument in another series that day), a Special Session Kite has no candle for, a day outside every range Kite was asked for, or Kite's Adjustment. A difference without one is unexplained.
 _Avoid_: Excuse, known issue, exception
+
+**Kite's Adjustment**:
+Kite's rewriting of an Instrument's history for its corporate actions. At each action Kite adjusts for, it divides, or subtracts from, the history it has already rounded, then rounds again to a tick Kite's closes show. As a Parity Reason it explains a close that Kite's Adjustment reproduces from NSE's raw close. A close it does not reproduce stays unexplained, however close it comes.
+_Avoid_: Additive adjustment, coarse rounding (both are cases of it), Kite factor
+
+**Kite Basis**:
+A span of an Instrument's consecutive stretches between Ex-Dates over which Kite applied the same adjustment. It ends only where Kite's own closes show that Kite adjusted again.
+_Avoid_: Run (a command's run), stretch (one span between two Ex-Dates), segment
 
 **Large Move**:
 A close-to-close change of more than 1.5 times, either way, in an Instrument's Adjusted Series across its listing series. Unless a split or bonus on that day explains it, it must be explained by a reviewed record with its reason and source, because an unexplained one may be a split or bonus the Adjusted Series lacks.

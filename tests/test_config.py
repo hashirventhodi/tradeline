@@ -182,9 +182,7 @@ def test_the_committed_config_names_at_least_two_news_feeds() -> None:
 def test_the_committed_config_states_kite_paritys_tolerance_and_gate() -> None:
     config = load_config(Path(__file__).resolve().parents[1] / "tradeline.toml")
 
-    assert config.parity == Config.Parity(
-        close_tolerance=0.001, max_unexplained_pct=0.1, additive_min_bars=5
-    )
+    assert config.parity == Config.Parity(close_tolerance=0.001, max_unexplained_pct=0.1)
 
 
 def test_the_committed_config_gives_parity_and_integrity_one_trading_calendar() -> None:
@@ -195,12 +193,22 @@ def test_the_committed_config_gives_parity_and_integrity_one_trading_calendar() 
 
 def test_parity_settings_load_from_their_own_section(tmp_path: Path) -> None:
     path = tmp_path / "tradeline.toml"
-    path.write_text(
-        "[parity]\nclose_tolerance = 0.002\nmax_unexplained_pct = 0.5\nadditive_min_bars = 7\n"
-    )
+    path.write_text("[parity]\nclose_tolerance = 0.002\nmax_unexplained_pct = 0.5\n")
 
-    assert load_config(path).parity == Config.Parity(
-        close_tolerance=0.002, max_unexplained_pct=0.5, additive_min_bars=7
+    assert load_config(path).parity == Config.Parity(close_tolerance=0.002, max_unexplained_pct=0.5)
+
+
+def test_the_retired_additive_minimum_is_refused_naming_what_replaced_it(tmp_path: Path) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text("[parity]\nadditive_min_bars = 5\n")
+
+    with pytest.raises(ConfigError) as refused:
+        load_config(path)
+
+    assert str(refused.value) == (
+        f"{path}: parity.additive_min_bars was removed (ADR 0018, #62): Kite's Adjustment"
+        " explains a close only in a Kite Basis of at least 20 compared bars, with at most"
+        " 5 percent of a stretch's closes off the replay; delete the key"
     )
 
 
