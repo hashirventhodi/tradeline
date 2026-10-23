@@ -473,7 +473,7 @@ def test_stages_of_different_kite_bases_round_ties_by_different_rules() -> None:
 
 
 def test_a_subject_that_misspells_dividend_as_divided_is_a_dividend() -> None:
-    # NSE's own spelling (ABBOTINDIA 2016, NELCAST 2015), filed as "other".
+    # NSE's own spelling (ABBOTINDIA 2016, NELCAST 2015), stored as "other" before #15.
     days = weekdays("2024-09-23", 40)
     nse = prices(40, start="1850.05", step="9.10")
     previous = nse[split_at(days, "2024-10-29") - 1]
@@ -483,7 +483,6 @@ def test_a_subject_that_misspells_dividend_as_divided_is_a_dividend() -> None:
         return to_tick(n / divisor, FIVE_PAISA) if d < date(2024, 10, 29) else n
 
     subject = "Annual General Meeting/Divided - Rs 35/- Per Share"
-    assert interpret(subject)[0] == "other"
 
     result = replayed(compared(days, nse, kite), [action("2024-10-29", subject)])
 
