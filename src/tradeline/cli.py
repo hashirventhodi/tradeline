@@ -265,7 +265,7 @@ def parity(ctx: Context, args: argparse.Namespace) -> int:
 
 
 def compare_adjusted(ctx: Context, args: argparse.Namespace) -> int:
-    """Our adjusted series against Kite's stored candles; exit 1 unless every bar is equal.
+    """Factor Agreement, and named Symbols' bars against Kite's; exit 1 if an Ex-Date disagrees.
 
     The table goes to stderr; the summary is the last JSON line on stdout.
     """
@@ -672,8 +672,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     compare_parser = subparsers.add_parser(
         "compare-adjusted",
-        help="compare our adjusted series with Kite's stored candles bar by bar;"
-        " exit 1 unless every bar is equal",
+        help="Factor Agreement: judge each split and bonus Ex-Date of every ever-member,"
+        " or of the named Symbols, by Kite's Adjustment; exit 1 if any disagrees",
     )
     compare_parser.add_argument(
         "--from", dest="start", metavar="DATE", type=date.fromisoformat, required=True
@@ -692,8 +692,8 @@ def build_parser() -> argparse.ArgumentParser:
         dest="symbols",
         metavar="SYMBOL",
         action="append",
-        required=True,
-        help="an NSE symbol to compare; repeatable",
+        help="an NSE symbol to judge in place of the ever-members, its bars listed against"
+        " Kite's to the paisa; repeatable",
     )
     collect_parser = subparsers.add_parser(
         "collect-daily",
