@@ -41,21 +41,22 @@ from tradeline.universe import Exclusion, ExclusionReason, eligibility
 
 
 @dataclass(frozen=True)
-class AboveTheCut:
+class ExcludedAboveTheCut:
     """A non-member with at least the last member's traded value, and why the rule left it out."""
 
     key: str
     traded_value: Decimal
-    # None when the rule gives no reason: a failure, unless it lost a tie.
-    excluded: Exclusion | None
+    excluded: Exclusion
 
 
 @dataclass(frozen=True)
 class MonthConformance:
+    """One stored month's Conformance Check: it conforms when nothing fails."""
+
     month: date
-    members: int
+    member_count: int
     last_traded_value: Decimal | None
-    above_the_cut: tuple[AboveTheCut, ...]
+    excluded_above_the_cut: tuple[ExcludedAboveTheCut, ...]
     # The non-members level with the last member.
     ties: tuple[str, ...]
     failures: tuple[str, ...]
@@ -65,7 +66,7 @@ class MonthConformance:
         return not self.failures
 
     def reasons(self) -> Counter[ExclusionReason]:
-        return Counter(a.excluded.reason for a in self.above_the_cut if a.excluded is not None)
+        return Counter(a.excluded.reason for a in self.excluded_above_the_cut)
 
 
 @dataclass(frozen=True)
@@ -133,7 +134,7 @@ def _check_month(
     if not stored:
         return MonthConformance(month, 0, None, (), (), ("no Universe is stored for the month",))
     failures: list[str] = []
-    keys = _member_keys(conn, rule, month, stored, failures)
+    keys = _member_keys(conn, rule, month, stored)
     members = sorted(zip(stored, keys, strict=True), key=lambda pair: pair[0].rank)
 
     if [m.rank for m, _ in members] != list(range(1, len(members) + 1)):
@@ -141,6 +142,11 @@ def _check_month(
     if len(members) > rule.top_n:
         failures.append(f"{len(members)} members, more than the rule's {rule.top_n}")
     for member, key in members:
+        if key is None:
+            failures.append(
+                f"{member.symbol}: stored Instrument {member.instrument} names no Instrument"
+            )
+            continue
         value = traded.get(key)
         if value is None:
             failures.append(f"{member.symbol}: no {rule.series} traded value in the window")
@@ -149,58 +155,67 @@ def _check_month(
                 f"{member.symbol}: stored traded value {member.traded_value}, recomputed {value}"
             )
     for (higher, higher_key), (lower, lower_key) in zip(members, members[1:], strict=False):
-        if (higher_key in traded and lower_key in traded) and (
-            -traded[higher_key],
-            higher.symbol,
-        ) > (-traded[lower_key], lower.symbol):
+        # A member without a recomputed value has failed above; there is no order to check.
+        if higher_key not in traded or lower_key not in traded:
+            continue
+        if (-traded[higher_key], higher.symbol) > (-traded[lower_key], lower.symbol):
             failures.append(
                 f"{higher.symbol} ranks {higher.rank} above {lower.symbol},"
                 " which has more traded value or wins the tie-break"
             )
 
     last, last_key = members[-1]
-    last_value = traded.get(last_key)
-    member_keys = {key for _, key in members}
+    last_value = None if last_key is None else traded.get(last_key)
+    member_keys = {key for _, key in members if key is not None}
     if len(members) < rule.top_n:
+        # Fewer members than places: every non-member must be ineligible.
         above = [k for k in traded if k not in member_keys]
     elif last_value is None:
+        # The last member's missing value has failed the month; there is no cut to judge above.
         above = []
     else:
         above = [k for k, v in traded.items() if k not in member_keys and v >= last_value]
     judged = eligibility(conn, rule, month=month, keys=sorted(member_keys | set(above)))
 
     for member, key in members:
+        if key is None or key not in traded:
+            continue
         judgement = judged.get(key)
-        if judgement is not None and judgement.excluded is not None:
+        if judgement is None:
+            failures.append(f"{member.symbol}: the rule's filters give it no judgement")
+        elif judgement.excluded is not None:
             failures.append(f"{member.symbol} is a member but not eligible: {judgement.excluded}")
 
-    above_the_cut: list[AboveTheCut] = []
+    excluded_above: list[ExcludedAboveTheCut] = []
     ties: list[str] = []
     for key in sorted(above, key=lambda k: (-traded[k], k)):
         judgement = judged.get(key)
-        excluded = None if judgement is None else judgement.excluded
-        symbol = key if judgement is None else judgement.symbol
+        if judgement is None:
+            failures.append(
+                f"{key} has {traded[key]} traded value, at least the last member"
+                f" {last.symbol}'s, and the rule's filters give it no judgement"
+            )
+            continue
         tied = len(members) == rule.top_n and traded[key] == last_value
         if tied:
-            ties.append(symbol)
-        above_the_cut.append(AboveTheCut(key, traded[key], excluded))
-        if excluded is not None:
-            continue
-        if not tied:
+            ties.append(judgement.symbol)
+        if judgement.excluded is not None:
+            excluded_above.append(ExcludedAboveTheCut(key, traded[key], judgement.excluded))
+        elif not tied:
             failures.append(
-                f"{symbol} has {traded[key]} traded value, more than the last member"
+                f"{judgement.symbol} has {traded[key]} traded value, more than the last member"
                 f" {last.symbol}, and the rule gives no reason to leave it out"
             )
-        elif symbol < last.symbol:
+        elif judgement.symbol < last.symbol:
             failures.append(
-                f"{symbol} ties the last member {last.symbol} and wins the tie-break by Symbol,"
-                " but is left out"
+                f"{judgement.symbol} ties the last member {last.symbol} and wins the tie-break"
+                " by Symbol, but is left out"
             )
     return MonthConformance(
         month=month,
-        members=len(members),
+        member_count=len(members),
         last_traded_value=last_value,
-        above_the_cut=tuple(a for a in above_the_cut if a.excluded is not None),
+        excluded_above_the_cut=tuple(excluded_above),
         ties=tuple(ties),
         failures=tuple(failures),
     )
@@ -211,24 +226,19 @@ def _member_keys(
     rule: UniverseRule,
     month: date,
     stored: Sequence[queries.UniverseMember],
-    failures: list[str],
-) -> list[str]:
+) -> list[str | None]:
     """Each stored member's key: its Symbol, or under a rule that ranks Instruments, its
-    Instrument, read through any key a later rebuild retired."""
+    Instrument, read through any key a later rebuild retired; None if no Instrument answers."""
     if rule.rank_by != "instrument":
         return [m.symbol for m in stored]
     current = {
         (o.symbol, o.stored_key): o.current_key
         for o in queries.obsolete_universe_keys(conn, month=month, rule_version=rule.version)
     }
-    keys = []
-    for m in stored:
-        key = None if m.instrument is None else current.get((m.symbol, m.instrument), m.instrument)
-        if key is None:
-            failures.append(f"{m.symbol}: stored Instrument {m.instrument} names no Instrument")
-            key = f"{m.symbol}@{m.instrument}"
-        keys.append(key)
-    return keys
+    return [
+        None if m.instrument is None else current.get((m.symbol, m.instrument), m.instrument)
+        for m in stored
+    ]
 
 
 def _window_traded_values(

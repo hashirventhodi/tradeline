@@ -102,14 +102,27 @@ def test_a_month_the_rule_computed_conforms(conn: psycopg.Connection) -> None:
     (month,) = report.months
     assert report.passed
     assert month.month == AUGUST
-    assert month.members == 5
+    assert month.member_count == 5
     assert month.failures == ()
     # Five eligible for six places, so every non-member must have a reason.
     assert month.reasons() == {"listing_age": 1, "fund_unit": 1}
-    assert {(a.key, str(a.excluded)) for a in month.above_the_cut} == {
+    assert {(a.key, str(a.excluded)) for a in month.excluded_above_the_cut} == {
         ("EMCURE", "listed 15 trading days, fewer than 21"),
         ("NIFTYBEES", "ISIN INF204KB14I2 is a fund unit (ETF)"),
     }
+
+
+def test_a_non_member_above_the_cut_left_out_for_presence_is_reported_with_that_reason(
+    conn: psycopg.Connection,
+) -> None:
+    # EMCURE meets this Listing Age minimum but has rows on 15 of the 20 window days.
+    younger = replace(RULE, min_listing_trading_days=10)
+    compute_universe(conn, younger, month=AUGUST)
+
+    (month,) = check_conformance(conn, younger, months=[AUGUST]).months
+
+    assert month.passed
+    assert month.reasons() == {"presence": 1, "fund_unit": 1}
 
 
 def test_a_member_whose_stored_traded_value_differs_from_the_recompute_fails(
