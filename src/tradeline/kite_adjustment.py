@@ -32,8 +32,9 @@ so none is placed and the ambiguity is reported (``AmbiguousFit``). Where an
 older stretch is joined across several Ex-Dates (a gap) holding both kinds, each
 split, bonus, consolidation and dividend there has its own computed stage or none
 where the rules give none, and the fitted ratio carries only what those leave
-(``_mixed_gap_layouts``). A fitted ratio within 0.1 percent of what an unstaged
-action of its gap would give, or a product of them, absorbs it and is refused;
+(``_mixed_gap_layouts``). A fitted ratio within 0.1 percent of what a split,
+bonus, consolidation or dividend of its gap would give, staged or not, or a
+product of them, absorbs it and is refused;
 so is one within 0.1 percent of 1, which adjusts nothing.
 
 The stretches between Ex-Dates are taken newest first. The newest is tried as
@@ -82,7 +83,7 @@ TICKS = tuple(Fraction(t) for t in ("0.01", "0.05", "0.10", "0.50", "1", "5"))
 MAX_OFF = Fraction(5, 100)
 # A Kite Basis of fewer compared bars than this explains nothing.
 MIN_BASIS_BARS = 20
-# A fitted ratio this near 1, or what an unstaged action of its gap would give, is refused.
+# A fitted ratio this near 1, or what a computed-kind action of its gap would give, is refused.
 NEAR = Fraction(1, 1000)
 DIVIDENDS_FROM = date(2023, 7, 1)
 DIVIDED_ONLY_FROM = date(2024, 10, 1)
@@ -90,6 +91,8 @@ SIX_DECIMALS = 10**6
 # Gaps with more layouts than this are searched one Ex-Date's choice at a time.
 EXHAUSTIVE = 64
 _AMOUNT = re.compile(r"R[se]\.?\s*-?\s*(\d+(?:\.\d+)?)")
+# NSE's subjects misspell it: "Divdend" (KOTAKBANK 2016), "Dividned" (NESTLEIND 2020),
+# and "Divided" (ABBOTINDIA 2016, NELCAST 2015), always with the dividend's amount.
 _DIVIDEND_WORD = re.compile(r"div(?:idend|dend|ided|idned)", re.IGNORECASE)
 
 Class = Literal["split", "dividend", "fitted"]
@@ -215,7 +218,11 @@ class BoundedSearch:
     """A gap with more layouts than ``EXHAUSTIVE``, searched one Ex-Date's choice at a
     time rather than every layout: where its stretch does not stand, a layout that would
     have let it may have been missed. Where it stands, its closes are reproduced all the
-    same, though another layout might reproduce more."""
+    same, though another layout might reproduce more. Whether the bound changed a result
+    is not known without the full search, which is why each is reported.
+
+    The search for an ambiguous fit's Ex-Dates covers the same gap, so where it is
+    bounded, the gap's own search was too, and is reported here, not standing."""
 
     # The stretch the gap's stages were sought for, as its first and last day.
     stretch: tuple[date, date]
@@ -427,11 +434,9 @@ class _Gap:
                 found.append((divided, m / divisor, Fraction(0)))
                 if self.ex_date < DIVIDED_ONLY_FROM:
                     found.append((subtracted, m, self.dividend * m))
-        if (
-            "dividend" in self.classes
-            and "split" not in self.classes
-            and self.ex_date >= DIVIDENDS_FROM
-        ):
+        # Only rounding again needs no amount: any dividend from 2023-07-01 can carry
+        # it, though not beside a split, whose own stage rounds the history anyway.
+        if "dividend" in self.classes and not self.has_split and self.ex_date >= DIVIDENDS_FROM:
             found.append(("reround", Fraction(1), Fraction(0)))
         return list(dict.fromkeys(found))
 
@@ -451,10 +456,10 @@ class _Gap:
         return found
 
 
-# One entry of a gap's layout, in Ex-Date order: a computed stage (its Ex-Date and
-# form, multiplier, subtracted) or the fitted stage (its Ex-Date).
 # A computed stage's (form, multiplier, subtracted).
 _Form = tuple[Form, Fraction, Fraction]
+# One entry of a gap's layout, in Ex-Date order: a computed stage (its Ex-Date and
+# form, multiplier, subtracted) or the fitted stage (its Ex-Date).
 _Computed = tuple[Literal["computed"], date, Form, Fraction, Fraction]
 _Fit = tuple[Literal["fitted"], date]
 _Entry = _Computed | _Fit
@@ -463,8 +468,8 @@ _Entry = _Computed | _Fit
 @dataclass
 class _Option:
     layout: tuple[_Entry, ...]
-    # The divisors of the gap's computed-kind Ex-Dates left without a stage.
-    unstaged: tuple[tuple[Fraction, ...], ...]
+    # What each computed-kind Ex-Date of the gap would give: what a fitted ratio may not absorb.
+    absorbable: tuple[tuple[Fraction, ...], ...]
     stages: list[Stage]
     off: list[int]
     key: tuple[object, ...]
@@ -473,7 +478,7 @@ class _Option:
 @dataclass
 class _Basis:
     layout: tuple[_Entry, ...]
-    unstaged: tuple[tuple[Fraction, ...], ...]
+    absorbable: tuple[tuple[Fraction, ...], ...]
     stretches: list[int] = field(default_factory=list)
 
     @property
@@ -535,7 +540,7 @@ class _Replayer:
                         chain[: basis.size] = group
                         joined = True
             elif len(_off([], points, cap)) <= cap:
-                bases.append(_Basis(layout=(), unstaged=()))
+                bases.append(_Basis(layout=(), absorbable=()))
                 joined = True
             if not joined:
                 ex_dates = self.ex_dates[k:newer]
@@ -543,7 +548,7 @@ class _Replayer:
                 best = self._options(chain, points, ex_dates, cap, span) if ex_dates else None
                 if best is not None:
                     chain[0:0] = best.stages
-                    bases.append(_Basis(best.layout, best.unstaged))
+                    bases.append(_Basis(best.layout, best.absorbable))
                     joined = True
             if joined:
                 bases[-1].stretches.append(k)
@@ -657,6 +662,9 @@ class _Replayer:
         its computed stages, or none where the rules allow none (a split always has one),
         and no fitted stage or one at an Ex-Date of ``fit_at``, in Ex-Date order."""
         computed = [g for g in gaps if g.computed_kind]
+        # What each split, bonus, consolidation and dividend of the gap would give,
+        # staged or not: a fitted ratio repeating a staged one would apply it twice.
+        absorbable = tuple(values for g in computed if (values := tuple(g.values())))
         choices: list[list[tuple[_Gap, _Form | None]]] = []
         for g in computed:
             forms = g.forms()
@@ -674,8 +682,7 @@ class _Replayer:
             layout.sort(key=lambda e: (e[1], e[0] == "fitted"))
             if not layout:
                 return []
-            unstaged = tuple(tuple(g.values()) for g, f in combo if f is None and g.values())
-            return self._score(tuple(layout), unstaged, outer, points, cap, quick=quick)
+            return self._score(tuple(layout), absorbable, outer, points, cap, quick=quick)
 
         combos_count = math.prod(len(c) for c in choices)
         found: list[_Option] = []
@@ -708,7 +715,7 @@ class _Replayer:
     def _score(
         self,
         layout: tuple[_Entry, ...],
-        unstaged: tuple[tuple[Fraction, ...], ...],
+        absorbable: tuple[tuple[Fraction, ...], ...],
         outer: list[Stage],
         points: list[Point],
         cap: int,
@@ -720,14 +727,14 @@ class _Replayer:
         fitted = any(e[0] == "fitted" for e in layout)
         found = []
         for computed_tick, fitted_tick, ties in _configurations(layout, quick=quick):
-            stages = _stages(layout, outer, points, unstaged, computed_tick, fitted_tick, ties)
+            stages = _stages(layout, outer, points, absorbable, computed_tick, fitted_tick, ties)
             if stages is None:
                 continue
             off = _off([*stages, *outer], points, cap)
             if len(off) > cap:
                 continue
             key = (len(off), fitted, len(layout), -computed_tick, -fitted_tick, TIES.index(ties))
-            found.append(_Option(layout, unstaged, stages, off, key))
+            found.append(_Option(layout, absorbable, stages, off, key))
         return found
 
     def _rechoose(
@@ -740,7 +747,7 @@ class _Replayer:
         best: tuple[tuple[object, ...], list[Stage]] | None = None
         for computed_tick, fitted_tick, ties in _configurations(basis.layout):
             stages = _stages(
-                basis.layout, outer, own, basis.unstaged, computed_tick, fitted_tick, ties
+                basis.layout, outer, own, basis.absorbable, computed_tick, fitted_tick, ties
             )
             if stages is None:
                 continue
@@ -775,13 +782,13 @@ def _stages(
     layout: tuple[_Entry, ...],
     outer: list[Stage],
     points: list[Point],
-    unstaged: tuple[tuple[Fraction, ...], ...],
+    absorbable: tuple[tuple[Fraction, ...], ...],
     computed_tick: Fraction,
     fitted_tick: Fraction,
     ties: Ties,
 ) -> list[Stage] | None:
     """A layout's stages, innermost first, its fitted divisor read with the computed
-    stages in place; None where none can be read or it absorbs an unstaged action."""
+    stages in place; None where none can be read or it absorbs an action of its gap."""
     stages: list[Stage | None] = []
     fit_at = None
     for k, entry in enumerate(layout):
@@ -797,17 +804,17 @@ def _stages(
     outer_group = [*[_of(s) for s in stages[fit_at + 1 :]], *outer]
     own = [(_through(inner, x), y) for x, y in points]
     divisor = _fitted_divisor(outer_group, own, fitted_tick)
-    if divisor is None or _absorbs(divisor, unstaged):
+    if divisor is None or _absorbs(divisor, absorbable):
         return None
     stages[fit_at] = Stage(layout[fit_at][1], "fitted", 1 / divisor, Fraction(0), fitted_tick, ties)
     return [_of(s) for s in stages]
 
 
-def _absorbs(divisor: Fraction, unstaged: tuple[tuple[Fraction, ...], ...]) -> bool:
-    """Whether ``divisor`` is within ``NEAR`` of a value one unstaged Ex-Date would give,
+def _absorbs(divisor: Fraction, absorbable: tuple[tuple[Fraction, ...], ...]) -> bool:
+    """Whether ``divisor`` is within ``NEAR`` of a value one of the gap's Ex-Dates would give,
     or a product of one value from each of several."""
     products = [Fraction(1)]
-    for values in unstaged:
+    for values in absorbable:
         products += [p * v for p in products for v in values]
     return any(abs(divisor / p - 1) <= NEAR for p in products[1:])
 

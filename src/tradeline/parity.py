@@ -35,10 +35,11 @@ ADR 0018 as amended by #62): Kite adjusts its history one stage at a time, each
 Ex-Date's stage dividing or subtracting from the history it has already rounded
 and rounding again to its own tick. The stages are found once for each
 Instrument and series that has a close mismatch, over all of its compared bars
-in the range. Each Kite Basis they form that adjusts (one of Kite's raw
-closes has no stages) is reported with its stages, the count of closes it
-explains, and the closes it leaves unexplained; closes explained through a fitted
-stage, one whose ratio is read from Kite's closes, are counted apart. Every
+in the range. Each Kite Basis they form that adjusts is reported with its
+stages, the count of closes it explains, and the closes it leaves unexplained,
+and so is one of Kite's raw closes (no stages) wherever it leaves a close
+unexplained. Closes explained through a fitted stage, one whose ratio is read
+from Kite's closes, are counted apart. Every
 stretch left unexplained because a fitted stage could sit at more than one
 Ex-Date, and every gap searched within a bound, is reported too. The summary
 lists every Kite Basis; the text, the first ``MAX_LISTED``. Only a mismatch is
@@ -104,6 +105,7 @@ from tradeline import queries
 from tradeline.config import Config
 from tradeline.instruments import LISTING_SERIES
 from tradeline.kite_adjustment import (
+    MAX_OFF,
     AmbiguousFit,
     BoundedSearch,
     Close,
@@ -200,6 +202,28 @@ class PreListingCandle:
 
 
 @dataclass(frozen=True)
+class StretchNotStanding:
+    """A replayed stretch with more than ``kite_adjustment.MAX_OFF`` of its closes off
+    every replay tried: none of its closes is explained, and it adds no stage."""
+
+    instrument: str
+    series: str
+    start: date
+    end: date
+    # The day of each of its close mismatches that no Parity Reason explains.
+    unexplained_days: tuple[date, ...]
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "instrument": self.instrument,
+            "series": self.series,
+            "start": self.start.isoformat(),
+            "end": self.end.isoformat(),
+            "unexplained_days": [d.isoformat() for d in self.unexplained_days],
+        }
+
+
+@dataclass(frozen=True)
 class ReplayedBasis:
     """A Kite Basis of one Instrument and series, with the close mismatches in its
     standing stretches it explains and leaves unexplained."""
@@ -241,10 +265,15 @@ class ReplayedBasis:
         }
 
     def text(self) -> str:
-        stages = ", ".join(f"{s.ex_date} {s.form} {_does(s)}" for s in self.basis.stages)
+        stages = (
+            ", ".join(f"{s.ex_date} {s.form} {_does(s)}" for s in self.basis.stages)
+            or "Kite's raw closes"
+        )
+        # Kite's raw closes explain nothing however many bars they span.
+        too_few = bool(self.basis.stages) and not self.basis.explains
         return (
             f"{self.instrument} {self.series} {self.basis.start} to {self.basis.end},"
-            f" {self.basis.bars} bars{'' if self.basis.explains else ' (too few to explain)'}:"
+            f" {self.basis.bars} bars{' (too few to explain)' if too_few else ''}:"
             f" {stages}; {self.explained} explained, {self.unexplained} unexplained"
         )
 
@@ -271,8 +300,11 @@ class ParityReport:
     candle_disagreements: tuple[queries.CandleDisagreement, ...] = ()
     # Candles from before their Instrument's Listing Age starts; not differences.
     pre_listing_candles: tuple[PreListingCandle, ...] = ()
-    # Each Kite Basis with stages, of every Instrument and series with a close mismatch.
+    # Each Kite Basis of every Instrument and series with a close mismatch: each with
+    # stages, and each of Kite's raw closes that leaves a mismatch unexplained.
     kite_bases: tuple[ReplayedBasis, ...] = ()
+    # Each replayed stretch that does not stand, with its unexplained close mismatches.
+    not_standing: tuple[StretchNotStanding, ...] = ()
     # Each replayed stretch left standing nowhere because a fitted stage's Ex-Date is
     # ambiguous, and each gap searched within a bound, with its Instrument and series.
     ambiguous_fits: tuple[tuple[str, str, AmbiguousFit], ...] = ()
@@ -351,6 +383,7 @@ class ParityReport:
             "kites_adjustment_through_fitted": self.kites_adjustment_through_fitted,
             # Every one: the summary is where a Kite Basis the text leaves out is read.
             "listed_kite_bases": [b.summary() for b in self.kite_bases],
+            "stretches_not_standing": [s.summary() for s in self.not_standing],
             "ambiguous_fits": [
                 {
                     "instrument": instrument,
@@ -433,6 +466,24 @@ class ParityReport:
                 lines.append(
                     f"... {count - MAX_LISTED} more not listed;"
                     " the JSON report lists every Kite Basis"
+                )
+        if self.not_standing:
+            count = len(self.not_standing)
+            lines.append("")
+            lines.append(
+                f"{count} stretch{'es' if count != 1 else ''} not standing (more than"
+                f" {_number(MAX_OFF * 100)} percent of its closes off every replay tried;"
+                " none of its closes is explained):"
+            )
+            lines.extend(
+                f"  {s.instrument} {s.series} {s.start} to {s.end}:"
+                f" {len(s.unexplained_days)} unexplained"
+                for s in self.not_standing[:MAX_LISTED]
+            )
+            if count > MAX_LISTED:
+                lines.append(
+                    f"... {count - MAX_LISTED} more not listed;"
+                    " the JSON report lists every stretch not standing"
                 )
         if self.ambiguous_fits:
             count = len(self.ambiguous_fits)
@@ -604,29 +655,55 @@ class _KitesAdjustment:
             self.replays[key] = replay(self._closes[key], actions, nse_closes=self._nse[key])
         return row.trade_date in self.replays[key].explained
 
-    def bases(self, mismatches: Sequence[tuple[_Row, Reason | None]]) -> tuple[ReplayedBasis, ...]:
-        """Each replayed Kite Basis with stages, with the close mismatches in it by reason."""
-        found = []
+    def findings(self, mismatches: Sequence[tuple[_Row, Reason | None]]) -> _Findings:
+        """What the replays found: each Kite Basis with
+        stages and each stretch not standing, with the close mismatches in it by
+        reason, and each ambiguous fit and bounded search."""
+        mismatches_by_key: defaultdict[tuple[str, str], list[tuple[date, Reason | None]]] = (
+            defaultdict(list)
+        )
+        for row, reason in mismatches:
+            mismatches_by_key[(row.instrument, row.series)].append((row.trade_date, reason))
+        bases, not_standing, ambiguous, bounded = [], [], [], []
         for (instrument, series), result in sorted(self.replays.items()):
+            days = mismatches_by_key[(instrument, series)]
             for basis in result.bases:
-                if not basis.stages:
+                inside = [(d, r) for d, r in days if basis.holds(d)]
+                # Kite's raw closes adjust nothing; listed only for a close they leave off.
+                if not basis.stages and all(r is not None for _, r in inside):
                     continue
-                held = [
-                    (row.trade_date, reason)
-                    for row, reason in mismatches
-                    if (row.instrument, row.series) == (instrument, series)
-                    and basis.holds(row.trade_date)
-                ]
-                found.append(
+                bases.append(
                     ReplayedBasis(
                         instrument=instrument,
                         series=series,
                         basis=basis,
-                        explained=sum(1 for _, r in held if r is Reason.KITES_ADJUSTMENT),
-                        unexplained_days=tuple(sorted(d for d, r in held if r is None)),
+                        explained=sum(1 for _, r in inside if r is Reason.KITES_ADJUSTMENT),
+                        unexplained_days=tuple(sorted(d for d, r in inside if r is None)),
                     )
                 )
-        return tuple(found)
+            not_standing += [
+                StretchNotStanding(
+                    instrument,
+                    series,
+                    start,
+                    end,
+                    tuple(sorted(d for d, r in days if start <= d <= end and r is None)),
+                )
+                for start, end in result.not_standing
+            ]
+            ambiguous += [(instrument, series, a) for a in result.ambiguous_fits]
+            bounded += [(instrument, series, b) for b in result.bounded_searches]
+        return _Findings(tuple(bases), tuple(not_standing), tuple(ambiguous), tuple(bounded))
+
+
+@dataclass(frozen=True)
+class _Findings:
+    """What Kite's Adjustment's replays found, for ``ParityReport``."""
+
+    kite_bases: tuple[ReplayedBasis, ...]
+    not_standing: tuple[StretchNotStanding, ...]
+    ambiguous_fits: tuple[tuple[str, str, AmbiguousFit], ...]
+    bounded_searches: tuple[tuple[str, str, BoundedSearch], ...]
 
 
 def _listed_series(
@@ -729,6 +806,9 @@ def parity(
 
     mismatches = _close_mismatches(conn, rows, tolerance)
     close = classified(mismatches)
+    replayed = kites_adjustment.findings(
+        [(u.row, d.reason) for u, d in zip(mismatches, close, strict=True)]
+    )
 
     return ParityReport(
         start=start,
@@ -743,19 +823,10 @@ def parity(
         },
         candle_disagreements=_candle_disagreements(conn, rows, start, end),
         pre_listing_candles=pre_listing,
-        kite_bases=kites_adjustment.bases(
-            [(u.row, d.reason) for u, d in zip(mismatches, close, strict=True)]
-        ),
-        ambiguous_fits=tuple(
-            (instrument, series, a)
-            for (instrument, series), r in sorted(kites_adjustment.replays.items())
-            for a in r.ambiguous_fits
-        ),
-        bounded_searches=tuple(
-            (instrument, series, b)
-            for (instrument, series), r in sorted(kites_adjustment.replays.items())
-            for b in r.bounded_searches
-        ),
+        kite_bases=replayed.kite_bases,
+        not_standing=replayed.not_standing,
+        ambiguous_fits=replayed.ambiguous_fits,
+        bounded_searches=replayed.bounded_searches,
     )
 
 

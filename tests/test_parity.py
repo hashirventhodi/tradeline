@@ -707,6 +707,7 @@ def test_the_command_exits_zero_on_clean_fixtures_with_a_summary_and_a_table(
         "kite_bases": 0,
         "kites_adjustment_through_fitted": 0,
         "listed_kite_bases": [],
+        "stretches_not_standing": [],
         "ambiguous_fits": [],
         "bounded_searches": [],
         "candle_disagreements": 0,
@@ -874,3 +875,72 @@ def test_ambiguous_fits_and_bounded_searches_are_reported_with_their_instrument(
         "1 bounded search (more layouts than are tried one by one):\n"
         "  NMDC EQ 2024-07-01 to 2024-07-31: 256 layouts over 1 Ex-Date, does not stand"
     ) in text
+
+
+def test_a_stretch_that_does_not_stand_is_reported_with_its_unexplained_days(
+    fresh_database_url: str,
+) -> None:
+    # Three of the 34 closes before RELIANCE's dividend of 19 August moved ₹5 off the
+    # replay, where a stretch of 34 may have two.
+    url = fresh_database_url
+    load(
+        url,
+        then(
+            kite_from_nse(url, RELIANCE_TOKEN, "RELIANCE", halved_to_five_rupees),
+            then(
+                shift_close(RELIANCE_TOKEN, "2024-07-01", "5"),
+                then(
+                    shift_close(RELIANCE_TOKEN, "2024-07-10", "5"),
+                    shift_close(RELIANCE_TOKEN, "2024-07-22", "5"),
+                ),
+            ),
+        ),
+    )
+
+    report = run(url)
+
+    ((stretch),) = report.not_standing
+    assert (stretch.instrument, stretch.series) == ("RELIANCE", "EQ")
+    assert (stretch.start, stretch.end) == (START, date(2024, 8, 16))
+    unexplained = {d.trade_date for d in report.unexplained if d.symbol == "RELIANCE"}
+    assert set(stretch.unexplained_days) == unexplained - {
+        d for b in report.kite_bases for d in b.unexplained_days
+    }
+    assert stretch.unexplained_days
+    assert report.summary()["stretches_not_standing"] == [
+        {
+            "instrument": "RELIANCE",
+            "series": "EQ",
+            "start": "2024-07-01",
+            "end": "2024-08-16",
+            "unexplained_days": [d.isoformat() for d in stretch.unexplained_days],
+        }
+    ]
+    assert (
+        "1 stretch not standing (more than 5 percent of its closes off every replay"
+        " tried; none of its closes is explained):\n"
+        f"  RELIANCE EQ 2024-07-01 to 2024-08-16: {len(stretch.unexplained_days)} unexplained"
+    ) in report.text()
+
+
+def test_a_basis_of_kites_raw_closes_is_reported_where_it_leaves_a_close_unexplained(
+    fresh_database_url: str,
+) -> None:
+    # RELIANCE's Kite closes as NSE's own, one moved Rs 50: the stretch stands with no
+    # stage, and that close, off the replay, is the basis's to list.
+    url = fresh_database_url
+    load(
+        url,
+        then(
+            kite_from_nse(url, RELIANCE_TOKEN, "RELIANCE", lambda nse: nse),
+            shift_close(RELIANCE_TOKEN, "2024-07-01", "50"),
+        ),
+    )
+
+    report = run(url)
+
+    ((off),) = report.unexplained
+    ((replayed),) = report.kite_bases
+    assert replayed.basis.stages == ()
+    assert replayed.unexplained_days == (off.trade_date,)
+    assert "RELIANCE EQ 2024-07-01 to 2024-08-30, 43 bars: Kite's raw closes" in report.text()

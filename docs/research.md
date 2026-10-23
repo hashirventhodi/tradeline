@@ -1566,6 +1566,8 @@ At each Ex-Date Kite adjusts for, it rewrites every older close as round(close /
 | Code | `prototype/kite-adjustment-chain` at 599126f (`replay_run.py`'s `final_strict` rule set, `score.py`) |
 | Unexplained | **841 (0.0834 percent)**: 833 closes and the 8 missing days |
 
+The 745 unexplained (0.0739 percent) first posted on #62 came from the prototype's earlier strict run, before these rules were settled. That count included closes in a Kite Basis of any size. Requiring 20 bars raises it to 842 (the prototype's `report.py` against `score.py` on the same replay), and the amended rules give 841.
+
 ```sh
 O=prototypes/kite_adjustment_chain/out; mkdir -p $O   # git-ignored: the pickles hold Kite's closes
 uv run --env-file .env python prototypes/kite_adjustment_chain/extract_all.py $O/all.pkl   # read-only, about 40 s
@@ -1617,9 +1619,10 @@ These are the results of `tradeline parity` itself, not the prototype. Its one r
 | Extra | 14,033, all series moves |
 | Close | 29,670: 28,837 Kite's Adjustment, 833 unexplained |
 | Through a fitted stage | **2,848** of the explained closes (0.28 percent of rows) |
-| Kite Bases | 106 with stages, every one in the JSON summary (the text lists 100) |
+| Kite Bases | 111 in the JSON summary (the text lists 100): 106 with stages, and 5 of Kite's raw closes that leave a close unexplained |
+| Where the 833 unexplained closes are | 783 in 45 stretches that do not stand (NMDC 546, BAJFINANCE 215, SHANKARA 20, HINDZINC 1, MAJESCO 1), 37 in Kite Bases with stages, 13 in Kite's raw closes: the first days after listing of DMART and HUDCO (3 each), SBILIFE and TEJASNET (2 each), and CROMPGREAV's 8 to 10 March 2017 (3), the CGPOWER closes noted above under that key |
 | Ambiguous fits, bounded searches | 0 and 0 |
-| Time | 9 min 29 s on the development machine (437 s of CPU, NMDC alone about 420 s) |
+| Time | 10 min 53 s on the development machine (524 s of CPU, NMDC alone most of it) |
 
 The count matches the prototype's, but that alone does not show each choice below is right.
 
@@ -1629,6 +1632,8 @@ The count matches the prototype's, but that alone does not show each choice belo
 - **A dividend's P** is NSE's close on the last day before the Ex-Date that NSE has one, whether or not Kite has a candle that day. The prototype took the last day with both closes. This is an inferred rule: it reproduces Kite's closes exactly (ITC's 343 among them), but Kite publishes no reference-price convention.
 - **A fitted stage is placed only where one Ex-Date of its gap could hold it.** The prototype put the ratio at the latest of several. Where several could hold it and one would let the stretch stand, nothing in Kite's closes says which action the ratio belongs to. So none is placed, the stretch's closes stay unexplained, and the report lists the case as an ambiguous fit. This run has none: every fitted stage behind the 2,848 closes sits in a gap with one fittable Ex-Date.
 - **A gap with more than 64 layouts** is still searched one Ex-Date's choice at a time. The report now lists each such search and whether its stretch stood. This run has none: every mixed gap among the replayed Instruments has 64 layouts or fewer.
+- **A fitted ratio is refused where it repeats any split, bonus, consolidation or dividend of its gap, staged or not.** The prototype compared it only with the gap's actions left without a stage, so a fitted ratio could apply a staged action a second time.
+- **The report gives every unexplained close mismatch its place.** Each sits in a stretch that does not stand, in a Kite Basis with stages, or in a basis of Kite's raw closes, and each of the three is listed with its days.
 
 **A known limit kept.** A group of stages found for one gap shares one tick among its computed stages, and one tie rule among all of them. ADR 0018 gives each stage its own. No group of more than one stage stands in any replayed Instrument of this run, so the choice changes no close here. A tick and tie rule per stage would multiply the search by 18 for each stage after the first. A test pins the limit: a bonus rounded to the rupee followed by a dividend subtracted to the paisa, in one gap, is not reproduced.
 

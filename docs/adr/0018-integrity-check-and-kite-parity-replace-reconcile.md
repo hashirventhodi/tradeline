@@ -55,6 +55,7 @@ The 0.1 percent gate is a property of each run, never of this rule. On the #59 d
 
 - Closes today's rules explain and the replay does not become unexplained: BAJFINANCE's history, which lands on ₹0.50 some days and ₹1 on others, and NMDC's before 2024-02-27, where Kite holds different closes. Closes in an Instrument's first weeks after listing (DMART, SBILIFE, SHANKARA and others) stay unexplained.
 - `additive_min_bars` gives way to the 20-bar minimum and the 5 percent limit.
+- The implementation (#63) falls short of this text in two places, each recorded in docs/research.md. First, the stages found together for one gap share one tick among their computed stages, and one tie rule among them all, where this amendment gives each stage its own. Second, a gap with no rights issue, demerger or other such action gets at most one computed stage.
 
 ### Considered options (#62)
 

@@ -8,13 +8,14 @@ interpreted from their NSE subjects as ingest does.
 
 from collections.abc import Callable, Sequence
 from datetime import date, timedelta
-from decimal import ROUND_HALF_DOWN, ROUND_HALF_EVEN, Decimal
+from decimal import ROUND_HALF_DOWN, ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal
 from fractions import Fraction
 
 from tradeline.adjust import CorporateAction, interpret
 from tradeline.kite_adjustment import Close, Replay, Stage, replay
 
-FIVE_PAISA, RUPEE, FIVE_RUPEES = Decimal("0.05"), Decimal(1), Decimal(5)
+PAISA, FIVE_PAISA = Decimal("0.01"), Decimal("0.05")
+RUPEE, FIVE_RUPEES = Decimal(1), Decimal(5)
 
 
 def action(ex_date: str, subject: str) -> CorporateAction:
@@ -213,7 +214,7 @@ def test_a_bonus_of_one_for_three_can_divide_by_its_ratio_rounded_to_two_decimal
     assert set(result.explained) == set(days)
 
 
-def test_each_stage_has_its_own_tie_rule() -> None:
+def test_a_stage_rounds_an_exact_half_tick_by_the_tie_rule_its_closes_show() -> None:
     # NSE's closes on odd multiples of 5 paisa halve to exact half ticks, rounded down.
     days = weekdays("2024-07-01", 25)
     closes = compared(
@@ -385,7 +386,7 @@ def test_a_gap_of_more_layouts_than_are_tried_one_by_one_is_reported_as_a_bounde
 
 
 def test_a_group_whose_computed_stages_need_different_ticks_is_not_reproduced() -> None:
-    # A known limit (ADR 0018, #62): a group's computed stages share one tick. Here the
+    # A known limit (docs/research.md, #62): a group's computed stages share one tick. The
     # bonus of 1 August rounds to the rupee and the dividend of 2 August to the paisa,
     # with a rights issue on 5 August making the three one gap.
     days = [d for d in weekdays("2024-07-01", 48) if not date(2024, 8, 1) <= d < date(2024, 8, 6)]
@@ -405,3 +406,87 @@ def test_a_group_whose_computed_stages_need_different_ticks_is_not_reproduced() 
 
     assert result.explained == {}
     assert result.not_standing == ((days[0], days[split_at(days, "2024-08-01") - 1]),)
+
+
+def test_a_fitted_ratio_repeating_a_staged_split_of_its_gap_is_refused() -> None:
+    # Kite's closes halved twice: the bonus of 1 August staged, and a rights issue on
+    # 5 August whose fitted ratio would be the bonus's 2 again, which absorbs it.
+    days = [d for d in weekdays("2024-07-01", 47) if not date(2024, 8, 1) <= d < date(2024, 8, 5)]
+
+    def kite(d: date, n: Decimal) -> Decimal:
+        if d < date(2024, 8, 1):
+            return to_tick(to_tick(n / 2, FIVE_PAISA) / 2, FIVE_PAISA)
+        return n
+
+    actions = [action("2024-08-01", "Bonus 1:1"), action("2024-08-05", RIGHTS)]
+
+    result = replayed(compared(days, prices(len(days)), kite), actions)
+
+    assert result.explained == {}
+    assert result.not_standing == ((days[0], days[split_at(days, "2024-08-01") - 1]),)
+
+
+def test_a_bounded_search_whose_stretch_does_not_stand_is_reported_as_such() -> None:
+    # The same gap of 256 layouts, but Kite's older closes are Rs 30 off on odd days and
+    # Rs 31 off on even ones: no layout reproduces them, and the bound may have hidden one.
+    gap = ["2024-08-01", "2024-08-02", "2024-08-05", "2024-08-06"]
+    days = [d for d in weekdays("2024-07-01", 49) if not date(2024, 8, 1) <= d < date(2024, 8, 8)]
+
+    def kite(d: date, n: Decimal) -> Decimal:
+        return to_tick(n - 30 - d.day % 2, FIVE_PAISA) if d < date(2024, 8, 5) else n
+
+    actions = [
+        action(gap[0], "Dividend - Rs 1 Per Share"),
+        action(gap[1], "Dividend - Rs 1.50 Per Share"),
+        action(gap[2], "Dividend - Rs 30 Per Share"),
+        action(gap[3], "Dividend - Rs 2 Per Share"),
+        action("2024-08-07", RIGHTS),
+    ]
+
+    result = replayed(compared(days, prices(len(days)), kite), actions)
+
+    ((bounded),) = result.bounded_searches
+    assert (bounded.layouts, bounded.stands) == (256, False)
+    assert result.explained == {}
+    assert result.not_standing == ((days[0], days[split_at(days, "2024-08-01") - 1]),)
+
+
+def test_stages_of_different_kite_bases_round_ties_by_different_rules() -> None:
+    # A bonus on 19 August rounding to 5 paisa, ties up; then one on 28 October rounding
+    # to the paisa, ties down. Halving a 5 paisa price lands on 2.5 paisa, so each
+    # stage meets exact half ticks, and the paisa keeps the earlier stage's rounding.
+    days = weekdays("2024-07-15", 45)
+
+    def kite(d: date, n: Decimal) -> Decimal:
+        if d < date(2024, 8, 19):
+            n = to_tick(n / 2, FIVE_PAISA, rounding=ROUND_HALF_UP)
+        return to_tick(n / 2, PAISA, rounding=ROUND_HALF_DOWN)
+
+    actions = [action("2024-08-19", "Bonus 1:1"), action("2024-10-28", "Bonus 1:1")]
+
+    result = replayed(compared(days, prices(45), kite), actions)
+
+    newer, older = result.bases
+    assert [(s.ex_date, s.ties) for s in newer.stages] == [(date(2024, 10, 28), "half_down")]
+    assert [(s.ex_date, s.ties) for s in older.stages] == [(date(2024, 8, 19), "half_up")]
+    assert set(result.explained) == set(days)
+
+
+def test_a_subject_that_misspells_dividend_as_divided_is_a_dividend() -> None:
+    # NSE's own spelling (ABBOTINDIA 2016, NELCAST 2015), filed as "other".
+    days = weekdays("2024-09-23", 40)
+    nse = prices(40, start="1850.05", step="9.10")
+    previous = nse[split_at(days, "2024-10-29") - 1]
+    divisor = (previous / (previous - 35)).quantize(Decimal("0.000001"))
+
+    def kite(d: date, n: Decimal) -> Decimal:
+        return to_tick(n / divisor, FIVE_PAISA) if d < date(2024, 10, 29) else n
+
+    subject = "Annual General Meeting/Divided - Rs 35/- Per Share"
+    assert interpret(subject)[0] == "other"
+
+    result = replayed(compared(days, nse, kite), [action("2024-10-29", subject)])
+
+    _, older = result.bases
+    ((stage),) = older.stages
+    assert (stage.form, stage.divisor) == ("dividend_ratio", Fraction(divisor))
