@@ -15,9 +15,11 @@ with one bar dropped or one close changed on its way to the ingest
 
 import json
 import shutil
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Decimal
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
@@ -221,8 +223,7 @@ def test_with_no_parity_reason_yet_every_difference_is_unexplained_and_counted_b
         "extra": {"total": 0, "series_move": 0, "unexplained": 0},
         "close": {
             "total": 1,
-            "additive_adjustment": 0,
-            "coarse_rounding": 0,
+            "kites_adjustment": 0,
             "unexplained": 1,
         },
     }
@@ -230,8 +231,7 @@ def test_with_no_parity_reason_yet_every_difference_is_unexplained_and_counted_b
         "series_move": 0,
         "special_session": 0,
         "not_fetched": 0,
-        "additive_adjustment": 0,
-        "coarse_rounding": 0,
+        "kites_adjustment": 0,
         "unexplained": 2,
     }
     assert [(d["kind"], d["reason"]) for d in summary["listed_unexplained"]] == [
@@ -280,8 +280,7 @@ def test_a_candle_on_a_day_nse_lists_the_instrument_in_no_series_stays_unexplain
         "series_move": 0,
         "special_session": 0,
         "not_fetched": 0,
-        "additive_adjustment": 0,
-        "coarse_rounding": 0,
+        "kites_adjustment": 0,
         "unexplained": 1,
     }
     assert not report.passed
@@ -319,14 +318,13 @@ def test_a_bar_dropped_on_a_special_session_is_explained_and_the_verdict_ignores
         "series_move": 0,
         "special_session": 1,
         "not_fetched": 0,
-        "additive_adjustment": 0,
-        "coarse_rounding": 0,
+        "kites_adjustment": 0,
         "unexplained": 0,
     }
     assert summary["listed_unexplained"] == []
     assert (
-        "by reason: series_move 0, special_session 1, not_fetched 0, additive_adjustment 0,"
-        " coarse_rounding 0, unexplained 0"
+        "by reason: series_move 0, special_session 1, not_fetched 0, kites_adjustment 0,"
+        " unexplained 0"
     ) in report.text()
 
 
@@ -384,13 +382,12 @@ def test_nse_rows_outside_every_requested_range_are_not_fetched_while_a_dropped_
         "series_move": 0,
         "special_session": 0,
         "not_fetched": 21 * EQ_SYMBOLS,
-        "additive_adjustment": 0,
-        "coarse_rounding": 0,
+        "kites_adjustment": 0,
         "unexplained": 1,
     }
     assert (
-        "by reason: series_move 0, special_session 0, not_fetched 84, additive_adjustment 0,"
-        " coarse_rounding 0, unexplained 1" in report.text()
+        "by reason: series_move 0, special_session 0, not_fetched 84, kites_adjustment 0,"
+        " unexplained 1" in report.text()
     )
     # 85 missing of 172 rows would fail any threshold; the one unexplained passes 1 percent.
     assert run(fresh_database_url, replace(SETTINGS, max_unexplained_pct=1.0)).passed
@@ -413,8 +410,7 @@ def test_a_special_session_outside_every_requested_range_is_a_special_session(
         "series_move": 0,
         "special_session": EQ_SYMBOLS,
         "not_fetched": 20 * EQ_SYMBOLS,
-        "additive_adjustment": 0,
-        "coarse_rounding": 0,
+        "kites_adjustment": 0,
         "unexplained": 0,
     }
 
@@ -479,11 +475,12 @@ def test_a_stretch_whose_every_close_is_zero_has_no_factor_and_no_close_mismatch
 
 
 # INFY's Kite prices as a tenth less 50 rupees: Kite's close is a x NSE's - b with
-# a about 0.0979 and b 50, the recorded closes' own rounding shrunk below half a tick.
+# a about 0.0979 and b 50, which was #17's additive adjustment. No action of INFY's
+# subtracts 50 or divides by ten, so no stage of Kite's Adjustment reproduces it.
 ADDITIVE = affine_prices(INFY_TOKEN, times="0.1", minus="50")
 
 
-def test_a_stretch_whose_kite_closes_fit_a_times_nse_minus_b_is_an_additive_adjustment(
+def test_a_stretch_whose_kite_closes_fit_a_line_no_stage_gives_stays_unexplained(
     fresh_database_url: str,
 ) -> None:
     load(fresh_database_url, ADDITIVE)
@@ -493,53 +490,17 @@ def test_a_stretch_whose_kite_closes_fit_a_times_nse_minus_b_is_an_additive_adju
     # INFY's one stretch runs from 1 July to 30 August, 43 bars from about 1,590 to
     # 1,944: no one factor puts 105.71 for 1,590.8 and 140.25 for 1,943.7 within tolerance.
     assert len(report.close_mismatches) > 30
-    assert {(d.symbol, d.reason) for d in report.close_mismatches} == {
-        ("INFY", Reason.ADDITIVE_ADJUSTMENT)
-    }
-    assert report.unexplained == ()
-    assert report.by_reason["additive_adjustment"] == len(report.close_mismatches)
-    assert report.passed
-
-
-# Monday 1 to Thursday 4 July 2024: one stretch of four INFY bars.
-FOUR_START, FOUR_END = date(2024, 7, 1), date(2024, 7, 4)
-
-
-def run_four(url: str, settings: Config.Parity = SETTINGS) -> ParityReport:
-    with app_connection(url) as conn:
-        return parity(conn, settings, start=FOUR_START, end=FOUR_END, symbols=["INFY"])
-
-
-def test_the_same_shift_on_a_stretch_of_four_bars_stays_unexplained(
-    fresh_database_url: str,
-) -> None:
-    load(fresh_database_url, ADDITIVE)
-
-    report = run_four(fresh_database_url)
-
-    assert report.rows == 4
-    assert report.close_mismatches
-    assert [d.reason for d in report.unexplained] == [None] * len(report.close_mismatches)
+    assert {(d.symbol, d.reason) for d in report.close_mismatches} == {("INFY", None)}
+    assert report.kite_bases == ()
     assert not report.passed
 
 
-def test_the_minimum_stretch_for_an_additive_adjustment_is_a_setting(
-    fresh_database_url: str,
-) -> None:
-    load(fresh_database_url, ADDITIVE)
-
-    report = run_four(fresh_database_url, replace(SETTINGS, additive_min_bars=4))
-
-    assert report.close_mismatches
-    assert report.unexplained == ()
-
-
-# INFY's Kite prices as a tenth, rounded to the rupee: a whole-rupee history of prices
-# from about 156 to 194, where the 0.1 percent tolerance is under 20 paisa.
+# INFY's Kite prices as a tenth, rounded to the rupee: #17's coarse rounding. Its one
+# action, the dividend of 29 October 2024, can only divide or round again, not by ten.
 WHOLE_RUPEES = whole_rupees(INFY_TOKEN, times="0.1")
 
 
-def test_a_close_equal_to_the_expected_close_rounded_to_the_rupee_is_coarse_rounding(
+def test_a_close_rounded_to_the_rupee_that_no_stage_reproduces_stays_unexplained(
     fresh_database_url: str,
 ) -> None:
     load(fresh_database_url, WHOLE_RUPEES)
@@ -547,29 +508,135 @@ def test_a_close_equal_to_the_expected_close_rounded_to_the_rupee_is_coarse_roun
     report = run(fresh_database_url)
 
     assert len(report.close_mismatches) > 20
-    assert {(d.symbol, d.reason) for d in report.close_mismatches} == {
-        ("INFY", Reason.COARSE_ROUNDING)
-    }
-    assert all(d.candle_close == d.candle_close.to_integral() for d in report.close_mismatches)  # type: ignore[union-attr]
-    assert report.unexplained == ()
-    assert report.by_reason["coarse_rounding"] == len(report.close_mismatches)
-    assert report.by_reason["additive_adjustment"] == 0
-    assert report.passed
+    assert {d.reason for d in report.close_mismatches} == {None}
+    assert not report.passed
 
 
-def test_a_close_fifty_paisa_off_the_expected_close_rounded_to_the_rupee_is_unexplained(
+RELIANCE_TOKEN = "738561"
+
+
+def kite_from_nse(
+    url: str, token: str, symbol: str, kite: Callable[[Decimal], Decimal]
+) -> CandleEdit:
+    """Instrument ``token``'s every close set to ``kite`` of NSE's close that day, read
+    from the end-of-day rows ``load`` has ingested by the time Kite is asked."""
+
+    def edit(request: Request, candles: list[Candle]) -> list[Candle]:
+        if f"/historical/{token}/" not in request.url:
+            return candles
+        with app_connection(url) as conn:
+            nse: dict[date, Decimal] = dict(
+                conn.execute(
+                    "SELECT trade_date, close FROM eod_bhavcopy"
+                    " WHERE symbol = %s AND series = 'EQ'",
+                    (symbol,),
+                ).fetchall()
+            )
+        for candle in candles:
+            candle[4] = float(kite(nse[date.fromisoformat(candle[0][:10])]))
+            candle[2] = max(candle[2], candle[4])
+            candle[3] = min(candle[3], candle[4])
+        return candles
+
+    return edit
+
+
+def halved_to_five_rupees(nse: Decimal) -> Decimal:
+    """RELIANCE's 1:1 bonus of 28 October 2024, rounded to Kite's ₹5 tick, half to even."""
+    return (nse / 2 / 5).quantize(Decimal(1), ROUND_HALF_EVEN) * 5
+
+
+def test_closes_kites_adjustment_reproduces_are_explained_and_its_kite_basis_reported(
     fresh_database_url: str,
 ) -> None:
-    load(fresh_database_url, then(WHOLE_RUPEES, shift_close(INFY_TOKEN, "2024-07-01", "0.5")))
+    url = fresh_database_url
+    load(url, kite_from_nse(url, RELIANCE_TOKEN, "RELIANCE", halved_to_five_rupees))
 
-    report = run(fresh_database_url)
+    report = run(url)
+
+    # Up to ₹2.50 off on about 1,500, against a tolerance of about ₹1.53.
+    assert len(report.close_mismatches) > 5
+    assert {(d.symbol, d.reason) for d in report.close_mismatches} == {
+        ("RELIANCE", Reason.KITES_ADJUSTMENT)
+    }
+    assert report.passed
+    # Both stretches, either side of the Rs 10 dividend of 19 August, in one basis:
+    # the dividend, before 1 October 2024 and under 2 percent, is no stage.
+    ((replayed),) = report.kite_bases
+    assert (replayed.instrument, replayed.series) == ("RELIANCE", "EQ")
+    assert (replayed.basis.start, replayed.basis.end, replayed.basis.bars) == (START, END, 43)
+    ((stage),) = replayed.basis.stages
+    assert (stage.ex_date, stage.form, stage.divisor, stage.tick) == (
+        date(2024, 10, 28), "split", Fraction(2), Fraction(5),
+    )  # fmt: skip
+    assert (replayed.explained, replayed.unexplained) == (len(report.close_mismatches), 0)
+    assert report.summary()["listed_kite_bases"] == [
+        {
+            "instrument": "RELIANCE",
+            "series": "EQ",
+            "start": "2024-07-01",
+            "end": "2024-08-30",
+            "bars": 43,
+            "explains": True,
+            "stages": [
+                {
+                    "ex_date": "2024-10-28",
+                    "how": "computed",
+                    "form": "split",
+                    "divisor": "2",
+                    "subtracted": "0",
+                    "tick": "5",
+                    "ties": "half_even",
+                }
+            ],
+            "explained": len(report.close_mismatches),
+            "unexplained": 0,
+            "listed_unexplained_days": [],
+        }
+    ]
+    assert report.summary()["kites_adjustment_through_fitted"] == 0
+    assert (
+        "RELIANCE EQ 2024-07-01 to 2024-08-30, 43 bars: 2024-10-28 split divides by 2,"
+        f" rounds to 5 half_even; {len(report.close_mismatches)} explained, 0 unexplained"
+    ) in report.text()
+
+
+def test_a_close_off_the_replay_stays_unexplained_while_the_rest_are_explained(
+    fresh_database_url: str,
+) -> None:
+    url = fresh_database_url
+    load(
+        url,
+        then(
+            kite_from_nse(url, RELIANCE_TOKEN, "RELIANCE", halved_to_five_rupees),
+            shift_close(RELIANCE_TOKEN, "2024-07-01", "5"),
+        ),
+    )
+
+    report = run(url)
 
     ((off),) = report.unexplained
-    assert (off.kind, off.symbol, off.trade_date) == ("close", "INFY", date(2024, 7, 1))
-    # 1,557.1 a tenth is 155.71, rounded to 156 and moved to 156.5.
-    assert off.candle_close == Decimal("156.5")
-    assert {d.reason for d in report.close_mismatches if d is not off} == {Reason.COARSE_ROUNDING}
-    assert not report.passed
+    assert (off.symbol, off.trade_date) == ("RELIANCE", date(2024, 7, 1))
+    assert {d.reason for d in report.close_mismatches if d is not off} == {Reason.KITES_ADJUSTMENT}
+    ((replayed),) = report.kite_bases
+    assert replayed.unexplained_days == (date(2024, 7, 1),)
+
+
+def test_a_kite_basis_of_fewer_than_twenty_bars_explains_none_of_its_closes(
+    fresh_database_url: str,
+) -> None:
+    url = fresh_database_url
+    load(url, kite_from_nse(url, RELIANCE_TOKEN, "RELIANCE", halved_to_five_rupees))
+
+    # 1 to 26 July 2024: 19 trading days, 17 July a holiday.
+    with app_connection(url) as conn:
+        report = parity(conn, SETTINGS, start=START, end=date(2024, 7, 26), symbols=["RELIANCE"])
+
+    assert report.rows == 19
+    assert report.close_mismatches
+    assert {d.reason for d in report.close_mismatches} == {None}
+    ((replayed),) = report.kite_bases
+    assert (replayed.basis.bars, replayed.basis.explains) == (19, False)
 
 
 REPO_CONFIG = Path(__file__).resolve().parents[1] / "tradeline.toml"
@@ -624,8 +691,7 @@ def test_the_command_exits_zero_on_clean_fixtures_with_a_summary_and_a_table(
             "extra": {"total": 0, "series_move": 0, "unexplained": 0},
             "close": {
                 "total": 0,
-                "additive_adjustment": 0,
-                "coarse_rounding": 0,
+                "kites_adjustment": 0,
                 "unexplained": 0,
             },
         },
@@ -633,11 +699,13 @@ def test_the_command_exits_zero_on_clean_fixtures_with_a_summary_and_a_table(
             "series_move": 0,
             "special_session": 0,
             "not_fetched": 0,
-            "additive_adjustment": 0,
-            "coarse_rounding": 0,
+            "kites_adjustment": 0,
             "unexplained": 0,
         },
         "listed_unexplained": [],
+        "kite_bases": 0,
+        "kites_adjustment_through_fitted": 0,
+        "listed_kite_bases": [],
         "candle_disagreements": 0,
         "listed_candle_disagreements": [],
         "pre_listing_candles": 0,
@@ -688,8 +756,8 @@ def test_the_command_exits_non_zero_above_the_configured_threshold(
     ]
     assert "1 unexplained (0.5814%), must be under 0.1%: FAIL" in strict_table
     assert (
-        "by reason: series_move 0, special_session 0, not_fetched 0, additive_adjustment 0,"
-        " coarse_rounding 0, unexplained 1"
+        "by reason: series_move 0, special_session 0, not_fetched 0, kites_adjustment 0,"
+        " unexplained 1"
     ) in strict_table
     assert "missing  INFY" in strict_table
 

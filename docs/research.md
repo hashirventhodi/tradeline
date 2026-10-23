@@ -1605,6 +1605,28 @@ The repository's tests pass on the prototype branch (508, `uv run pytest -q`; th
 
 A fitted stage's ratio is chosen to reproduce the closes it explains. That those closes match is therefore not independent evidence for it, and the replay has not been checked against data it was not fitted on.
 
+### The implementation's acceptance run
+
+`tradeline parity` with Kite's Adjustment as its one reason for a close mismatch (`tradeline.kite_adjustment`), on the same database and range as the measurement above. It gives the same result as the prototype.
+
+| | |
+|---|---|
+| Command | `uv run tradeline parity --from 2016-10-21 --to 2026-10-20` (read-only) |
+| Result | 1,008,709 rows, 44,755 differences, **841 unexplained (0.0834 percent): PASS** |
+| Missing | 1,052: 1,044 Special Sessions, 8 unexplained |
+| Extra | 14,033, all series moves |
+| Close | 29,670: 28,837 Kite's Adjustment, 833 unexplained |
+| Kite Bases reported | 106 with stages. 2,848 of the explained closes go through a fitted stage. |
+| Time | 11 min 11 s on the development machine (384 s of CPU) |
+
+The code ports `final_strict` with three differences:
+
+- Exact arithmetic throughout.
+- An action filed under two Symbols or series is applied once.
+- Dividends are summed before the guard against an amount at or above NSE's close (the prototype guarded each amount on its own).
+
+None of the three changed a count.
+
 ### Unresolved
 
 - **BAJFINANCE before mid-2025:** closes on ₹0.50 some days and ₹1 on others (893.5 and 942.5, but 899 for 898.7). No stage, tick or tie rule reproduces them.

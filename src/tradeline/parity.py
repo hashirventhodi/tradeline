@@ -29,15 +29,17 @@ every range candle ingest asked Kite for, under any of the Instrument's
 Symbols in that series (``queries.requested_candle_ranges``), is explained as
 not fetched: history never requested is not Kite missing it.
 
-A close mismatch is tried first as an **additive adjustment**: Kite adjusts
-some older histories by subtracting as well as scaling (GNFC, OFSS), which no
-one factor takes out. When one least-squares fit of Kite's close as
-a x NSE's - b puts every compared bar of the mismatch's stretch within half a
-tick, over at least ``additive_min_bars`` bars, all of that stretch's
-mismatches are explained. Then as **coarse rounding**: Kite rounds some
-adjusted histories to whole rupees (MCX, BSE, BAJFINANCE), so a close equal to
-NSE's close times the stretch's factor rounded to the rupee, half to even, is
-explained. Only the rupee is recognised.
+A close mismatch is explained as **Kite's Adjustment** when replaying Kite's
+stages from NSE's raw close gives exactly Kite's close (``tradeline.kite_adjustment``,
+ADR 0018 as amended by #62): Kite adjusts its history one stage at a time, each
+Ex-Date's stage dividing or subtracting from the history it has already rounded
+and rounding again to its own tick. The stages are found once for each
+Instrument and series that has a close mismatch, over all of its compared bars
+in the range. Each Kite Basis they form that adjusts (one of Kite's raw
+closes has no stages) is reported with its stages, the count of closes it
+explains, and the closes it leaves unexplained; closes explained through a fitted
+stage, one whose ratio is read from Kite's closes, are counted apart. Only a
+mismatch is replayed: a close within the tolerance is never judged again.
 
 A candle dated before its Instrument's Listing Age starts (the view
 ``instrument_listing_age``, ADR 0017) is a **Pre-listing Candle**: the
@@ -68,7 +70,7 @@ rupees (#17, #41). Such a bar is left out of its stretch's factor, a ratio of
 0 showing only that the price rounded away, and is still compared against
 NSE's close times the factor of the rest: it passes where that is within half
 the tick of 0 and mismatches otherwise, so a whole-rupee 0 for 0.30 is a
-mismatch, one coarse rounding explains. A stretch whose every close is 0 has
+mismatch, which Kite's Adjustment can explain. A stretch whose every close is 0 has
 no factor: its bars count as rows and are never close mismatches, like a
 stretch too short to show a bad close. Only the close is compared; a zero
 open, high or low is ``compare-adjusted``'s to find.
@@ -87,9 +89,9 @@ from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
-from decimal import ROUND_HALF_EVEN, Decimal
+from decimal import Decimal
 from enum import StrEnum
-from functools import cached_property
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, Literal, get_args
 
@@ -98,12 +100,12 @@ import psycopg
 from tradeline import queries
 from tradeline.config import Config
 from tradeline.instruments import LISTING_SERIES
+from tradeline.kite_adjustment import Close, KiteBasis, Replay, Stage, replay
 from tradeline.trading_calendar import load_trading_calendar
 
 Kind = Literal["missing", "extra", "close"]
 KINDS: tuple[Kind, ...] = get_args(Kind)
 HALF_TICK = Decimal("0.025")
-RUPEE = Decimal(1)
 HUNDRED = Decimal(100)
 # Every difference is counted; this many unexplained ones are listed in a summary.
 MAX_LISTED = 100
@@ -123,19 +125,17 @@ class Reason(StrEnum):
     SPECIAL_SESSION = "special_session"
     # A missing bar on a day no range candle ingest asked Kite for covers.
     NOT_FETCHED = "not_fetched"
-    # Kite's close is a x NSE's - b over the mismatch's whole stretch (``_Stretch.additive``).
-    ADDITIVE_ADJUSTMENT = "additive_adjustment"
-    # Kite's close is NSE's times the stretch's factor rounded to the rupee, half to even.
-    COARSE_ROUNDING = "coarse_rounding"
+    # Kite's close is what replaying Kite's stages gives from NSE's raw close.
+    KITES_ADJUSTMENT = "kites_adjustment"
 
 
 # Each kind's Parity Reasons, in the order they are tried; the first that applies is
 # recorded. ADR 0018's order: missing, a Special Session then not fetched; extra, a
-# series move; close, an additive adjustment over its stretch then coarse rounding.
+# series move; close, Kite's Adjustment.
 REASONS: Mapping[Kind, tuple[Reason, ...]] = {
     "missing": (Reason.SPECIAL_SESSION, Reason.NOT_FETCHED),
     "extra": (Reason.SERIES_MOVE,),
-    "close": (Reason.ADDITIVE_ADJUSTMENT, Reason.COARSE_ROUNDING),
+    "close": (Reason.KITES_ADJUSTMENT,),
 }
 
 
@@ -189,6 +189,65 @@ class PreListingCandle:
 
 
 @dataclass(frozen=True)
+class ReplayedBasis:
+    """A Kite Basis of one Instrument and series, with the close mismatches in its
+    standing stretches it explains and leaves unexplained."""
+
+    instrument: str
+    series: str
+    basis: KiteBasis
+    explained: int
+    # The day of each close mismatch in its standing stretches it leaves unexplained.
+    unexplained_days: tuple[date, ...]
+
+    @property
+    def unexplained(self) -> int:
+        return len(self.unexplained_days)
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "instrument": self.instrument,
+            "series": self.series,
+            "start": self.basis.start.isoformat(),
+            "end": self.basis.end.isoformat(),
+            "bars": self.basis.bars,
+            "explains": self.basis.explains,
+            "stages": [
+                {
+                    "ex_date": s.ex_date.isoformat(),
+                    "how": "fitted" if s.fitted else "computed",
+                    "form": s.form,
+                    "divisor": _number(s.divisor),
+                    "subtracted": _number(s.subtracted),
+                    "tick": _number(s.tick),
+                    "ties": s.ties,
+                }
+                for s in self.basis.stages
+            ],
+            "explained": self.explained,
+            "unexplained": self.unexplained,
+            "listed_unexplained_days": [d.isoformat() for d in self.unexplained_days[:MAX_LISTED]],
+        }
+
+    def text(self) -> str:
+        stages = ", ".join(f"{s.ex_date} {s.form} {_does(s)}" for s in self.basis.stages)
+        return (
+            f"{self.instrument} {self.series} {self.basis.start} to {self.basis.end},"
+            f" {self.basis.bars} bars{'' if self.basis.explains else ' (too few to explain)'}:"
+            f" {stages}; {self.explained} explained, {self.unexplained} unexplained"
+        )
+
+
+def _does(stage: Stage) -> str:
+    """What a stage does to each older close, in words: "divides by 2, rounds to 5 half_even"."""
+    steps = [f"divides by {_number(stage.divisor)}"] if stage.multiplier != 1 else []
+    if stage.subtracted:
+        steps.append(f"subtracts {_number(stage.subtracted)}")
+    steps.append(f"rounds to {_number(stage.tick)} {stage.ties}")
+    return ", ".join(steps)
+
+
+@dataclass(frozen=True)
 class ParityReport:
     start: date
     end: date
@@ -201,6 +260,8 @@ class ParityReport:
     candle_disagreements: tuple[queries.CandleDisagreement, ...] = ()
     # Candles from before their Instrument's Listing Age starts; not differences.
     pre_listing_candles: tuple[PreListingCandle, ...] = ()
+    # Each Kite Basis with stages, of every Instrument and series with a close mismatch.
+    kite_bases: tuple[ReplayedBasis, ...] = ()
 
     @property
     def missing(self) -> tuple[Difference, ...]:
@@ -251,6 +312,11 @@ class ParityReport:
             "unexplained": _count(every, None)
         }
 
+    @property
+    def kites_adjustment_through_fitted(self) -> int:
+        """The closes Kite's Adjustment explains only through a fitted stage."""
+        return sum(b.explained for b in self.kite_bases if b.basis.fitted)
+
     def summary(self) -> dict[str, Any]:
         """The machine-readable report: same data, same output, key for key."""
         return {
@@ -266,6 +332,9 @@ class ParityReport:
             "by_kind": self.by_kind,
             "by_reason": self.by_reason,
             "listed_unexplained": [d.summary() for d in self.unexplained[:MAX_LISTED]],
+            "kite_bases": len(self.kite_bases),
+            "kites_adjustment_through_fitted": self.kites_adjustment_through_fitted,
+            "listed_kite_bases": [b.summary() for b in self.kite_bases[:MAX_LISTED]],
             "candle_disagreements": len(self.candle_disagreements),
             "listed_candle_disagreements": [
                 _disagreement_summary(d) for d in self.candle_disagreements[:MAX_LISTED]
@@ -313,6 +382,17 @@ class ParityReport:
             )
         if len(listed) < len(unexplained):
             lines.append(f"... {len(unexplained) - len(listed)} more not listed")
+        if self.kite_bases:
+            count = len(self.kite_bases)
+            lines.append("")
+            lines.append(
+                f"{count} Kite Bas{'es' if count != 1 else 'is'} (Kite's Adjustment;"
+                f" {self.kites_adjustment_through_fitted} closes explained only through a"
+                " fitted stage):"
+            )
+            lines.extend(f"  {b.text()}" for b in self.kite_bases[:MAX_LISTED])
+            if count > MAX_LISTED:
+                lines.append(f"... {count - MAX_LISTED} more not listed")
         if self.candle_disagreements:
             count = len(self.candle_disagreements)
             lines.append("")
@@ -389,38 +469,12 @@ class _Row:
 
 
 @dataclass(frozen=True)
-class _Stretch:
-    """One Instrument and series's compared bars between two Ex-Dates, with Kite's factor."""
-
-    rows: tuple[_Row, ...]
-    factor: Decimal
-
-    @cached_property
-    def additive(self) -> bool:
-        """Whether one least-squares fit of Kite's close as a x NSE's - b puts every one of
-        the stretch's compared bars within half a tick of it; worked out once per stretch.
-
-        A stretch's factor alone leaving mismatches is given: one is being classified. A
-        stretch whose NSE closes are all one price has no fit."""
-        points = [(_of(r.eod_close), _of(r.candle_close)) for r in self.rows]
-        mean_x = sum((x for x, _ in points), Decimal(0)) / len(points)
-        mean_y = sum((y for _, y in points), Decimal(0)) / len(points)
-        spread = sum(((x - mean_x) ** 2 for x, _ in points), Decimal(0))
-        if not spread:
-            return False
-        a = sum(((x - mean_x) * (y - mean_y) for x, y in points), Decimal(0)) / spread
-        b = a * mean_x - mean_y
-        return all(abs(y - (a * x - b)) <= HALF_TICK for x, y in points)
-
-
-@dataclass(frozen=True)
 class _Unclassified:
     """A difference before it is classified, with what a Parity Reason's rule may read."""
 
     kind: Kind
     row: _Row
-    # The close mismatch's stretch and NSE's close times its factor; None otherwise.
-    stretch: _Stretch | None = None
+    # NSE's close times its stretch's factor, for a close mismatch; None otherwise.
     expected: Decimal | None = None
 
 
@@ -429,7 +483,10 @@ _Rule = Callable[[_Unclassified], bool]
 
 
 def _rules(
-    conn: psycopg.Connection, settings: Config.Parity, rows: Sequence[_Row]
+    conn: psycopg.Connection,
+    settings: Config.Parity,
+    rows: Sequence[_Row],
+    kites_adjustment: _KitesAdjustment,
 ) -> Mapping[Reason, _Rule]:
     """The rule of each Parity Reason, built once per run from the data it reads.
 
@@ -446,24 +503,59 @@ def _rules(
     def special_session(difference: _Unclassified) -> bool:
         return difference.row.trade_date in special_sessions
 
-    def additive_adjustment(difference: _Unclassified) -> bool:
-        # One fit over the mismatch's whole stretch, of at least ``additive_min_bars`` bars.
-        stretch = _of(difference.stretch)
-        return len(stretch.rows) >= settings.additive_min_bars and stretch.additive
-
     return {
         Reason.SERIES_MOVE: series_move,
         Reason.SPECIAL_SESSION: special_session,
         Reason.NOT_FETCHED: _not_fetched(conn, rows),
-        Reason.ADDITIVE_ADJUSTMENT: additive_adjustment,
-        Reason.COARSE_ROUNDING: _coarse_rounding,
+        Reason.KITES_ADJUSTMENT: kites_adjustment,
     }
 
 
-def _coarse_rounding(difference: _Unclassified) -> bool:
-    """Kite's close is the expected close rounded to the rupee, half to even. Only the
-    rupee is recognised: another tick needs evidence and ADR 0018 to agree it."""
-    return difference.row.candle_close == _of(difference.expected).quantize(RUPEE, ROUND_HALF_EVEN)
+class _KitesAdjustment:
+    """Kite's Adjustment's rule: the close mismatch's day is one its Instrument and
+    series's replay explains. Each is replayed once, at its first mismatch."""
+
+    def __init__(self, conn: psycopg.Connection, rows: Sequence[_Row]) -> None:
+        self._conn = conn
+        self._closes: defaultdict[tuple[str, str], list[Close]] = defaultdict(list)
+        for r in rows:
+            if r.candle_close is not None and r.eod_close:
+                self._closes[(r.instrument, r.series)].append(
+                    Close(r.trade_date, r.eod_close, r.candle_close)
+                )
+        self.replays: dict[tuple[str, str], Replay] = {}
+
+    def __call__(self, difference: _Unclassified) -> bool:
+        row = difference.row
+        key = (row.instrument, row.series)
+        if key not in self.replays:
+            actions = queries.corporate_actions(self._conn, row.instrument)
+            self.replays[key] = replay(self._closes[key], actions)
+        return row.trade_date in self.replays[key].explained
+
+    def bases(self, mismatches: Sequence[tuple[_Row, Reason | None]]) -> tuple[ReplayedBasis, ...]:
+        """Each replayed Kite Basis with stages, with the close mismatches in it by reason."""
+        found = []
+        for (instrument, series), result in sorted(self.replays.items()):
+            for basis in result.bases:
+                if not basis.stages:
+                    continue
+                held = [
+                    (row.trade_date, reason)
+                    for row, reason in mismatches
+                    if (row.instrument, row.series) == (instrument, series)
+                    and basis.holds(row.trade_date)
+                ]
+                found.append(
+                    ReplayedBasis(
+                        instrument=instrument,
+                        series=series,
+                        basis=basis,
+                        explained=sum(1 for _, r in held if r is Reason.KITES_ADJUSTMENT),
+                        unexplained_days=tuple(sorted(d for d, r in held if r is None)),
+                    )
+                )
+        return tuple(found)
 
 
 def _listed_series(
@@ -558,10 +650,14 @@ def parity(
         )
 
     tolerance = Decimal(str(settings.close_tolerance))
-    rules = _rules(conn, settings, rows)
+    kites_adjustment = _KitesAdjustment(conn, rows)
+    rules = _rules(conn, settings, rows, kites_adjustment)
 
     def classified(differences: Sequence[_Unclassified]) -> tuple[Difference, ...]:
         return tuple(_classify(d, rules) for d in differences)
+
+    mismatches = _close_mismatches(conn, rows, tolerance)
+    close = classified(mismatches)
 
     return ParityReport(
         start=start,
@@ -572,10 +668,13 @@ def parity(
         of_kind={
             "missing": classified([_Unclassified("missing", r) for r in rows if not r.has_candle]),
             "extra": classified([_Unclassified("extra", r) for r in rows if not r.has_eod]),
-            "close": classified(_close_mismatches(conn, rows, tolerance)),
+            "close": close,
         },
         candle_disagreements=_candle_disagreements(conn, rows, start, end),
         pre_listing_candles=pre_listing,
+        kite_bases=kites_adjustment.bases(
+            [(u.row, d.reason) for u, d in zip(mismatches, close, strict=True)]
+        ),
     )
 
 
@@ -706,11 +805,11 @@ def _close_mismatches(
         ratios = [_ratio(r) for r in stretch_rows if r.candle_close]
         if not ratios:
             continue
-        stretch = _Stretch(rows=tuple(stretch_rows), factor=statistics.median(ratios))
+        factor = statistics.median(ratios)
         for r in stretch_rows:
-            expected = _of(r.eod_close) * stretch.factor
+            expected = _of(r.eod_close) * factor
             if abs(_of(r.candle_close) - expected) > tolerance * expected + HALF_TICK:
-                mismatches.append(_Unclassified("close", r, stretch=stretch, expected=expected))
+                mismatches.append(_Unclassified("close", r, expected=expected))
     mismatches.sort(key=lambda d: (d.row.symbol, d.row.series, d.row.trade_date))
     return mismatches
 
@@ -727,6 +826,13 @@ def _of[T](value: T | None) -> T:
 
 def _text(value: Decimal | None) -> str | None:
     return None if value is None else str(value)
+
+
+def _number(value: Fraction) -> str:
+    """A ratio, amount or tick: exact where it ends within six decimals, else to six."""
+    exact = Decimal(value.numerator) / Decimal(value.denominator)
+    shown = exact.quantize(Decimal("0.000001"))
+    return f"{shown.normalize():f}"
 
 
 def _pct(value: Decimal) -> str:
