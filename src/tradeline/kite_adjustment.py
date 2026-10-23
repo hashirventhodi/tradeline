@@ -9,13 +9,15 @@ earliest first. ``replay`` finds those stages for one Instrument and series, and
 the closes they reproduce exactly; nothing is a tolerance.
 
 A stage's ratio or amount is **computed** from its Ex-Date's actions wherever a
-rule gives it (``_computed``):
+rule gives it (``_Gap.forms``):
 
 - a split, bonus or consolidation divides by its exact ratio, or by that ratio
   rounded to two decimals (Kite divides a 1:3 bonus by 1.33);
 - a dividend with an Ex-Date before 2023-07-01 is never a stage;
 - one from 2023-07-01 to 2024-09-30 is subtracted, or divides by P / (P - D)
-  rounded to six decimals, P being NSE's close the compared day before;
+  rounded to six decimals, P being NSE's close on the last day before the
+  Ex-Date that NSE has one, a candle or not (inferred: it reproduces Kite's
+  closes exactly, ITC's 343 among them, but Kite publishes no such rule);
 - one from 2024-10-01 divides by that ratio only;
 - from 2023-07-01 a dividend's Ex-Date can carry a stage that only rounds the
   history again, to a new tick.
@@ -24,13 +26,15 @@ An action whose purpose names a dividend is a dividend, however NSE files it.
 For every other action (a rights issue, a demerger, the rest) no rule gives
 Kite's ratio: it is read from Kite's closes (``_fitted_divisor``) and the stage
 is **fitted**. A fitted stage never stands in for a computed one. It sits at its
-own action's Ex-Date; where an older stretch is joined across several Ex-Dates
-(a gap) holding both kinds, each split, bonus, consolidation and dividend there
-has its own computed stage or none where the rules give none, and the fitted
-ratio carries only what those leave (``_mixed_gap_layouts``). A fitted ratio
-within 0.1 percent of what an unstaged action of its gap would give, or a
-product of them, absorbs it and is refused; so is one within 0.1 percent of 1,
-which adjusts nothing.
+own action's Ex-Date, and only where one Ex-Date of the gap could hold it: where
+several could, nothing in Kite's closes says which action the ratio belongs to,
+so none is placed and the ambiguity is reported (``AmbiguousFit``). Where an
+older stretch is joined across several Ex-Dates (a gap) holding both kinds, each
+split, bonus, consolidation and dividend there has its own computed stage or none
+where the rules give none, and the fitted ratio carries only what those leave
+(``_mixed_gap_layouts``). A fitted ratio within 0.1 percent of what an unstaged
+action of its gap would give, or a product of them, absorbs it and is refused;
+so is one within 0.1 percent of 1, which adjusts nothing.
 
 The stretches between Ex-Dates are taken newest first. The newest is tried as
 Kite's raw close, and each older one joins the **Kite Basis** before it while
@@ -41,6 +45,18 @@ and tie rule, fewest closes off winning. A stretch **stands** when at most 5
 percent of its closes (rounded up) are off the replay; one that does not
 explains nothing and adds no stage. A Kite Basis of fewer than 20 compared bars
 explains nothing.
+
+Known limits (docs/research.md, #62):
+
+- A group of stages found for one gap shares a tick among its computed stages and
+  one tie rule among all of them; only its fitted stage has a tick of its own. ADR
+  0018 gives each stage its own; a tick and tie rule per stage would multiply the
+  search by 18 for every stage after the first, and no group of more than one stage
+  stands in any replayed Instrument of the #59 run.
+- A gap without a fittable action gets one computed stage at most, however many
+  of its Ex-Dates hold a split or dividend (the prototype's rule, not measured).
+- A gap with more than ``EXHAUSTIVE`` layouts is searched one Ex-Date's choice at a
+  time, and reported (``BoundedSearch``).
 """
 
 from __future__ import annotations
@@ -177,17 +193,52 @@ class Replay:
     explained: Mapping[date, KiteBasis]
     # Each stretch that does not stand, as its first and last day.
     not_standing: tuple[tuple[date, date], ...] = ()
+    ambiguous_fits: tuple[AmbiguousFit, ...] = ()
+    bounded_searches: tuple[BoundedSearch, ...] = ()
 
 
-def replay(closes: Sequence[Close], actions: Iterable[CorporateAction]) -> Replay:
-    """Kite's Adjustment for one Instrument and series: its compared ``closes`` and the
-    Corporate Actions filed under any of its Symbols."""
+@dataclass(frozen=True)
+class AmbiguousFit:
+    """A stretch a fitted stage would let stand at any of several of its gap's Ex-Dates.
+
+    Nothing in Kite's closes says which action the ratio belongs to, so no fitted
+    stage is placed: the stretch does not stand and its closes stay unexplained."""
+
+    # Its first and last day.
+    stretch: tuple[date, date]
+    # Each Ex-Date a fitted stage at which would let it stand.
+    ex_dates: tuple[date, ...]
+
+
+@dataclass(frozen=True)
+class BoundedSearch:
+    """A gap with more layouts than ``EXHAUSTIVE``, searched one Ex-Date's choice at a
+    time rather than every layout: where its stretch does not stand, a layout that would
+    have let it may have been missed. Where it stands, its closes are reproduced all the
+    same, though another layout might reproduce more."""
+
+    # The stretch the gap's stages were sought for, as its first and last day.
+    stretch: tuple[date, date]
+    ex_dates: tuple[date, ...]
+    layouts: int
+    stands: bool
+
+
+def replay(
+    closes: Sequence[Close],
+    actions: Iterable[CorporateAction],
+    *,
+    nse_closes: Mapping[date, Decimal],
+) -> Replay:
+    """Kite's Adjustment for one Instrument and series: its compared ``closes``, the
+    Corporate Actions filed under any of its Symbols, and NSE's close on every day it
+    has one in the series, a candle or not (a dividend's P)."""
     found = _distinct(actions)
     ex_dates = sorted({a.ex_date for a in found})
     grouped: dict[int, list[Close]] = {}
     for c in sorted(closes, key=lambda c: c.trade_date):
         grouped.setdefault(bisect.bisect_right(ex_dates, c.trade_date), []).append(c)
-    previous = _previous_closes(closes, ex_dates)
+    previous = _previous_closes(nse_closes, ex_dates)
     return _Replayer(found, ex_dates, previous, grouped).run()
 
 
@@ -315,9 +366,12 @@ def _distinct(actions: Iterable[CorporateAction]) -> list[CorporateAction]:
     return list(distinct.values())
 
 
-def _previous_closes(closes: Sequence[Close], ex_dates: Sequence[date]) -> dict[date, Fraction]:
-    """NSE's close on the last compared day before each Ex-Date that has one."""
-    days = sorted((c.trade_date, c.nse) for c in closes)
+def _previous_closes(
+    nse_closes: Mapping[date, Decimal], ex_dates: Sequence[date]
+) -> dict[date, Fraction]:
+    """NSE's close on the last day before each Ex-Date it has one: the trading day
+    before, unless NSE has no close for the series that day."""
+    days = sorted(nse_closes.items())
     found = {}
     for ex_date in ex_dates:
         k = bisect.bisect_left(days, (ex_date,))
@@ -437,6 +491,8 @@ class _Replayer:
     ) -> None:
         self.ex_dates = ex_dates
         self.grouped = grouped
+        self.ambiguous: list[AmbiguousFit] = []
+        self.bounded: list[BoundedSearch] = []
         self.points = {
             k: [(Fraction(c.nse), Fraction(c.kite)) for c in rows] for k, rows in grouped.items()
         }
@@ -483,7 +539,8 @@ class _Replayer:
                 joined = True
             if not joined:
                 ex_dates = self.ex_dates[k:newer]
-                best = self._options(chain, points, ex_dates, cap) if ex_dates else None
+                span = (self.grouped[k][0].trade_date, self.grouped[k][-1].trade_date)
+                best = self._options(chain, points, ex_dates, cap, span) if ex_dates else None
                 if best is not None:
                     chain[0:0] = best.stages
                     bases.append(_Basis(best.layout, best.unstaged))
@@ -522,23 +579,66 @@ class _Replayer:
                 continue
             off = set(_off(kite_basis.chain, self.points[k]))
             explained.update((c.trade_date, kite_basis) for i, c in enumerate(rows) if i not in off)
-        return Replay(tuple(found), explained, tuple(sorted(not_standing)))
+        return Replay(
+            tuple(found),
+            explained,
+            tuple(sorted(not_standing)),
+            tuple(self.ambiguous),
+            tuple(self.bounded),
+        )
 
     def _options(
-        self, outer: list[Stage], points: list[Point], ex_dates: list[date], cap: int
+        self,
+        outer: list[Stage],
+        points: list[Point],
+        ex_dates: list[date],
+        cap: int,
+        span: tuple[date, date],
     ) -> _Option | None:
         """The best new innermost group of stages for a gap, or None where none lets the
-        stretch stand."""
+        stretch stand. A fitted stage is tried only where one Ex-Date of the gap could
+        hold it; where several could and one would let the stretch stand, the ambiguity
+        is recorded instead."""
         gaps = [self.gaps[e] for e in ex_dates]
         fittable = [g.ex_date for g in gaps if "fitted" in g.classes]
+        best = self._best(outer, points, gaps, fittable if len(fittable) == 1 else [], cap, span)
+        if best is None and len(fittable) > 1:
+            standing = tuple(
+                e
+                for e in fittable
+                if self._best(outer, points, gaps, [e], cap, fitted_only=True) is not None
+            )
+            if standing:
+                self.ambiguous.append(AmbiguousFit(span, standing))
+        return best
+
+    def _best(
+        self,
+        outer: list[Stage],
+        points: list[Point],
+        gaps: list[_Gap],
+        fit_at: list[date],
+        cap: int,
+        span: tuple[date, date] | None = None,
+        *,
+        fitted_only: bool = False,
+    ) -> _Option | None:
+        """The best group for a gap with a fitted stage at no Ex-Date or one of
+        ``fit_at``, or ``fitted_only`` at one of them; a bounded search is recorded only
+        for the ``span`` sought."""
+        fittable = any("fitted" in g.classes for g in gaps)
         if fittable and any(g.computed_kind for g in gaps):
-            options = self._mixed_gap_layouts(outer, points, gaps, fittable, cap)
+            options = self._mixed_gap_layouts(
+                outer, points, gaps, fit_at, cap, span, fitted_only=fitted_only
+            )
         else:
             layouts: list[tuple[_Entry, ...]] = [
-                (("computed", g.ex_date, *form),) for g in gaps for form in g.forms()
+                (("computed", g.ex_date, *form),)
+                for g in gaps
+                for form in g.forms()
+                if not fitted_only
             ]
-            if fittable:
-                layouts.append((("fitted", fittable[-1]),))
+            layouts += [(("fitted", e),) for e in fit_at]
             options = [o for layout in layouts for o in self._score(layout, (), outer, points, cap)]
         return min(options, key=lambda o: o.key, default=None)
 
@@ -547,16 +647,16 @@ class _Replayer:
         outer: list[Stage],
         points: list[Point],
         gaps: list[_Gap],
-        fittable: list[date],
+        fit_at: list[date],
         cap: int,
+        span: tuple[date, date] | None,
+        *,
+        fitted_only: bool = False,
     ) -> list[_Option]:
         """Every layout of a gap holding both kinds: for each computed-kind Ex-Date one of
         its computed stages, or none where the rules allow none (a split always has one),
-        and at most one fitted stage at a fittable Ex-Date, in Ex-Date order. Of fittable
-        Ex-Dates between the same computed-kind ones, only the latest is tried."""
+        and no fitted stage or one at an Ex-Date of ``fit_at``, in Ex-Date order."""
         computed = [g for g in gaps if g.computed_kind]
-        side = {e: sum(1 for g in computed if g.ex_date <= e) for e in fittable}
-        fit_at = [e for e in fittable if not any(side[o] == side[e] and o > e for o in fittable)]
         choices: list[list[tuple[_Gap, _Form | None]]] = []
         for g in computed:
             forms = g.forms()
@@ -579,8 +679,8 @@ class _Replayer:
 
         combos_count = math.prod(len(c) for c in choices)
         found: list[_Option] = []
-        # Equal results go to the latest fittable Ex-Date.
-        for fit in [None, *reversed(fit_at)]:
+        fits: list[date | None] = [*fit_at] if fitted_only else [None, *fit_at]
+        for fit in fits:
             if combos_count <= EXHAUSTIVE:
                 combos: list[list[tuple[_Gap, _Form | None]]] = [[]]
                 for c in choices:
@@ -600,6 +700,9 @@ class _Replayer:
                         if got is not None and (best is None or got.key < best.key):
                             best, combo = got, trial
             found += score(combo, fit, quick=False)
+        if combos_count > EXHAUSTIVE and span is not None:
+            ex_dates = tuple(g.ex_date for g in gaps)
+            self.bounded.append(BoundedSearch(span, ex_dates, combos_count, stands=bool(found)))
         return found
 
     def _score(

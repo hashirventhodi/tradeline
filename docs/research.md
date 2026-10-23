@@ -1607,7 +1607,7 @@ A fitted stage's ratio is chosen to reproduce the closes it explains. That those
 
 ### The implementation's acceptance run
 
-`tradeline parity` with Kite's Adjustment as its one reason for a close mismatch (`tradeline.kite_adjustment`), on the same database and range as the measurement above. It gives the same result as the prototype.
+These are the results of `tradeline parity` itself, not the prototype. Its one reason for a close mismatch is Kite's Adjustment (`tradeline.kite_adjustment`). The run uses the same database and range as the measurement above.
 
 | | |
 |---|---|
@@ -1616,16 +1616,23 @@ A fitted stage's ratio is chosen to reproduce the closes it explains. That those
 | Missing | 1,052: 1,044 Special Sessions, 8 unexplained |
 | Extra | 14,033, all series moves |
 | Close | 29,670: 28,837 Kite's Adjustment, 833 unexplained |
-| Kite Bases reported | 106 with stages. 2,848 of the explained closes go through a fitted stage. |
-| Time | 11 min 11 s on the development machine (384 s of CPU) |
+| Through a fitted stage | **2,848** of the explained closes (0.28 percent of rows) |
+| Kite Bases | 106 with stages, every one in the JSON summary (the text lists 100) |
+| Ambiguous fits, bounded searches | 0 and 0 |
+| Time | 9 min 29 s on the development machine (437 s of CPU, NMDC alone about 420 s) |
 
-The code ports `final_strict` with three differences:
+The count matches the prototype's, but that alone does not show each choice below is right.
 
-- Exact arithmetic throughout.
-- An action filed under two Symbols or series is applied once.
-- Dividends are summed before the guard against an amount at or above NSE's close (the prototype guarded each amount on its own).
+**Where the implementation departs from `final_strict`.** Each change was measured with the same extract replayed both ways, and none moved a count.
 
-None of the three changed a count.
+- **Arithmetic and actions.** Arithmetic is exact throughout. An action filed under two Symbols or series is applied once. Dividends on one Ex-Date are summed before the guard against an amount at or above NSE's close; the prototype guarded each amount separately.
+- **A dividend's P** is NSE's close on the last day before the Ex-Date that NSE has one, whether or not Kite has a candle that day. The prototype took the last day with both closes. This is an inferred rule: it reproduces Kite's closes exactly (ITC's 343 among them), but Kite publishes no reference-price convention.
+- **A fitted stage is placed only where one Ex-Date of its gap could hold it.** The prototype put the ratio at the latest of several. Where several could hold it and one would let the stretch stand, nothing in Kite's closes says which action the ratio belongs to. So none is placed, the stretch's closes stay unexplained, and the report lists the case as an ambiguous fit. This run has none: every fitted stage behind the 2,848 closes sits in a gap with one fittable Ex-Date.
+- **A gap with more than 64 layouts** is still searched one Ex-Date's choice at a time. The report now lists each such search and whether its stretch stood. This run has none: every mixed gap among the replayed Instruments has 64 layouts or fewer.
+
+**A known limit kept.** A group of stages found for one gap shares one tick among its computed stages, and one tie rule among all of them. ADR 0018 gives each stage its own. No group of more than one stage stands in any replayed Instrument of this run, so the choice changes no close here. A tick and tie rule per stage would multiply the search by 18 for each stage after the first. A test pins the limit: a bonus rounded to the rupee followed by a dividend subtracted to the paisa, in one gap, is not reproduced.
+
+**A limit not measured.** A gap with no fittable action gets one computed stage at most, however many of its Ex-Dates hold a split or dividend. The prototype had the same rule. Whether any close would need two such stages was never measured.
 
 ### Unresolved
 

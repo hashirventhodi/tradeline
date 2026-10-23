@@ -38,8 +38,11 @@ Instrument and series that has a close mismatch, over all of its compared bars
 in the range. Each Kite Basis they form that adjusts (one of Kite's raw
 closes has no stages) is reported with its stages, the count of closes it
 explains, and the closes it leaves unexplained; closes explained through a fitted
-stage, one whose ratio is read from Kite's closes, are counted apart. Only a
-mismatch is replayed: a close within the tolerance is never judged again.
+stage, one whose ratio is read from Kite's closes, are counted apart. Every
+stretch left unexplained because a fitted stage could sit at more than one
+Ex-Date, and every gap searched within a bound, is reported too. The summary
+lists every Kite Basis; the text, the first ``MAX_LISTED``. Only a mismatch is
+replayed: a close within the tolerance is never judged again.
 
 A candle dated before its Instrument's Listing Age starts (the view
 ``instrument_listing_age``, ADR 0017) is a **Pre-listing Candle**: the
@@ -100,7 +103,15 @@ import psycopg
 from tradeline import queries
 from tradeline.config import Config
 from tradeline.instruments import LISTING_SERIES
-from tradeline.kite_adjustment import Close, KiteBasis, Replay, Stage, replay
+from tradeline.kite_adjustment import (
+    AmbiguousFit,
+    BoundedSearch,
+    Close,
+    KiteBasis,
+    Replay,
+    Stage,
+    replay,
+)
 from tradeline.trading_calendar import load_trading_calendar
 
 Kind = Literal["missing", "extra", "close"]
@@ -226,7 +237,7 @@ class ReplayedBasis:
             ],
             "explained": self.explained,
             "unexplained": self.unexplained,
-            "listed_unexplained_days": [d.isoformat() for d in self.unexplained_days[:MAX_LISTED]],
+            "unexplained_days": [d.isoformat() for d in self.unexplained_days],
         }
 
     def text(self) -> str:
@@ -262,6 +273,10 @@ class ParityReport:
     pre_listing_candles: tuple[PreListingCandle, ...] = ()
     # Each Kite Basis with stages, of every Instrument and series with a close mismatch.
     kite_bases: tuple[ReplayedBasis, ...] = ()
+    # Each replayed stretch left standing nowhere because a fitted stage's Ex-Date is
+    # ambiguous, and each gap searched within a bound, with its Instrument and series.
+    ambiguous_fits: tuple[tuple[str, str, AmbiguousFit], ...] = ()
+    bounded_searches: tuple[tuple[str, str, BoundedSearch], ...] = ()
 
     @property
     def missing(self) -> tuple[Difference, ...]:
@@ -334,7 +349,30 @@ class ParityReport:
             "listed_unexplained": [d.summary() for d in self.unexplained[:MAX_LISTED]],
             "kite_bases": len(self.kite_bases),
             "kites_adjustment_through_fitted": self.kites_adjustment_through_fitted,
-            "listed_kite_bases": [b.summary() for b in self.kite_bases[:MAX_LISTED]],
+            # Every one: the summary is where a Kite Basis the text leaves out is read.
+            "listed_kite_bases": [b.summary() for b in self.kite_bases],
+            "ambiguous_fits": [
+                {
+                    "instrument": instrument,
+                    "series": series,
+                    "start": a.stretch[0].isoformat(),
+                    "end": a.stretch[1].isoformat(),
+                    "ex_dates": [d.isoformat() for d in a.ex_dates],
+                }
+                for instrument, series, a in self.ambiguous_fits
+            ],
+            "bounded_searches": [
+                {
+                    "instrument": instrument,
+                    "series": series,
+                    "start": b.stretch[0].isoformat(),
+                    "end": b.stretch[1].isoformat(),
+                    "ex_dates": [d.isoformat() for d in b.ex_dates],
+                    "layouts": b.layouts,
+                    "stands": b.stands,
+                }
+                for instrument, series, b in self.bounded_searches
+            ],
             "candle_disagreements": len(self.candle_disagreements),
             "listed_candle_disagreements": [
                 _disagreement_summary(d) for d in self.candle_disagreements[:MAX_LISTED]
@@ -392,7 +430,35 @@ class ParityReport:
             )
             lines.extend(f"  {b.text()}" for b in self.kite_bases[:MAX_LISTED])
             if count > MAX_LISTED:
-                lines.append(f"... {count - MAX_LISTED} more not listed")
+                lines.append(
+                    f"... {count - MAX_LISTED} more not listed;"
+                    " the JSON report lists every Kite Basis"
+                )
+        if self.ambiguous_fits:
+            count = len(self.ambiguous_fits)
+            lines.append("")
+            lines.append(
+                f"{count} ambiguous fit{'s' if count != 1 else ''} (a fitted stage would let"
+                " the stretch stand at more than one Ex-Date; none is placed):"
+            )
+            lines.extend(
+                f"  {instrument} {series} {a.stretch[0]} to {a.stretch[1]}:"
+                f" {', '.join(str(d) for d in a.ex_dates)}"
+                for instrument, series, a in self.ambiguous_fits
+            )
+        if self.bounded_searches:
+            count = len(self.bounded_searches)
+            lines.append("")
+            lines.append(
+                f"{count} bounded search{'es' if count != 1 else ''}"
+                " (more layouts than are tried one by one):"
+            )
+            lines.extend(
+                f"  {instrument} {series} {b.stretch[0]} to {b.stretch[1]}: {b.layouts} layouts"
+                f" over {len(b.ex_dates)} Ex-Date{'s' if len(b.ex_dates) != 1 else ''},"
+                f" {'stands' if b.stands else 'does not stand'}"
+                for instrument, series, b in self.bounded_searches
+            )
         if self.candle_disagreements:
             count = len(self.candle_disagreements)
             lines.append("")
@@ -518,8 +584,13 @@ class _KitesAdjustment:
     def __init__(self, conn: psycopg.Connection, rows: Sequence[_Row]) -> None:
         self._conn = conn
         self._closes: defaultdict[tuple[str, str], list[Close]] = defaultdict(list)
+        # NSE's close of every day it states one, a candle or not: a dividend's P.
+        self._nse: defaultdict[tuple[str, str], dict[date, Decimal]] = defaultdict(dict)
         for r in rows:
-            if r.candle_close is not None and r.eod_close:
+            if not r.eod_close:  # NSE can state no close
+                continue
+            self._nse[(r.instrument, r.series)][r.trade_date] = r.eod_close
+            if r.candle_close is not None:
                 self._closes[(r.instrument, r.series)].append(
                     Close(r.trade_date, r.eod_close, r.candle_close)
                 )
@@ -530,7 +601,7 @@ class _KitesAdjustment:
         key = (row.instrument, row.series)
         if key not in self.replays:
             actions = queries.corporate_actions(self._conn, row.instrument)
-            self.replays[key] = replay(self._closes[key], actions)
+            self.replays[key] = replay(self._closes[key], actions, nse_closes=self._nse[key])
         return row.trade_date in self.replays[key].explained
 
     def bases(self, mismatches: Sequence[tuple[_Row, Reason | None]]) -> tuple[ReplayedBasis, ...]:
@@ -674,6 +745,16 @@ def parity(
         pre_listing_candles=pre_listing,
         kite_bases=kites_adjustment.bases(
             [(u.row, d.reason) for u, d in zip(mismatches, close, strict=True)]
+        ),
+        ambiguous_fits=tuple(
+            (instrument, series, a)
+            for (instrument, series), r in sorted(kites_adjustment.replays.items())
+            for a in r.ambiguous_fits
+        ),
+        bounded_searches=tuple(
+            (instrument, series, b)
+            for (instrument, series), r in sorted(kites_adjustment.replays.items())
+            for b in r.bounded_searches
         ),
     )
 

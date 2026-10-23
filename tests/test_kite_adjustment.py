@@ -12,7 +12,7 @@ from decimal import ROUND_HALF_DOWN, ROUND_HALF_EVEN, Decimal
 from fractions import Fraction
 
 from tradeline.adjust import CorporateAction, interpret
-from tradeline.kite_adjustment import Close, Stage, replay
+from tradeline.kite_adjustment import Close, Replay, Stage, replay
 
 FIVE_PAISA, RUPEE, FIVE_RUPEES = Decimal("0.05"), Decimal(1), Decimal(5)
 
@@ -51,13 +51,18 @@ def compared(
     return [Close(d, n, kite(d, n)) for d, n in zip(days, nse, strict=True)]
 
 
+def replayed(closes: Sequence[Close], actions: Sequence[CorporateAction]) -> Replay:
+    """The replay, NSE's closes being those of the compared days."""
+    return replay(closes, actions, nse_closes={c.trade_date: c.nse for c in closes})
+
+
 def test_a_later_bonus_rounded_to_five_rupees_is_one_computed_stage_explaining_every_close() -> (
     None
 ):
     days = weekdays("2024-07-01", 25)
     closes = compared(days, prices(25), lambda _, n: to_tick(n / 2, FIVE_RUPEES))
 
-    result = replay(closes, [action("2024-10-28", "Bonus 1:1")])
+    result = replayed(closes, [action("2024-10-28", "Bonus 1:1")])
 
     ((basis),) = result.bases
     assert basis.stages == (
@@ -74,7 +79,7 @@ def test_a_kite_basis_of_fewer_than_twenty_bars_explains_nothing() -> None:
     days = weekdays("2024-07-01", 19)
     closes = compared(days, prices(19), lambda _, n: to_tick(n / 2, FIVE_RUPEES))
 
-    result = replay(closes, [action("2024-10-28", "Bonus 1:1")])
+    result = replayed(closes, [action("2024-10-28", "Bonus 1:1")])
 
     ((basis),) = result.bases
     assert basis.bars == 19
@@ -88,7 +93,7 @@ def test_a_close_off_the_replay_in_a_standing_stretch_stays_unexplained_alone() 
     # Five rupees off: one close of 25, within the 5 percent (two closes) a stretch may have.
     closes[3] = Close(days[3], closes[3].nse, closes[3].kite + 5)
 
-    result = replay(closes, [action("2024-10-28", "Bonus 1:1")])
+    result = replayed(closes, [action("2024-10-28", "Bonus 1:1")])
 
     assert set(result.explained) == set(days) - {days[3]}
     assert result.not_standing == ()
@@ -100,7 +105,7 @@ def test_a_stretch_with_more_than_five_percent_of_its_closes_off_does_not_stand(
     for i in (3, 9, 15):
         closes[i] = Close(days[i], closes[i].nse, closes[i].kite + 5)
 
-    result = replay(closes, [action("2024-10-28", "Bonus 1:1")])
+    result = replayed(closes, [action("2024-10-28", "Bonus 1:1")])
 
     assert result.bases == ()
     assert result.explained == {}
@@ -129,7 +134,7 @@ def test_a_dividend_from_july_2023_to_september_2024_can_be_subtracted() -> None
         action("2024-10-28", "Bonus 1:1"),
     ]
 
-    result = replay(closes, actions)
+    result = replayed(closes, actions)
 
     newer, older = result.bases
     assert [(s.ex_date, s.form) for s in newer.stages] == [(date(2024, 10, 28), "split")]
@@ -152,7 +157,7 @@ def test_a_dividend_from_october_2024_divides_by_its_ratio_rounded_to_six_decima
     def kite(d: date, n: Decimal) -> Decimal:
         return to_tick(n / divisor, FIVE_PAISA) if d < date(2024, 10, 29) else n
 
-    result = replay(
+    result = replayed(
         compared(days, nse, kite), [action("2024-10-29", "Interim Dividend - Rs 21 Per Share")]
     )
 
@@ -169,7 +174,7 @@ def test_a_dividend_before_july_2023_is_never_a_stage() -> None:
     def kite(d: date, n: Decimal) -> Decimal:
         return to_tick(n - 10, FIVE_PAISA) if d < date(2022, 7, 1) else n
 
-    result = replay(
+    result = replayed(
         compared(days, prices(45), kite), [action("2022-07-01", "Dividend - Rs 10 Per Share")]
     )
 
@@ -185,7 +190,7 @@ def test_a_dividend_from_july_2023_can_carry_a_stage_that_only_rounds_again() ->
     def kite(d: date, n: Decimal) -> Decimal:
         return to_tick(n, RUPEE) if d < date(2024, 8, 19) else n
 
-    result = replay(
+    result = replayed(
         compared(days, prices(45), kite), [action("2024-08-19", "Dividend - Rs 2 Per Share")]
     )
 
@@ -200,7 +205,7 @@ def test_a_bonus_of_one_for_three_can_divide_by_its_ratio_rounded_to_two_decimal
     days = weekdays("2024-07-01", 25)
     closes = compared(days, prices(25), lambda _, n: to_tick(n / Decimal("1.33"), FIVE_PAISA))
 
-    result = replay(closes, [action("2024-10-28", "Bonus 1:3")])
+    result = replayed(closes, [action("2024-10-28", "Bonus 1:3")])
 
     ((basis),) = result.bases
     ((stage),) = basis.stages
@@ -215,7 +220,7 @@ def test_each_stage_has_its_own_tie_rule() -> None:
         days, prices(25), lambda _, n: to_tick(n / 2, FIVE_PAISA, rounding=ROUND_HALF_DOWN)
     )
 
-    result = replay(closes, [action("2024-10-28", "Bonus 1:1")])
+    result = replayed(closes, [action("2024-10-28", "Bonus 1:1")])
 
     ((basis),) = result.bases
     assert [s.ties for s in basis.stages] == ["half_down"]
@@ -231,7 +236,7 @@ def test_a_rights_issue_is_a_fitted_stage_read_from_kites_closes() -> None:
     def kite(d: date, n: Decimal) -> Decimal:
         return to_tick(n / Decimal("1.0473"), FIVE_PAISA) if d < date(2024, 8, 5) else n
 
-    result = replay(compared(days, prices(45), kite), [action("2024-08-05", RIGHTS)])
+    result = replayed(compared(days, prices(45), kite), [action("2024-08-05", RIGHTS)])
 
     _, older = result.bases
     ((stage),) = older.stages
@@ -246,7 +251,7 @@ def test_a_fitted_ratio_within_a_tenth_of_a_percent_of_one_is_refused() -> None:
     def kite(d: date, n: Decimal) -> Decimal:
         return to_tick(n, RUPEE) if d < date(2024, 8, 5) else n
 
-    result = replay(compared(days, prices(45), kite), [action("2024-08-05", RIGHTS)])
+    result = replayed(compared(days, prices(45), kite), [action("2024-08-05", RIGHTS)])
 
     ((raw),) = result.bases
     assert result.explained == {}
@@ -262,7 +267,7 @@ def test_a_fitted_ratio_absorbing_a_dividend_that_is_never_a_stage_is_refused() 
 
     actions = [action("2022-07-01", "Dividend - Rs 150 Per Share"), action("2022-07-01", RIGHTS)]
 
-    result = replay(compared(days, prices(45), kite), actions)
+    result = replayed(compared(days, prices(45), kite), actions)
 
     ((raw),) = result.bases
     assert result.explained == {}
@@ -279,7 +284,7 @@ def test_a_fitted_stage_carries_only_what_a_computed_stage_in_its_gap_leaves() -
 
     actions = [action("2024-08-01", "Bonus 1:2"), action("2024-08-05", "Demerger")]
 
-    result = replay(compared(days, prices(45), kite), actions)
+    result = replayed(compared(days, prices(45), kite), actions)
 
     _, older = result.bases
     bonus, demerger = older.stages
@@ -301,9 +306,102 @@ def test_stretches_join_one_kite_basis_across_an_ex_date_that_carries_no_stage()
         action("2024-10-28", "Bonus 1:1"),
     ]
 
-    result = replay(closes, actions)
+    result = replayed(closes, actions)
 
     ((basis),) = result.bases
     assert [s.form for s in basis.stages] == ["split"]
     assert (basis.start, basis.end, basis.bars) == (days[0], days[-1], 45)
     assert set(result.explained) == set(days)
+
+
+def test_a_dividends_p_is_nses_close_the_day_before_even_where_kite_has_no_candle() -> None:
+    days = weekdays("2024-09-23", 40)
+    nse = prices(40, start="1850.05", step="9.10")
+    before = split_at(days, "2024-10-29")
+    # P is 28 October's NSE close, a day Kite has no candle for.
+    divisor = (nse[before - 1] / (nse[before - 1] - 21)).quantize(Decimal("0.000001"))
+
+    def kite(d: date, n: Decimal) -> Decimal:
+        return to_tick(n / divisor, FIVE_PAISA) if d < date(2024, 10, 29) else n
+
+    closes = compared(days, nse, kite)
+    del closes[before - 1]
+
+    result = replay(
+        closes,
+        [action("2024-10-29", "Interim Dividend - Rs 21 Per Share")],
+        nse_closes=dict(zip(days, nse, strict=True)),
+    )
+
+    _, older = result.bases
+    ((stage),) = older.stages
+    assert (stage.form, stage.divisor) == ("dividend_ratio", Fraction(divisor))
+
+
+def test_a_fitted_stage_that_could_sit_at_either_of_two_actions_is_refused_and_reported() -> None:
+    # A rights issue on 1 August and a buyback on 5 August, no compared day between them.
+    days = [d for d in weekdays("2024-07-01", 47) if not date(2024, 8, 1) <= d < date(2024, 8, 5)]
+
+    def kite(d: date, n: Decimal) -> Decimal:
+        return to_tick(n / Decimal("1.0473"), FIVE_PAISA) if d < date(2024, 8, 1) else n
+
+    actions = [action("2024-08-01", RIGHTS), action("2024-08-05", "Buy Back")]
+
+    result = replayed(compared(days, prices(45), kite), actions)
+
+    ((raw),) = result.bases
+    assert result.explained == {}
+    older = (days[0], days[split_at(days, "2024-08-01") - 1])
+    assert result.not_standing == (older,)
+    ((ambiguous),) = result.ambiguous_fits
+    assert (ambiguous.stretch, ambiguous.ex_dates) == (
+        older, (date(2024, 8, 1), date(2024, 8, 5)),
+    )  # fmt: skip
+
+
+def test_a_gap_of_more_layouts_than_are_tried_one_by_one_is_reported_as_a_bounded_search() -> None:
+    # Four dividends and a rights issue between two stretches: each dividend has no
+    # stage or one of three, 4 ** 4 = 256 layouts. Kite subtracted the Rs 30 alone.
+    gap = ["2024-08-01", "2024-08-02", "2024-08-05", "2024-08-06"]
+    days = [d for d in weekdays("2024-07-01", 49) if not date(2024, 8, 1) <= d < date(2024, 8, 8)]
+
+    def kite(d: date, n: Decimal) -> Decimal:
+        return to_tick(n - 30, FIVE_PAISA) if d < date(2024, 8, 5) else n
+
+    actions = [
+        action(gap[0], "Dividend - Rs 1 Per Share"),
+        action(gap[1], "Dividend - Rs 1.50 Per Share"),
+        action(gap[2], "Dividend - Rs 30 Per Share"),
+        action(gap[3], "Dividend - Rs 2 Per Share"),
+        action("2024-08-07", RIGHTS),
+    ]
+
+    result = replayed(compared(days, prices(len(days)), kite), actions)
+
+    ((bounded),) = result.bounded_searches
+    older = (days[0], days[split_at(days, "2024-08-01") - 1])
+    assert (bounded.stretch, bounded.layouts, bounded.stands) == (older, 256, True)
+    assert set(result.explained) == {d for d in days if d < date(2024, 8, 1)}
+
+
+def test_a_group_whose_computed_stages_need_different_ticks_is_not_reproduced() -> None:
+    # A known limit (ADR 0018, #62): a group's computed stages share one tick. Here the
+    # bonus of 1 August rounds to the rupee and the dividend of 2 August to the paisa,
+    # with a rights issue on 5 August making the three one gap.
+    days = [d for d in weekdays("2024-07-01", 48) if not date(2024, 8, 1) <= d < date(2024, 8, 6)]
+
+    def kite(d: date, n: Decimal) -> Decimal:
+        if d < date(2024, 8, 1):
+            return to_tick(n / 2, RUPEE) - Decimal("10.37")
+        return n
+
+    actions = [
+        action("2024-08-01", "Bonus 1:1"),
+        action("2024-08-02", "Dividend - Rs 10.37 Per Share"),
+        action("2024-08-05", RIGHTS),
+    ]
+
+    result = replayed(compared(days, prices(len(days)), kite), actions)
+
+    assert result.explained == {}
+    assert result.not_standing == ((days[0], days[split_at(days, "2024-08-01") - 1]),)

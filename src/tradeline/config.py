@@ -178,6 +178,12 @@ RETIRED_SECTIONS = {
     " (close_tolerance, max_unexplained_pct) and the Integrity Check's"
     " in [integrity], ADR 0018",
 }
+# Keys that were removed from a section, each with what replaced it.
+RETIRED_KEYS = {
+    ("parity", "additive_min_bars"): "parity.additive_min_bars was removed (ADR 0018, #62):"
+    " Kite's Adjustment explains a close only in a Kite Basis of at least 20 compared bars,"
+    " with at most 5 percent of a stretch's closes off the replay; delete the key",
+}
 
 
 def load_config(path: Path) -> Config:
@@ -187,6 +193,10 @@ def load_config(path: Path) -> Config:
         raw = tomllib.load(f)
     for section, message in RETIRED_SECTIONS.items():
         if section in raw:
+            raise ConfigError(f"{path}: {message}")
+    for (section, key), message in RETIRED_KEYS.items():
+        table = raw.get(section)
+        if isinstance(table, dict) and key in table:
             raise ConfigError(f"{path}: {message}")
     return _build(Config, raw, prefix="")
 

@@ -47,6 +47,7 @@ from tradeline.db import app_connection
 from tradeline.ingest.candles import ingest_candles
 from tradeline.ingest.corporate_actions import ingest_corporate_actions
 from tradeline.ingest.eod import ingest_eod
+from tradeline.kite_adjustment import AmbiguousFit, BoundedSearch
 from tradeline.parity import Difference, ParityReport, Reason, parity
 from tradeline.sources.kite import KiteSession
 from tradeline.transport import PlaybackTransport, Request
@@ -591,7 +592,7 @@ def test_closes_kites_adjustment_reproduces_are_explained_and_its_kite_basis_rep
             ],
             "explained": len(report.close_mismatches),
             "unexplained": 0,
-            "listed_unexplained_days": [],
+            "unexplained_days": [],
         }
     ]
     assert report.summary()["kites_adjustment_through_fitted"] == 0
@@ -706,6 +707,8 @@ def test_the_command_exits_zero_on_clean_fixtures_with_a_summary_and_a_table(
         "kite_bases": 0,
         "kites_adjustment_through_fitted": 0,
         "listed_kite_bases": [],
+        "ambiguous_fits": [],
+        "bounded_searches": [],
         "candle_disagreements": 0,
         "listed_candle_disagreements": [],
         "pre_listing_candles": 0,
@@ -804,3 +807,70 @@ def test_the_command_refuses_a_malformed_calendar_naming_the_line(
     assert code == 1
     assert lines[-1]["level"] == "ERROR"
     assert "trading_calendar.csv line 3" in lines[-1]["msg"]
+
+
+def test_every_kite_basis_is_in_the_summary_while_the_text_lists_a_hundred(
+    fresh_database_url: str,
+) -> None:
+    url = fresh_database_url
+    load(url, kite_from_nse(url, RELIANCE_TOKEN, "RELIANCE", halved_to_five_rupees))
+    report = run(url)
+    ((replayed),) = report.kite_bases
+
+    many = replace(report, kite_bases=(replayed,) * 101)
+
+    assert many.summary()["kite_bases"] == 101
+    assert len(many.summary()["listed_kite_bases"]) == 101
+    text = many.text()
+    assert text.count("RELIANCE EQ 2024-07-01 to 2024-08-30") == 100
+    assert "... 1 more not listed; the JSON report lists every Kite Basis" in text
+
+
+def test_ambiguous_fits_and_bounded_searches_are_reported_with_their_instrument() -> None:
+    stretch = (date(2024, 7, 1), date(2024, 7, 31))
+    report = ParityReport(
+        start=START,
+        end=END,
+        close_tolerance=Decimal("0.001"),
+        max_unexplained_pct=Decimal("0.1"),
+        rows=1,
+        of_kind={"missing": (), "extra": (), "close": ()},
+        ambiguous_fits=(
+            ("GNFC", "EQ", AmbiguousFit(stretch, (date(2024, 8, 1), date(2024, 8, 5)))),
+        ),
+        bounded_searches=(
+            ("NMDC", "EQ", BoundedSearch(stretch, (date(2024, 8, 1),), 256, stands=False)),
+        ),
+    )
+
+    summary = report.summary()
+
+    assert summary["ambiguous_fits"] == [
+        {
+            "instrument": "GNFC",
+            "series": "EQ",
+            "start": "2024-07-01",
+            "end": "2024-07-31",
+            "ex_dates": ["2024-08-01", "2024-08-05"],
+        }
+    ]
+    assert summary["bounded_searches"] == [
+        {
+            "instrument": "NMDC",
+            "series": "EQ",
+            "start": "2024-07-01",
+            "end": "2024-07-31",
+            "ex_dates": ["2024-08-01"],
+            "layouts": 256,
+            "stands": False,
+        }
+    ]
+    text = report.text()
+    assert (
+        "1 ambiguous fit (a fitted stage would let the stretch stand at more than one"
+        " Ex-Date; none is placed):\n  GNFC EQ 2024-07-01 to 2024-07-31: 2024-08-01, 2024-08-05"
+    ) in text
+    assert (
+        "1 bounded search (more layouts than are tried one by one):\n"
+        "  NMDC EQ 2024-07-01 to 2024-07-31: 256 layouts over 1 Ex-Date, does not stand"
+    ) in text

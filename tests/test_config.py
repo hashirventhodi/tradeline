@@ -198,6 +198,20 @@ def test_parity_settings_load_from_their_own_section(tmp_path: Path) -> None:
     assert load_config(path).parity == Config.Parity(close_tolerance=0.002, max_unexplained_pct=0.5)
 
 
+def test_the_retired_additive_minimum_is_refused_naming_what_replaced_it(tmp_path: Path) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text("[parity]\nadditive_min_bars = 5\n")
+
+    with pytest.raises(ConfigError) as refused:
+        load_config(path)
+
+    assert str(refused.value) == (
+        f"{path}: parity.additive_min_bars was removed (ADR 0018, #62): Kite's Adjustment"
+        " explains a close only in a Kite Basis of at least 20 compared bars, with at most"
+        " 5 percent of a stretch's closes off the replay; delete the key"
+    )
+
+
 def test_a_config_with_the_retired_reconcile_section_is_refused_naming_parity(
     tmp_path: Path,
 ) -> None:
