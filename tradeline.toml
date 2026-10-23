@@ -18,6 +18,11 @@ excluded_isin_prefix = "INF"    # ETFs and other fund units trade in EQ with INF
 # key is left out, and then left out of the version) ranks each Symbol, the
 # rule the #13 memberships were stored under.
 rank_by = "instrument"
+# Count Listing Age from the earliest NSE evidence, not the equity master's
+# date (ADR 0017), a new version stored over the 120 months by #18.
+# "listing_date" (the default when the key is left out) is the rule
+# `ded30b1014c4` was stored under.
+listing_age_from = "earliest_evidence"
 
 [parity]
 # Kite Parity (ADR 0018). A close mismatch: further than this fraction of the

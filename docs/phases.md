@@ -33,7 +33,7 @@ Accept when:
   - each member's stored traded value equals the recomputed one exactly;
   - every non-member with more traded value than the last member is ineligible for a reason the rule states (series, fund unit, Listing Age or presence). One with no reason fails the month.
 
-  The check reports the excluded Instruments counted by reason, and any tie at the cut. It runs in under five minutes for the 120 months, against the ADR 0017 version once that version's months are stored.
+  The check reports the excluded Instruments counted by reason, and any tie at the cut. It runs in under five minutes for the 120 months. Under the ADR 0017 version (`f4997f66b273`), stored and configured by #18, all 120 months conform.
 - The current Universe is compared with the current NIFTY 200 as a report, not a gate: `verify-universe` gives the overlap and both difference lists, each name with its rank or the reason the rule excludes it.
 
 Liquidity coverage and monthly turnover were measured and not proposed (`docs/research.md`). Reproducibility stays as written above.

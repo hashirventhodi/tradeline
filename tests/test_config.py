@@ -61,7 +61,8 @@ def test_the_committed_config_file_loads() -> None:
 def test_the_committed_config_states_the_universe_rule_of_adr_0005_ranking_instruments() -> None:
     config = load_config(Path(__file__).resolve().parents[1] / "tradeline.toml")
 
-    # ADR 0016: the Universe Rule ranks Instruments, under a new version.
+    # ADR 0016: the Universe Rule ranks Instruments. ADR 0017: Listing Age counts from
+    # the earliest NSE evidence, the version #18 stored over the 120 months.
     assert config.universe == UniverseRule(
         top_n=200,
         lookback_trading_days=126,
@@ -70,6 +71,10 @@ def test_the_committed_config_states_the_universe_rule_of_adr_0005_ranking_instr
         series="EQ",
         excluded_isin_prefix="INF",
         rank_by="instrument",
+        listing_age_from="earliest_evidence",
+    )
+    assert config.universe.version == (
+        "f4997f66b2733bf8c8fe02e2a0aaf22acfefea8b41a97fe20e91b0ac81160715"
     )
 
 

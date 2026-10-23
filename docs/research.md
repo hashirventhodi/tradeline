@@ -1790,7 +1790,7 @@ The rule's own claim is testable on stored data: every member is eligible and ra
 - The recomputed top 200 equals the stored membership in every month, reading SUBEXLTD's obsolete key (2021-07 to 2021-12) as current.
 - No eligible non-member ever has more traded value than the 200th member.
 - 984 Instrument-months above the 200th are excluded, from 2 to 22 a month (median 8; October 2026, 10). Every one has a reason: Listing Age 499, fund unit 262, series 115, presence 108. `universe._excluded` gives only the first failing filter, in that order. Most Listing Age exclusions also fail presence: 356 fail both.
-- **91 of the Listing Age exclusions are the error ADR 0017 corrects.** NESTLEIND reads "listed 0 trading days" in every month from 2016-11 to 2024-02 (87 months), and CAMS from 2021-08 to 2021-11. A check that asks only whether a reason exists passes these months under `ded30b1014c4`: the version applies its own rule faithfully, and the rule is what was wrong. Under the ADR 0017 version (`f4997f66b273`, recomputed but not stored), both Instruments enter, 884 Instrument-months are excluded, and none lacks a reason. That version is the one the Conformance Check should be run against.
+- **91 of the Listing Age exclusions are the error ADR 0017 corrects.** NESTLEIND reads "listed 0 trading days" in 87 of the 88 months from 2016-11 to 2024-02 (in 2018-02 it ranks below the 200th member anyway), and CAMS from 2021-08 to 2021-11. A check that asks only whether a reason exists passes these months under `ded30b1014c4`: the version applies its own rule faithfully, and the rule is what was wrong. Under the ADR 0017 version (`f4997f66b273`), both Instruments enter, 884 Instrument-months are excluded, and none lacks a reason. That version is the one the Conformance Check is run against (below).
 - Reusing `universe.standings` costs 15 to 25 seconds a month under Instrument ranking (`_instrument_candidates`), about 40 minutes for 120 months run one after another.
 
 October 2026's exclusions above the 200th: Listing Age DHOOTTRANS (32 days, ₹22,791 crore), INDOMIM (44, ₹19,626 crore), VAML (76, ₹27,938 crore); fund units SILVERBEES, LIQUIDBEES, GOLDBEES, LIQUIDCASE, NIFTYBEES; series HFCL and MTARTECH, both last traded in BE.
@@ -1820,17 +1820,30 @@ October 2026 is the ten-year low, and the yearly mean has fallen every year sinc
 - Most of it is at the boundary: 714 of the 871 entries and 778 of the 871 exits touch ranks 180 to 220 on one side. Only 84 entries and 48 exits move between deeper than 220 and better than 180.
 - Under the ADR 0017 version the maximum is 18 (2024-02, NESTLEIND's entry). Coverage moves by under 0.1 points.
 
+### The acceptance run
+
+Run on 2026-10-23 on the same database, with `tradeline check-universe` (`src/tradeline/conformance.py`). It recomputes each window's traded value in one pass. The days are cut into segments at every window's ends, each Instrument's traded value is summed once per segment, and each window adds up its segments. Joining every window to every row instead took 145 seconds for the sums alone. The rule's filters then judge only the members and the Instruments above the cut (`universe.eligibility`), about 1 second a month against 4 for the whole window.
+
+| Step | Result | Runtime |
+|---|---|---|
+| `check-universe --month 2016-11 --to 2026-10` under `ded30b1014c4` | 120 months conform. Above the last member: Listing Age 499, fund unit 262, series 115, presence 108, the counts of the read-only recompute above. | 2 min 25 s |
+| `universe --month 2016-11 --to 2026-10` with `listing_age_from = "earliest_evidence"` | Rule version `f4997f66b273` (ADR 0017): 120 months of 200 members, 24,000 rows written, 512 Instruments. md5 of `concat_ws('\|', month, rank, instrument_key, symbol, series, traded_value)` joined by `,` in month and rank order: `08a7ef7d120b8ca92029df42292f7ee8`. | 5 min 1 s |
+| `check-universe --month 2016-11 --to 2026-10` under `f4997f66b273` | **Pass: 120 months conform**, none with a tie at the cut. Above the last member: Listing Age 404, fund unit 258, series 114, presence 108. | 2 min 9 s |
+
+- **The new version differs from `ded30b1014c4` only where ADR 0017 says it should.** NESTLEIND enters 87 months and CAMS 4. The 91 member-months they displace belong to 66 Instruments (BOSCHLTD 4, EMAMILTD 4, IRB 3, HINDZINC 3, ...), and every one ranked 199 or 200 under `ded30b1014c4`. SUBEXLTD's 6 months from 2021-07 to 2021-12 differ only in the key: `ded30b1014c4` stores the key a later rebuild retired.
+- **October 2026 is the same 200 members, ranks and traded values under all three versions,** so its overlap with the NIFTY 200 is still 154 of 200, against NSE's list of 2026-10-21. `verify-universe` was not rerun against NSE's live list.
+- `tradeline.toml` now configures `f4997f66b273`, as ADR 0017 requires once that version's months are stored.
+
 ### Outcome
 
 - The 85 percent line is retired as a gate, and stays recorded as failed.
-- `docs/phases.md` proposes the Conformance Check (every stored month), with the NIFTY 200 overlap kept as a report only. The proposal is adopted when the Operator approves the pull request that builds it.
+- `docs/phases.md` proposes the Conformance Check (every stored month), with the NIFTY 200 overlap kept as a report only. The proposal is adopted when the Operator approves the pull request that builds it. Under the configured version the check passes.
 - Coverage and turnover are not proposed.
 - ADR 0005 is unchanged: `verify-universe` lists every disagreement with its reason, which is how ADR 0005's "large disagreements are flagged" is met.
 
 ### Unresolved
 
-- The ADR 0017 version's 120 months are not stored, so `tradeline.toml` still points at `ded30b1014c4`. The acceptance run stores them, moves the configuration, runs the Conformance Check, and reruns `verify-universe` against NSE's live list.
-- #13's Universe lines are re-scored against the revised wording once that run is recorded.
+- `verify-universe` under `f4997f66b273` against NSE's live NIFTY 200 list, which was left for the Operator to run.
 
 ## US-market findings (for reference; not the chosen market)
 
