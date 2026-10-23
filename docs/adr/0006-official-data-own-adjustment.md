@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-10-21
-amended: 2026-10-22
+amended: 2026-10-23
 ---
 # Price history comes from Kite and NSE only, with our own corporate-action adjustment
 
@@ -29,3 +29,20 @@ Some splits and bonuses are in none of NSE's Corporate Action lists, though NSE 
 - **NSE's list wins.** If an NSE list has an adjusting action for the same Instrument with an Ex-Date within seven days of the row's, the row is not applied and is reported as superseded, so a split NSE files as two actions and a row files as one is never counted twice. A different combined factor on that date is reported as an anomaly. Every Instruments rebuild reports both over all stored rows (#45), since NSE may list the action later, or a rebuild may change which Instrument a Cited Action reaches.
 
 Alternatives rejected: leaving the series discontinuous and flagged (the official source exists and the arithmetic is the same); widening the Symbol window so KOTAKGOLD reaches GOLD1's record (a reused Symbol would then attach another security's action); a factor column on the manual links (it mixes identity with adjustment, and a bonus with no ISIN change has no link).
+
+## Amendment (2026-10-23, #15): demergers and the other price-moving actions are flagged, and no dividend is adjusted
+
+The #5 amendment left demergers, schemes and capital reductions recorded only, under the kind `other`. Each moves the price without being a split or bonus: RELIANCE opened lower on 2023-07-20 by the value of Jio Financial, and 26 of the 43 Large Moves #58 reviewed are demergers or schemes. A Strategy reading across one sees a fall no holder suffered. So:
+
+- **Demergers, schemes and capital reductions are Flagged Actions**, like rights issues and dividends. Each has its own kind (`demerger`, `scheme`, `capital_reduction`). They are carried on every bar before their Ex-Date and change no price. `scheme` covers schemes of arrangement, amalgamation and demerger, amalgamations, mergers and reconstructions. Buybacks get their own kind (`buyback`) and are recorded only, since a tender buyback does not reprice the stock on its Ex-Date. Meetings and the rest stay `other`.
+- **A subject naming several actions takes the kind that matters most**: split, bonus, demerger, scheme, capital reduction, rights, dividend, buyback, other. A factor is never lost, and a subject naming any flagged action is flagged.
+- **Demergers get no Adjustment Factor.** For cash equities the only factor available is the Ex-Date open over the previous close, which is derived from prices, not stated by NSE. NSE's F&O adjustment factors are official but exist only for F&O stocks, which would give one kind two behaviours.
+- **No dividend is adjusted.** The hypothesis that Kite adjusts dividends of 2 percent or more of the price (two data points, #5) does not hold up across ten years (docs/research.md, #62): Kite adjusted no dividend with an Ex-Date before 2023-07-01, and after that adjusted roughly those of 2 percent or more, but some of 1.8 to 2 percent and not some of 2 to 4.5 percent. No threshold of ours reproduces that, and Kite Parity already replays Kite's dividend stages on its own (ADR 0018, amended by #62).
+- **Rounding stays at 5 paisa with ties to even, below Rs 250 too, unverified there.** Its first reason was to reproduce Kite's bars. ADR 0018 has since moved agreement with Kite's chart to Kite Parity, and #62 found Kite rounds stage by stage to ticks from 1 paisa to Rs 5, so no single rule of ours would reproduce it. The rule is kept because it is the one the Adjusted Series has used, not because it matches the broker below Rs 250.
+- **Stored rows take their new kinds by a migration that reads their subjects again**, as 0019 did for the "Fv Splt" subjects. The subjects, sources and citations are unchanged. The same reading fixes 36 dividends whose subjects NSE misspelled ("Divdend", "Divided", "Meetingdividend") and which were stored as `other`.
+
+The #37 amendment says TIDEWATER's 2016 bonus "is flagged with #15's kinds". It is not: a flag comes only from an action in NSE's lists, and NSE lists none for it. TIDEWATER has never been in the Universe. If it becomes an ever-member, the Integrity Check fails on its 4.12-fold Large Move and calls for a reviewed record then.
+
+ADR 0018 is unchanged: a Flagged Action on the day of a Large Move does not explain it. A flag says the price moved, not by how much, and a demerger or capital reduction can come with a consolidation the Adjusted Series lacks.
+
+Alternatives rejected: a price-derived factor for demergers (not official data); NSE's F&O factor where one exists (covers F&O stocks only); adjusting dividends of 2 percent or more (matches neither Kite nor any official convention); one kind for every scheme-like action (loses the distinction NSE's subject makes); flagging buybacks (about 340 actions that do not reprice the stock).
