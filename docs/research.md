@@ -1828,6 +1828,7 @@ Run on 2026-10-23 on the same database, with `tradeline check-universe` (`src/tr
 |---|---|---|
 | `check-universe --month 2016-11 --to 2026-10` under `ded30b1014c4` | 120 months conform. Above the last member: Listing Age 499, fund unit 262, series 115, presence 108, the counts of the read-only recompute above. | 2 min 25 s |
 | `universe --month 2016-11 --to 2026-10` with `listing_age_from = "earliest_evidence"` | Rule version `f4997f66b273` (ADR 0017): 120 months of 200 members, 24,000 rows written, 512 Instruments. md5 of `concat_ws('\|', month, rank, instrument_key, symbol, series, traded_value)` joined by `,` in month and rank order: `08a7ef7d120b8ca92029df42292f7ee8`. | 5 min 1 s |
+| `universe --month 2016-11 --to 2026-10`, again | Every month recomputed identically: 0 rows written, no anomaly, the same md5. | 10 min 12 s |
 | `check-universe --month 2016-11 --to 2026-10` under `f4997f66b273` | **Pass: 120 months conform**, none with a tie at the cut. Above the last member: Listing Age 404, fund unit 258, series 114, presence 108. | 2 min 9 s |
 
 - **The new version differs from `ded30b1014c4` only where ADR 0017 says it should.** NESTLEIND enters 87 months and CAMS 4. The 91 member-months they displace belong to 66 Instruments (BOSCHLTD 4, EMAMILTD 4, IRB 3, HINDZINC 3, ...), and every one ranked 199 or 200 under `ded30b1014c4`. SUBEXLTD's 6 months from 2021-07 to 2021-12 differ only in the key: `ded30b1014c4` stores the key a later rebuild retired.
