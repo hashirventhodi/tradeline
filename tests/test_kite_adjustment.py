@@ -246,6 +246,22 @@ def test_a_rights_issue_is_a_fitted_stage_read_from_kites_closes() -> None:
     assert set(result.explained) == {d for d in days if d < date(2024, 8, 5)}
 
 
+def test_a_subject_naming_a_dividend_and_a_rights_issue_is_a_fitted_stage() -> None:
+    # Stored as a rights issue (HATSUN 2018, SINTEX 2016), as interpret's precedence gives it.
+    days = weekdays("2024-10-01", 45)
+    subject = "Interim Dividend- Rs 3 Per Share / Rights 1:16 @ Premium Rs 554 Per Share"
+
+    def kite(d: date, n: Decimal) -> Decimal:
+        return to_tick(n / Decimal("1.0473"), FIVE_PAISA) if d < date(2024, 11, 4) else n
+
+    result = replayed(compared(days, prices(45), kite), [action("2024-11-04", subject)])
+
+    _, older = result.bases
+    ((stage),) = older.stages
+    assert stage.fitted and older.fitted
+    assert abs(stage.divisor - Fraction("1.0473")) < Fraction(1, 2000)
+
+
 def test_a_fitted_ratio_within_a_tenth_of_a_percent_of_one_is_refused() -> None:
     days = weekdays("2024-07-01", 45)
 

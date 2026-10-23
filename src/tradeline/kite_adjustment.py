@@ -22,13 +22,14 @@ rule gives it (``_Gap.forms``):
 - from 2023-07-01 a dividend's Ex-Date can carry a stage that only rounds the
   history again, to a new tick.
 
-An action whose purpose names a dividend is a dividend, however NSE files it.
-For every other action (a rights issue, a demerger, the rest) no rule gives
-Kite's ratio: it is read from Kite's closes (``_fitted_divisor``) and the stage
-is **fitted**. A fitted stage never stands in for a computed one. It sits at its
-own action's Ex-Date, and only where one Ex-Date of the gap could hold it: where
-several could, nothing in Kite's closes says which action the ratio belongs to,
-so none is placed and the ambiguity is reported (``AmbiguousFit``).
+An action is a dividend when its kind is, as ``interpret`` read its subject: a
+subject naming a dividend and a rights issue is a rights issue. For every other
+action (a rights issue, a demerger, the rest) no rule gives Kite's ratio: it is
+read from Kite's closes (``_fitted_divisor``) and the stage is **fitted**. A
+fitted stage never stands in for a computed one. It sits at its own action's
+Ex-Date, and only where one Ex-Date of the gap could hold it: where several
+could, nothing in Kite's closes says which action the ratio belongs to, so none
+is placed and the ambiguity is reported (``AmbiguousFit``).
 
 An older stretch is joined to the newer one across the Ex-Dates between them (a
 gap). Each split, bonus, consolidation and dividend there has its own computed
@@ -85,9 +86,6 @@ SIX_DECIMALS = 10**6
 # Gaps with more layouts than this are searched one Ex-Date's choice at a time.
 EXHAUSTIVE = 64
 _AMOUNT = re.compile(r"R[se]\.?\s*-?\s*(\d+(?:\.\d+)?)")
-# NSE's subjects misspell it: "Divdend" (KOTAKBANK 2016), "Dividned" (NESTLEIND 2020),
-# and "Divided" (ABBOTINDIA 2016, NELCAST 2015), always with the dividend's amount.
-_DIVIDEND_WORD = re.compile(r"div(?:idend|dend|ided|idned)", re.IGNORECASE)
 
 Class = Literal["split", "dividend", "fitted"]
 SplitForm = Literal["split", "split_2dp"]
@@ -349,7 +347,7 @@ def _fitted_divisor(
 def _class(action: CorporateAction) -> Class:
     if action.kind in ADJUSTED_KINDS:
         return "split"
-    if action.kind == "dividend" or _DIVIDEND_WORD.search(action.subject):
+    if action.kind == "dividend":
         return "dividend"
     return "fitted"
 
