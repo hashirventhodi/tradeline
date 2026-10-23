@@ -362,3 +362,76 @@ def test_short_form_splits_stored_before_the_parser_read_them_are_rederived_as_i
     }
     assert {s: derived[s] for s in SHORT_FORMS} == {s: interpret(s) for s in SHORT_FORMS}
     assert {s: derived[s] for s in LEFT_AS_STORED} == {s: ("other", None) for s in LEFT_AS_STORED}
+
+
+# What 0026 re-reads (#15): every stored action that is neither a split nor a bonus, as
+# ``interpret`` reads it now. These were stored as "other" before 0026.
+STORED_AS_OTHER = [
+    "Demerger",
+    "De-Merger",
+    "Merger/Demerger",
+    "Scheme Of Arrangement In The Nature Of Demerger",
+    "Scheme Of Arrangement",
+    "Sheme Of Arrangement",
+    "Composite Scheme Of Amalgamation And Arrangement",
+    "Merger With Iifl India Growth Fund",
+    "Scheme Of Arrangement & Reconstruction",
+    "Scheme Of Arrangement - Bonus Ncrps 1:10",
+    "Annual General Meeting/Scheme Of Arrangement",
+    "Capital Reduction Pursuant To Nclt Order",
+    "Capital Reduction Rs 10 To Rs 3.30 / Consolidation Rs 3.30 To Rs.10",
+    "Buy Back - Tender Offer",
+    "Buyback Of Shares",
+    "Interest Payment/Buy Back",
+    "Annual General Meeting/ Divdend - Re 0.50/- Per Share",
+    "Annual General Meeting/Divided - Rs 35/- Per Share",
+    "Annual General Meetingdividend - Rs 7.50 Per Share",
+    "Intdividend - Rs 160 Per Share",
+    "Interim Dividned - Rs 135 Per Share",
+    "Divivend - Rs 7/- Per Unit",
+    "Annual General Meeting",
+    "Interest Payment",
+    "Conversion Of Etf Into Index Scheme",
+    "Winding Up Of Scheme",
+]
+# These were read as a rights issue or a dividend: the first two keep their kind, and the
+# last names a demerger, which now takes precedence.
+STORED_AS_RIGHTS_OR_DIVIDEND = {
+    "Rights 1:4 @ Premium Rs 1247/-": "rights",
+    "Interim Dividend - Rs 21 Per Share": "dividend",
+    "Interim Dividend - Rs 2 Per Share/Demerger": "dividend",
+}
+
+
+def test_stored_actions_are_reread_into_the_flagged_and_buyback_kinds_as_the_parser_reads_them(
+    empty_database_url: str,
+) -> None:
+    stored = {s: "other" for s in STORED_AS_OTHER} | STORED_AS_RIGHTS_OR_DIVIDEND
+    with connect(empty_database_url) as conn:
+        apply_migrations(conn)
+        conn.execute("DELETE FROM schema_migrations WHERE version = '0026_flagged_kinds'")
+        for n, (subject, kind) in enumerate(stored.items()):
+            conn.execute(
+                "INSERT INTO corporate_actions (symbol, series, ex_date, subject, kind)"
+                " VALUES (%s, 'EQ', '2023-07-20', %s, %s)",
+                (f"S{n}", subject, kind),
+            )
+        conn.commit()
+
+        assert apply_migrations(conn) == ["0026_flagged_kinds"]
+        rows = conn.execute(
+            "SELECT subject, kind, factor_numerator FROM corporate_actions"
+        ).fetchall()
+
+    assert {subject: (kind, num) for subject, kind, num in rows} == {
+        subject: interpret(subject) for subject in stored
+    }
+    assert {subject: kind for subject, kind, _ in rows}.items() >= {
+        "Demerger": "demerger",
+        "Scheme Of Arrangement": "scheme",
+        "Capital Reduction Pursuant To Nclt Order": "capital_reduction",
+        "Buyback Of Shares": "buyback",
+        "Annual General Meetingdividend - Rs 7.50 Per Share": "dividend",
+        "Conversion Of Etf Into Index Scheme": "other",
+        "Interim Dividend - Rs 2 Per Share/Demerger": "demerger",
+    }.items()

@@ -7,10 +7,11 @@ factor. ``adjust`` applies a symbol's actions to its raw bars as of a date.
 
 Splits (either direction) and bonuses are adjusted: every bar before the
 ex-date has its prices multiplied by the factor and its volume divided by it,
-compounding across actions. Rights issues and dividends are recorded and
-flagged on the bars they precede but left unadjusted, since adjusting them
-needs a price (the ex-date close) and a convention, and the broker's chart
-does not adjust them either. Meetings, buybacks, and the rest are recorded only.
+compounding across actions. Rights issues, dividends, demergers, schemes of
+arrangement or amalgamation, and capital reductions are Flagged Actions:
+recorded and flagged on the bars they precede but left unadjusted, since the
+only factor for them is one derived from prices (ADR 0006, amended by #15).
+Buybacks, meetings, and the rest are recorded only.
 
 A split or bonus in none of NSE's lists may come from a reviewed row citing
 NSE's circulars (ADR 0006, amended by #37; ``tradeline.cited_actions``). NSE's
@@ -36,12 +37,26 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 from fractions import Fraction
-from typing import Literal
+from typing import Literal, get_args
 
-Kind = Literal["split", "bonus", "rights", "dividend", "other"]
-KINDS: tuple[Kind, ...] = ("split", "bonus", "rights", "dividend", "other")
+# Adjusted, then flagged, then recorded only.
+Kind = Literal[
+    "split",
+    "bonus",
+    "demerger",
+    "scheme",
+    "capital_reduction",
+    "rights",
+    "dividend",
+    "buyback",
+    "other",
+]
+KINDS: tuple[Kind, ...] = get_args(Kind)
 ADJUSTED_KINDS: frozenset[str] = frozenset({"split", "bonus"})
-FLAGGED_KINDS: frozenset[str] = frozenset({"rights", "dividend"})
+# Flagged Actions: they move the price, but no official factor for them applies.
+FLAGGED_KINDS: frozenset[str] = frozenset(
+    {"demerger", "scheme", "capital_reduction", "rights", "dividend"}
+)
 
 TICK = Decimal("0.05")
 _TICK = Fraction(TICK)
@@ -111,7 +126,7 @@ class AdjustedBar:
     volume: int
     # The cumulative price factor applied to this bar; 1 when nothing was.
     factor: Fraction
-    # Later actions that were recorded but not applied (rights, dividends), oldest first.
+    # Later Flagged Actions, recorded but not applied, oldest first.
     unadjusted: tuple[CorporateAction, ...]
 
 
@@ -252,12 +267,36 @@ _SPLIT = re.compile(
     r"\s*r[se]\.?\s*(\d+(?:\.\d+)?)[^0-9]*?\bto\s*r[se]\.?\s*(\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
+# "Demerger", "De-Merger", and "Scheme Of Arrangement In The Nature Of Demerger".
+_DEMERGER = re.compile(r"\bde-?\s*merger", re.IGNORECASE)
+# "Scheme Of Arrangement", NSE's "Sheme Of Arrangement", "Composite Scheme Of Amalgamation
+# And Arrangement", "Merger". Not a fund's "Conversion Of Etf Into Index Scheme".
+_SCHEME = re.compile(
+    r"\bsc?heme\s+of\b|\bamalgamation\b|\bmerger\b|\breconstruction\b", re.IGNORECASE
+)
+_CAPITAL_REDUCTION = re.compile(r"\bcapital\s*reduction\b", re.IGNORECASE)
 _RIGHTS = re.compile(r"\brights?\b", re.IGNORECASE)
-_DIVIDEND = re.compile(r"\bdiv(?:idend)?\b|\bdistribution\b", re.IGNORECASE)
+# "Div", "Dividend", and NSE's "Divdend", "Divided", "Dividned", "Divivend", and "Meetingdividend"
+# run together.
+_DIVIDEND = re.compile(
+    r"\bdiv\b|div(?:idend|dend|ided|idned|ivend)|\bdistribution\b", re.IGNORECASE
+)
+_BUYBACK = re.compile(r"\bbuy\s*back\b", re.IGNORECASE)
 # "Split", and "Splt" as in "Fv Splt Frm".
 _ADJUSTING_WORDS = re.compile(r"bonus|spli?t|sub-?division|consolidation", re.IGNORECASE)
 # A bonus of debentures or preference shares, or a split of something else, is not an equity action.
 _NOT_EQUITY = re.compile(r"ncrps|debenture|preference|warrant", re.IGNORECASE)
+
+
+# The kinds without a factor, in the order ``interpret`` gives them precedence.
+_NOT_ADJUSTING: tuple[tuple[Kind, re.Pattern[str]], ...] = (
+    ("demerger", _DEMERGER),
+    ("scheme", _SCHEME),
+    ("capital_reduction", _CAPITAL_REDUCTION),
+    ("rights", _RIGHTS),
+    ("dividend", _DIVIDEND),
+    ("buyback", _BUYBACK),
+)
 
 
 def interpret(subject: str) -> tuple[Kind, Fraction | None]:
@@ -265,7 +304,9 @@ def interpret(subject: str) -> tuple[Kind, Fraction | None]:
 
     A subject can name several actions ("Bonus 1:1/Face Value Split ..."):
     the adjusting ones compound into one factor, and the kind is the most
-    consequential one named, in the order split, bonus, rights, dividend.
+    consequential one named: a split, then a bonus, then ``_NOT_ADJUSTING`` in
+    its order. A subject naming a split or bonus and a flagged action is
+    therefore adjusted and not flagged.
     """
     factor = Fraction(1)
     kind: Kind | None = None
@@ -281,10 +322,9 @@ def interpret(subject: str) -> tuple[Kind, Fraction | None]:
             kind = kind or "bonus"
     if kind is not None:
         return kind, factor
-    if _RIGHTS.search(subject):
-        return "rights", None
-    if _DIVIDEND.search(subject):
-        return "dividend", None
+    for named, pattern in _NOT_ADJUSTING:
+        if pattern.search(subject):
+            return named, None
     return "other", None
 
 

@@ -96,8 +96,9 @@ def test_a_fixture_backed_run_stores_every_action_with_its_kind_and_factor(
     assert (run.rows_seen, run.rows_written, run.error) == (RECORDS, UNIQUE_RECORDS, None)
     assert run.details["by_kind"] == {
         "bonus": 3,
+        "demerger": 1,
         "dividend": 8,
-        "other": 11,
+        "other": 10,
         "rights": 1,
         "split": 3,
     }
@@ -172,7 +173,7 @@ def test_two_actions_on_one_day_a_split_a_rights_issue_and_a_demerger_are_each_r
         "Rights 100:224 @ Premium Rs 20/-",
     )
     assert (meeting.kind, meeting.factor) == ("other", None)
-    assert (demerger.kind, demerger.subject) == ("other", "Demerger")
+    assert (demerger.kind, demerger.subject) == ("demerger", "Demerger")
     assert (agm_dividend.kind, agm_dividend.record_date) == ("dividend", None)
 
 

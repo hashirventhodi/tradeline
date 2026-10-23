@@ -176,6 +176,34 @@ def test_a_dividend_is_flagged_but_a_meeting_is_not() -> None:
     assert adjusted.close == D("100.00")
 
 
+def test_a_demerger_is_flagged_on_earlier_bars_and_changes_no_price_or_volume() -> None:
+    # RELIANCE, ex 2023-07-20 (Jio Financial): the close fell by the demerged entity's value.
+    bars = [
+        bar(JUL_1, "2853.00", "2860.00", "2840.00", "2841.85", 100),
+        bar(JUL_3, "2632.00", "2650.00", "2600.00", "2614.50", 300),
+    ]
+    demerger = action(JUL_3, "demerger", None, "Demerger")
+
+    before, on = adjust(bars, [demerger], as_of=JUL_8)
+
+    assert (before.close, before.volume, before.factor) == (D("2841.85"), 100, Fraction(1))
+    assert (on.close, on.volume, on.factor) == (D("2614.50"), 300, Fraction(1))
+    assert before.unadjusted == (demerger,)
+    assert on.unadjusted == ()
+
+
+def test_schemes_and_capital_reductions_are_flagged_but_a_buyback_is_not() -> None:
+    bars = [bar(JUL_1, "100.00", "100.00", "100.00", "100.00", 10)]
+    scheme = action(JUL_2, "scheme", None, "Scheme Of Arrangement")
+    reduction = action(JUL_3, "capital_reduction", None, "Capital Reduction")
+    buyback = action(JUL_5, "buyback", None, "Buy Back")
+
+    (adjusted,) = adjust(bars, [buyback, reduction, scheme], as_of=JUL_8)
+
+    assert adjusted.unadjusted == (scheme, reduction)
+    assert adjusted.close == D("100.00")
+
+
 def test_an_action_dated_after_the_as_of_date_is_neither_applied_nor_flagged() -> None:
     bars = [bar(JUL_1, "100.00", "100.00", "100.00", "100.00", 10)]
     bonus = action(JUL_3, "bonus", Fraction(1, 2), "Bonus 1:1")
@@ -305,15 +333,57 @@ def test_an_adjusting_action_without_a_factor_is_refused() -> None:
             "dividend",
             None,
         ),
-        ("Annual General Meeting", "other", None),
-        ("Buy Back", "other", None),
-        ("Demerger", "other", None),
-        # Bonus debentures and preference shares are not equity bonuses.
-        ("Scheme Of Arrangement - Bonus Ncrps 1:1", "other", None),
-        ("Scheme Of Arangement- Bonus - 1 Debenture For 1 Equity Share Held", "other", None),
-        ("Bonus 1:1 Ncrps", "other", None),
+        # NSE's misspellings of a dividend (KOTAKBANK 2016, ABBOTINDIA 2016, GRINDWELL 2020).
+        ("Annual General Meeting/ Divdend - Re 0.50/- Per Share", "dividend", None),
+        ("Annual General Meeting/Divided - Rs 35/- Per Share", "dividend", None),
+        ("Annual General Meetingdividend - Rs 7.50 Per Share", "dividend", None),
+        ("Annual General Me0etingdividend - Rs 1.2 Per Share", "dividend", None),
+        ("Interim Divdend - Rs 2 Per Share", "dividend", None),
+        ("Divivend - Rs 2 Per Unit", "dividend", None),
+        ("Interim Dividned - Rs 135 Per Share", "dividend", None),
+        ("Demerger", "demerger", None),
+        ("De-Merger", "demerger", None),
+        ("DEMERGER", "demerger", None),
+        ("Scheme Of Demerger", "demerger", None),
+        ("Scheme Of Arrangement In The Nature Of Demerger", "demerger", None),
+        ("Scheme Of Arrangement", "scheme", None),
+        ("Sheme Of Arrangement", "scheme", None),
+        ("Composite Scheme Of Arrangement", "scheme", None),
+        ("Composite Scheme Of Amalgamation And Arrangement", "scheme", None),
+        ("Scheme Of Amalgamation", "scheme", None),
+        ("Merger", "scheme", None),
+        ("Scheme Of Arrangement - Reconstruction", "scheme", None),
+        ("Annual General Meeting/Scheme Of Arrangement", "scheme", None),
+        # Bonus debentures and preference shares are not equity bonuses, but the
+        # scheme that issues them moves the price.
+        ("Scheme Of Arrangement - Bonus Ncrps 1:1", "scheme", None),
+        ("Scheme Of Arangement- Bonus - 1 Debenture For 1 Equity Share Held", "scheme", None),
+        ("Capital Reduction", "capital_reduction", None),
+        ("Capital Reduction - From Rs 10/- To Rs 4/- Per Share", "capital_reduction", None),
         # A consolidation without a From/To pair cannot be given a factor.
-        ("Capital Reduction Rs 10 To Rs 5 / Consolidation Rs 5 To Rs10", "other", None),
+        (
+            "Capital Reduction Rs 10 To Rs 5 / Consolidation Rs 5 To Rs10",
+            "capital_reduction",
+            None,
+        ),
+        # The kind that matters most wins: a flagged kind over a dividend, a split over all.
+        ("Interim Dividend - Rs 2 Per Share/Demerger", "demerger", None),
+        ("Demerger/Rights 1:4 @ Premium Rs 20/-", "demerger", None),
+        (
+            "Demerger/Face Value Split (Sub-Division) - From Rs 10/- Per Share To Re 1/- Per Share",
+            "split",
+            Fraction(1, 10),
+        ),
+        ("Buy Back", "buyback", None),
+        ("Buyback", "buyback", None),
+        ("Buy Back Of Shares", "buyback", None),
+        ("Annual General Meeting", "other", None),
+        ("Bonus 1:1 Ncrps", "other", None),
+        # A fund's change of scheme is not a scheme of arrangement.
+        ("Conversion Of Etf Into Index Scheme", "other", None),
+        ("Winding Up Of Scheme", "other", None),
+        ("Exit Option Pursuant To Change In Fundamental Attributes Of Etf", "other", None),
+        ("Interest Payment", "other", None),
     ],
 )
 def test_nse_subjects_are_read_into_a_kind_and_a_factor(

@@ -33,7 +33,7 @@ from typing import Any
 import psycopg
 
 from tradeline import queries
-from tradeline.adjust import ADJUSTED_KINDS, CorporateAction
+from tradeline.adjust import ADJUSTED_KINDS, FLAGGED_KINDS, CorporateAction
 
 SERIES = "EQ"
 FACTOR_PLACES = Decimal("0.0001")
@@ -94,8 +94,9 @@ class SymbolComparison:
 
     @property
     def listed_actions(self) -> tuple[CorporateAction, ...]:
-        """``actions`` without meetings, buybacks, and the rest NSE lists that adjust nothing."""
-        return tuple(a for a in self.actions if a.kind != "other")
+        """``actions`` without meetings, buybacks, and the rest NSE lists that neither adjust
+        nor flag anything."""
+        return tuple(a for a in self.actions if a.kind in ADJUSTED_KINDS | FLAGGED_KINDS)
 
     @property
     def adjusting_actions(self) -> tuple[CorporateAction, ...]:
