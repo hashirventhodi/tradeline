@@ -22,8 +22,8 @@ rule gives it (``_Gap.forms``):
 - from 2023-07-01 a dividend's Ex-Date can carry a stage that only rounds the
   history again, to a new tick.
 
-An action is a dividend when its kind is, as ``interpret`` read its subject: a
-subject naming a dividend and a rights issue is a rights issue. For every other
+An action is a dividend only when its stored kind is, as ``interpret`` reads its
+subject: one naming a dividend and a rights issue is a rights issue. For every other
 action (a rights issue, a demerger, the rest) no rule gives Kite's ratio: it is
 read from Kite's closes (``_fitted_divisor``) and the stage is **fitted**. A
 fitted stage never stands in for a computed one. It sits at its own action's

@@ -260,6 +260,7 @@ def test_a_subject_naming_a_dividend_and_a_rights_issue_is_a_fitted_stage() -> N
     ((stage),) = older.stages
     assert stage.fitted and older.fitted
     assert abs(stage.divisor - Fraction("1.0473")) < Fraction(1, 2000)
+    assert set(result.explained) == {d for d in days if d < date(2024, 11, 4)}
 
 
 def test_a_fitted_ratio_within_a_tenth_of_a_percent_of_one_is_refused() -> None:
