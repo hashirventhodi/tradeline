@@ -76,6 +76,7 @@ This ADR twice says `compare-adjusted` is unchanged, the bar-by-bar check of our
   - **Disagrees:** Kite's Adjustment stands across that Ex-Date only without that stage: no stage, or a fitted ratio in its place.
   - **Not judged:** no standing stretch to judge it by (BAJFINANCE before mid-2025, NMDC before 2024-02-27, listing months, a Kite Basis under 20 bars), no Kite closes on one side, an Ex-Date after the candles were fetched, our ratio standing only when read from Kite's closes on a tick of its own, or a split or bonus with no factor. Each is listed with its reason and counted.
 - **Only a disagreement fails it.** An Ex-Date not judged is Kite's convention we cannot replay, not evidence against our factor, just as a gap is reported and never fails the Integrity Check.
+- **An ever-member no Instrument answers for is listed, not judged, and fails nothing here.** The Integrity Check fails on it, and both checks are Phase 1 acceptance lines, so that gate stays the Integrity Check's alone rather than being duplicated. Not judged is never reported as verified.
 - **The bar-by-bar comparison stays as detail** for a named Symbol, and gates nothing.
 
 ### Consequences of the amendment
