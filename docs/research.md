@@ -1842,6 +1842,36 @@ Run on 2026-10-23 on the same database, with `tradeline check-universe` (`src/tr
 - Coverage and turnover are not proposed.
 - ADR 0005 is unchanged: `verify-universe` lists every disagreement with its reason, which is how ADR 0005's "large disagreements are flagged" is met.
 
+## Factor Agreement (#68)
+
+Phase 1's line "our adjusted series matches the broker's displayed adjusted chart on a sample of 20 symbols with known splits or bonuses, to the paisa" is replaced, as a proposal, by Factor Agreement (ADR 0018, amended by #68; `docs/phases.md`). #13 failed the old line at 26,310 of 48,699 bars. It cannot pass by design: ADR 0006 adjusts splits and bonuses only, and Kite also adjusts dividends and demergers and rounds each stage to its own tick (#62).
+
+### The acceptance run
+
+| | |
+|---|---|
+| Command | `uv run tradeline compare-adjusted --from 2016-10-21 --to 2026-10-20 --as-of 2026-10-22` (read-only) |
+| Database | The #59 database, as #62's run used it |
+| Code | Branch `factor-agreement-68`, commit 2684ac9 |
+| Result | **209 split and bonus Ex-Dates of 148 Instruments: 191 agree, 0 disagree, 18 not judged. PASS.** |
+| Not judged, by reason | 7 not standing before, 6 no closes before, 3 short basis, 2 Kite's ratio is ours |
+| Time | 18 min 14 s wall, 712 s of CPU, on the development machine with other work running (load average 11 at the start, 14 at the end). |
+
+Six Ex-Dates agree through the ratio rounded to two decimals, as ADR 0018 allows: ASTRAL 2021 and 2023, GAIL 2017 and 2018, OIL 2017 and WIPRO 2019.
+
+**#13's five unexplained Ex-Dates all agree.** #13 found our factor equal to Kite's at 30 of its 35 split and bonus Ex-Dates. The other five, WIPRO 2019-03-06, TATASTEEL 2022-07-28 and GAIL 2017-03-09, 2018-03-27 and 2019-07-09, sat in stretches the additive fit described. Kite's Adjustment replays them, and each agrees: WIPRO's 1:3 bonus and GAIL's two 1:3 bonuses divide by 1.33, and TATASTEEL's 1:10 split and GAIL's 1:1 bonus by the exact ratio.
+
+### The 18 not judged
+
+| Reason | Ex-Dates |
+|---|---|
+| No stretch before stands, with our ratio or with Kite's read from its closes | AVANTIFEED 2018-06-26, GUJGASLTD 2019-01-15, KARURVYSYA 2016-11-17, MOTHERSUMI 2017-07-05 and 2018-10-30, NAZARA 2022-06-24 and 2025-09-26 |
+| Kite has no compared close before it | GRUH 2018-06-06, INFIBEAM 2017-08-31, 2021-03-18 and 2022-03-14 (no Kite candles; see #31), JBCHEPHARM 2023-09-18, SUNILHITEC 2016-12-01 |
+| A Kite Basis either side under 20 bars | BAJFINANCE 2025-06-16, 360ONE 2023-03-02, LICI 2026-05-29 |
+| Our ratio stands only when read from Kite's closes, on a tick of its own | EASEMYTRIP 2022-02-28 and 2022-11-21 |
+
+None shows Kite applying a different ratio: a ratio Kite's closes show more than 0.1 percent from ours would have disagreed. The causes of the seven stretches that do not stand were not investigated.
+
 ## US-market findings (for reference; not the chosen market)
 
 Alpaca offers free paper trading with IEX data and ₹99-equivalent full SIP data; Massive (formerly Polygon) runs 29 to 199 dollars a month; SEC EDGAR is free. These made the US the easier engineering choice. The Operator chose Indian equities, which cost more in friction (no sandbox, daily login, static IP) but is the market they trade.
