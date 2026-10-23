@@ -51,7 +51,7 @@ Liquidity coverage and monthly turnover were measured and not proposed (`docs/re
 
   The line passes when no Ex-Date disagrees. Ex-Dates not judged are listed, each with its reason, and counted, and never fail it. The bar-by-bar comparison to the paisa stays in `compare-adjusted` as detail for a named Symbol and gates nothing.
 
-**#13, 2026-10-23, adopted with the pull request that records it (no build).** The original line was:
+**#13, 2026-10-23, adopted with PR #71 (no build).** The original line was:
 
 > Ten years of daily candles for every Instrument that was ever in the Universe are loaded, and Kite Parity against NSE's end-of-day files has unexplained differences under 0.1% (ADR 0018).
 
