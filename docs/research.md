@@ -1831,7 +1831,7 @@ Run on 2026-10-23 on the same database, with `tradeline check-universe` (`src/tr
 | `check-universe --month 2016-11 --to 2026-10` under `f4997f66b273` | **Pass: 120 months conform**, none with a tie at the cut. Above the last member: Listing Age 404, fund unit 258, series 114, presence 108. | 2 min 9 s |
 
 - **The new version differs from `ded30b1014c4` only where ADR 0017 says it should.** NESTLEIND enters 87 months and CAMS 4. The 91 member-months they displace belong to 66 Instruments (BOSCHLTD 4, EMAMILTD 4, IRB 3, HINDZINC 3, ...), and every one ranked 199 or 200 under `ded30b1014c4`. SUBEXLTD's 6 months from 2021-07 to 2021-12 differ only in the key: `ded30b1014c4` stores the key a later rebuild retired.
-- **October 2026 is the same 200 members, ranks and traded values under all three versions,** so its overlap with the NIFTY 200 is still 154 of 200, against NSE's list of 2026-10-21. `verify-universe` was not rerun against NSE's live list.
+- **October 2026 is the same 200 members, ranks and traded values under all three versions.** `verify-universe --month 2026-10` under `f4997f66b273`, against NSE's live list fetched 2026-10-23, gives 154 of 200 (77.00 percent), 0 members without a sector, and the same 46 + 46 names with the same traded values as #13's lists above. The only change is the rank of 17 index-only names from IRFC down, each one place lower (IRFC 272, MRF 336, BAJAJHLDNG 442, IRCTC 449). That is the Instrument ranking counting one more eligible Instrument above them, as noted under `ded30b1014c4`. VAML is still barred by Listing Age (76 trading days).
 - `tradeline.toml` now configures `f4997f66b273`, as ADR 0017 requires once that version's months are stored.
 
 ### Outcome
@@ -1840,10 +1840,6 @@ Run on 2026-10-23 on the same database, with `tradeline check-universe` (`src/tr
 - `docs/phases.md` proposes the Conformance Check (every stored month), with the NIFTY 200 overlap kept as a report only. The proposal is adopted when the Operator approves the pull request that builds it. Under the configured version the check passes.
 - Coverage and turnover are not proposed.
 - ADR 0005 is unchanged: `verify-universe` lists every disagreement with its reason, which is how ADR 0005's "large disagreements are flagged" is met.
-
-### Unresolved
-
-- `verify-universe` under `f4997f66b273` against NSE's live NIFTY 200 list, which was left for the Operator to run.
 
 ## US-market findings (for reference; not the chosen market)
 
