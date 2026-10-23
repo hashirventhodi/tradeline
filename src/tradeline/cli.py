@@ -20,6 +20,7 @@ from tradeline.cited_actions import load_cited_actions
 from tradeline.collect import collect_daily as collect_daily_service
 from tradeline.compare_adjusted import compare_adjusted as compare_adjusted_service
 from tradeline.config import Config, default_config_path, load_config
+from tradeline.conformance import check_conformance
 from tradeline.dates import IST, month_end, month_of, next_month, parse_month
 from tradeline.db import NotAppRoleMember, app_connection, connect
 from tradeline.environment import Environment
@@ -410,6 +411,33 @@ def verify_universe(ctx: Context, args: argparse.Namespace) -> int:
     return 0
 
 
+def check_universe(ctx: Context, args: argparse.Namespace) -> int:
+    """The Conformance Check of each stored month from ``--month`` to ``--to`` under the
+    configured rule; exit 1 unless every month conforms.
+
+    The summary is the last JSON line on stdout; the report goes to stderr.
+    Nothing is written.
+    """
+    end = args.month if args.to is None else args.to
+    if end < args.month:
+        raise ValueError(f"month {end:%Y-%m} is before {args.month:%Y-%m}")
+    months = []
+    month = args.month
+    while month <= end:
+        months.append(month)
+        month = next_month(month)
+    with _scope(args.month, month_end(end)):
+        with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+            report = check_conformance(conn, ctx.config.universe, months=months)
+        sys.stderr.write(report.text())
+        log.log(
+            logging.INFO if report.passed else logging.ERROR,
+            "check-universe finished",
+            extra={"report": report.summary()},
+        )
+    return 0 if report.passed else 1
+
+
 def integrity(ctx: Context, args: argparse.Namespace) -> int:
     """The Integrity Check of NSE's data against NSE alone; exit 1 unless it passes.
 
@@ -442,6 +470,7 @@ COMMANDS: dict[str, Command] = {
     "rebuild-instruments": rebuild_instruments,
     "instruments": instruments,
     "verify-universe": verify_universe,
+    "check-universe": check_universe,
     "collect-daily": collect_daily,
     "integrity": integrity,
 }
@@ -600,6 +629,20 @@ def build_parser() -> argparse.ArgumentParser:
         "instruments",
         help="review the last rebuild: anomalies, ended Instruments, Link Candidates, and"
         " stale Universe months; writes nothing",
+    )
+    check_parser = subparsers.add_parser(
+        "check-universe",
+        help="the Conformance Check: each stored Universe month is what the configured rule"
+        " selects; exit 1 unless every month conforms; writes nothing",
+    )
+    check_parser.add_argument(
+        "--month", metavar="YYYY-MM", type=parse_month, required=True, help="the first month"
+    )
+    check_parser.add_argument(
+        "--to",
+        metavar="YYYY-MM",
+        type=parse_month,
+        help="the last month; defaults to --month",
     )
     verify_parser = subparsers.add_parser(
         "verify-universe",

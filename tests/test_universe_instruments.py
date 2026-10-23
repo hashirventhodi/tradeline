@@ -25,6 +25,7 @@ import pytest
 from playback import Edit, Playback, lines
 from tradeline import queries
 from tradeline.config import UniverseRule
+from tradeline.conformance import check_conformance
 from tradeline.db import app_connection
 from tradeline.ingest.eod import ingest_eod
 from tradeline.ingest.symbol_changes import ingest_symbol_changes
@@ -102,6 +103,18 @@ def test_a_member_renamed_inside_the_window_keeps_its_place_with_its_whole_trade
     ]
 
 
+def test_a_month_ranked_by_instrument_conforms_with_a_renamed_members_whole_traded_value(
+    conn: psycopg.Connection,
+) -> None:
+    compute_universe(conn, BY_INSTRUMENT, month=MAY)
+
+    report = check_conformance(conn, BY_INSTRUMENT, months=[MAY])
+
+    # The recompute sums ZOMATO and ETERNAL's rows into one Instrument, as the rule does.
+    assert report.passed
+    assert report.months[0].last_traded_value == ZOMATO + ETERNAL
+
+
 def test_membership_records_the_instrument_and_the_symbol_in_force_on_the_last_window_day(
     conn: psycopg.Connection,
 ) -> None:
@@ -148,7 +161,7 @@ def test_a_renamed_member_is_not_excluded_as_recently_listed(fresh_database_url:
         by_symbol = {s.symbol: s for s in standings(conn, BY_SYMBOL, month=MAY)}
         compute_universe(conn, BY_INSTRUMENT, month=MAY)
 
-        assert by_symbol["ETERNAL"].excluded == "listed 13 trading days, fewer than 21"
+        assert str(by_symbol["ETERNAL"].excluded) == "listed 13 trading days, fewer than 21"
         assert (4, "ETERNAL", ZOMATO + ETERNAL) in members(conn, BY_INSTRUMENT)
         assert queries.resolve_symbol(conn, "ETERNAL", as_of=END).key == "ZOMATO@2025-03-17"
 
@@ -172,7 +185,7 @@ def test_listing_age_counts_from_the_first_row_when_the_listing_date_comes_after
         by_listing_date = {s.symbol: s for s in standings(conn, BY_INSTRUMENT, month=MAY)}
         compute_universe(conn, EARLIEST_EVIDENCE, month=MAY)
 
-        assert by_listing_date["RELIANCE"].excluded == "listed 8 trading days, fewer than 21"
+        assert str(by_listing_date["RELIANCE"].excluded) == "listed 8 trading days, fewer than 21"
         assert (1, "RELIANCE", RELIANCE) in members(conn, EARLIEST_EVIDENCE)
         # The key keeps NSE's date.
         assert queries.resolve_symbol(conn, "RELIANCE", as_of=END).key == "RELIANCE@2025-04-21"

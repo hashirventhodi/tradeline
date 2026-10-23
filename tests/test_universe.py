@@ -21,13 +21,14 @@ from pathlib import Path
 import psycopg
 import pytest
 
+from playback import Playback, bhavcopy_series
 from tradeline import queries
 from tradeline.config import UniverseRule
 from tradeline.dates import IST
 from tradeline.db import app_connection
 from tradeline.ingest.eod import ingest_eod
 from tradeline.transport import PlaybackTransport
-from tradeline.universe import compute_universe
+from tradeline.universe import Exclusion, compute_universe, standings
 
 FIXTURES = Path(__file__).parent / "fixtures" / "universe"
 AUGUST = date(2024, 8, 1)
@@ -165,6 +166,43 @@ def test_a_symbol_with_rows_on_too_few_of_the_window_days_is_excluded(
 
     assert "EMCURE" not in [symbol for _, symbol, _ in members(conn, younger)]
     assert (5, "EMCURE", Decimal("26254395753.00")) in members(conn, looser)
+
+
+def test_standings_give_each_ineligible_symbol_the_first_filter_it_fails(
+    conn: psycopg.Connection,
+) -> None:
+    # EMCURE fails Listing Age (15 trading days) and presence (15 of 20 rows);
+    # Listing Age comes first in the rule's order. NIFTYBEES is a fund unit.
+    excluded = {s.symbol: s.excluded for s in standings(conn, RULE, month=AUGUST)}
+
+    assert excluded["EMCURE"] == Exclusion("listing_age", "listed 15 trading days, fewer than 21")
+    assert str(excluded["EMCURE"]) == "listed 15 trading days, fewer than 21"
+    assert excluded["NIFTYBEES"] is not None
+    assert excluded["NIFTYBEES"].reason == "fund_unit"
+    assert str(excluded["NIFTYBEES"]).endswith("is a fund unit (ETF)")
+    assert excluded["RELIANCE"] is None
+
+
+def test_standings_give_presence_once_listing_age_is_met(conn: psycopg.Connection) -> None:
+    # EMCURE's 15 trading days meet a minimum of 10; its 15 rows of 20 do not meet 90%.
+    younger = replace(RULE, min_listing_trading_days=10)
+
+    excluded = {s.symbol: s.excluded for s in standings(conn, younger, month=AUGUST)}
+
+    assert excluded["EMCURE"] == Exclusion("presence", "rows on 15 of 20 window days, under 90%")
+
+
+def test_standings_give_series_for_a_symbol_last_traded_outside_it(
+    fresh_database_url: str,
+) -> None:
+    # ABDL's row on 31 July, the window's last day, moved to series BE.
+    files = Playback(FIXTURES, edit=bhavcopy_series(date(2024, 7, 31), "ABDL", "BE"))
+    with app_connection(fresh_database_url) as conn:
+        ingest_eod(conn, files, start=date(2024, 7, 1), end=date(2024, 7, 31))
+
+        excluded = {s.symbol: s.excluded for s in standings(conn, RULE, month=AUGUST)}
+
+    assert excluded["ABDL"] == Exclusion("series", "last traded in series BE in the window")
 
 
 def test_changing_a_rule_parameter_records_a_new_rule_version_that_membership_references(

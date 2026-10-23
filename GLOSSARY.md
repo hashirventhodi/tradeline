@@ -35,6 +35,10 @@ _Avoid_: Watchlist, basket, index
 **Universe Rule**:
 The deterministic rule that defines the Universe at a point in time (currently: top 200 NSE Instruments by trailing six-month traded value, recomputed monthly). An Instrument's traded value and Listing Age count across every Symbol it has had.
 
+**Conformance Check**:
+The check that every stored Universe month is exactly what the Universe Rule selects. Every member is eligible, members are ranked by their traded value, and every non-member with more traded value than the last member is ineligible for a reason the rule states. It tests the rule's own claims, not agreement with an index.
+_Avoid_: Index check, overlap check, validation
+
 **Listing Age**:
 The trading days since an Instrument was first admitted to trading on NSE, measured from the earliest supported date established using NSE listing evidence and the Instrument's first Raw Series row. NSE's current master date may reflect a later admission to the main board rather than the original listing. Listing Age is distinct from the amount of historical data held, which may contain gaps.
 
