@@ -12,7 +12,7 @@ from decimal import ROUND_HALF_DOWN, ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal
 from fractions import Fraction
 
 from tradeline.adjust import CorporateAction, interpret
-from tradeline.kite_adjustment import Close, Replay, Stage, replay
+from tradeline.kite_adjustment import Close, Replay, Stage, factor_agreement, replay
 
 PAISA, FIVE_PAISA = Decimal("0.01"), Decimal("0.05")
 RUPEE, FIVE_RUPEES = Decimal(1), Decimal(5)
@@ -560,3 +560,121 @@ def test_each_dividend_of_a_gap_without_a_fittable_action_can_have_its_own_stage
         (date(2024, 8, 5), "dividend_subtracted", Fraction(5)),
     ]
     assert set(result.explained) == {d for d in days if d < date(2024, 8, 1)}
+
+
+# Factor Agreement (ADR 0018, amended by #68): each split and bonus Ex-Date judged by
+# whether Kite's Adjustment stands with our ratio there.
+
+
+def judged(closes: Sequence[Close], actions: Sequence[CorporateAction]) -> list[tuple[object, ...]]:
+    """Each Ex-Date's (Ex-Date, outcome, our factor, Kite's factor, reason)."""
+    return [
+        (j.ex_date, j.outcome, j.factor, j.kite_factor, j.reason)
+        for j in factor_agreement(closes, actions, nse_closes={c.trade_date: c.nse for c in closes})
+    ]
+
+
+def test_a_bonus_whose_computed_stage_stands_agrees() -> None:
+    days = weekdays("2024-09-23", 50)
+    ex = date(2024, 10, 28)
+
+    def kite(d: date, n: Decimal) -> Decimal:
+        return to_tick(n / 2, FIVE_PAISA) if d < ex else n
+
+    closes = compared(days, prices(50), kite)
+
+    assert judged(closes, [action("2024-10-28", "Bonus 1:1")]) == [
+        (ex, "agrees", Fraction(1, 2), Fraction(1, 2), None)
+    ]
+
+
+def test_an_ex_date_after_kites_last_close_is_not_judged() -> None:
+    # Kite's candles were fetched before the bonus, so no close shows what Kite did.
+    days = weekdays("2024-07-01", 25)
+    closes = compared(days, prices(25), lambda _, n: n)
+
+    assert judged(closes, [action("2024-10-28", "Bonus 1:1")]) == [
+        (date(2024, 10, 28), "not_judged", Fraction(1, 2), None, "no_closes_after")
+    ]
+
+
+def test_a_bonus_kites_closes_carry_straight_across_disagrees_at_a_factor_of_one() -> None:
+    # Kite's closes are NSE's raw closes on both sides: Kite did not adjust for it.
+    days = weekdays("2024-09-23", 50)
+    closes = compared(days, prices(50), lambda _, n: n)
+
+    assert judged(closes, [action("2024-10-28", "Bonus 1:1")]) == [
+        (date(2024, 10, 28), "disagrees", Fraction(1, 2), Fraction(1), None)
+    ]
+
+
+def test_a_bonus_kite_divided_by_another_ratio_disagrees_at_the_ratio_its_closes_show() -> None:
+    # Stored as 1:1 (halving), while Kite divided its history by 3, as for 2:1.
+    days = weekdays("2024-09-23", 50)
+    ex = date(2024, 10, 28)
+
+    def kite(d: date, n: Decimal) -> Decimal:
+        return to_tick(n / 3, FIVE_PAISA) if d < ex else n
+
+    closes = compared(days, prices(50), kite)
+
+    ((ex_date, outcome, ours, kites, reason),) = judged(closes, [action("2024-10-28", "Bonus 1:1")])
+    assert (ex_date, outcome, ours, reason) == (ex, "disagrees", Fraction(1, 2), None)
+    assert isinstance(kites, Fraction) and abs(1 / kites - 3) < Fraction(1, 2000)
+
+
+def test_a_ratio_kites_closes_show_within_a_tenth_of_a_percent_of_ours_is_not_judged() -> None:
+    # The bonus rounds to the rupee and the dividend the next day to the paisa: one gap,
+    # whose computed stages must share a tick (ADR 0018), so our stage does not stand.
+    # Read from Kite's closes with its own tick, the bonus's ratio is ours: only the
+    # rounding differs, which says nothing against our factor.
+    days = [d for d in weekdays("2024-07-01", 48) if not date(2024, 8, 1) <= d < date(2024, 8, 5)]
+
+    def kite(d: date, n: Decimal) -> Decimal:
+        return to_tick(n / 2, RUPEE) - Decimal("10.37") if d < date(2024, 8, 1) else n
+
+    actions = [
+        action("2024-08-01", "Bonus 1:1"),
+        action("2024-08-02", "Dividend - Rs 10.37 Per Share"),
+    ]
+
+    assert judged(compared(days, prices(len(days)), kite), actions) == [
+        (date(2024, 8, 1), "not_judged", Fraction(1, 2), None, "kites_ratio_is_ours")
+    ]
+
+
+def test_a_one_for_three_bonus_kite_divided_by_one_point_three_three_agrees() -> None:
+    days = weekdays("2024-09-23", 50)
+    ex = date(2024, 10, 28)
+
+    def kite(d: date, n: Decimal) -> Decimal:
+        return to_tick(n / Decimal("1.33"), FIVE_PAISA) if d < ex else n
+
+    assert judged(compared(days, prices(50), kite), [action("2024-10-28", "Bonus 1:3")]) == [
+        (ex, "agrees", Fraction(3, 4), Fraction(100, 133), None)
+    ]
+
+
+def test_a_bonus_before_which_no_stretch_stands_on_either_reading_is_not_judged() -> None:
+    # Kite's closes before the bonus wander from any one ratio of NSE's (NMDC before 2024).
+    days = weekdays("2024-09-23", 50)
+    ex = date(2024, 10, 28)
+
+    def kite(d: date, n: Decimal) -> Decimal:
+        return to_tick(n * Decimal(f"0.{40 + d.day}"), FIVE_PAISA) if d < ex else n
+
+    assert judged(compared(days, prices(50), kite), [action("2024-10-28", "Bonus 1:1")]) == [
+        (ex, "not_judged", Fraction(1, 2), None, "not_standing_before")
+    ]
+
+
+def test_a_bonus_with_fewer_than_twenty_bars_on_one_side_is_not_judged() -> None:
+    days = weekdays("2024-10-07", 45)  # 15 days before the bonus
+    ex = date(2024, 10, 28)
+
+    def kite(d: date, n: Decimal) -> Decimal:
+        return to_tick(n / 2, FIVE_PAISA) if d < ex else n
+
+    assert judged(compared(days, prices(45), kite), [action("2024-10-28", "Bonus 1:1")]) == [
+        (ex, "not_judged", Fraction(1, 2), None, "short_basis")
+    ]

@@ -1,11 +1,18 @@
-"""``compare-adjusted``: our Adjusted Series against Kite's candles, bar by bar.
+"""``compare-adjusted``: Factor Agreement, and our Adjusted Series against Kite's candles.
 
-Kite's candles are the broker's displayed adjusted chart as of the day they
-were fetched (docs/research.md). For each named symbol, every trading day in
-the range is compared in series EQ: our adjusted bar
-(``queries.adjusted_daily_candles`` as of ``as_of``, normally the fetch day)
-against the stored candle, on open, high, low, and close to the paisa.
-Volume is not compared: a match is about price.
+**Factor Agreement** (ADR 0018, amended by #68) judges each split and bonus
+Ex-Date in the range of every ever-member's Instrument, or of each named Symbol's,
+by Kite's Adjustment replayed in series EQ over the range
+(``kite_adjustment.factor_agreement``): it agrees, disagrees, or is not judged
+with a reason. The run passes when no Ex-Date disagrees. Kite's candles are the
+broker's displayed chart as of the day they were fetched (docs/research.md).
+
+For each named Symbol, every trading day in the range is also compared bar by
+bar in series EQ: our adjusted bar (``queries.adjusted_daily_candles`` as of
+``as_of``, normally the fetch day) against the stored candle, on open, high,
+low, and close to the paisa. Volume is not compared: a match is about price.
+The bars gate nothing: we adjust only splits and bonuses (ADR 0006), Kite also
+dividends and demergers, and each of its stages rounds to its own tick.
 
 A bar on one side only is listed by day. The symbol's corporate actions with
 an Ex-Date in the range or after it, up to ``as_of``, are listed with the
@@ -13,10 +20,9 @@ result, since those are what either side adjusted for.
 
 Mismatches are grouped into stretches: runs of mismatched bars with no
 matching bar and no Ex-Date between them. A stretch's factor is the median of
-Kite's close over ours across it, to four places. Kite adjusts for some
-actions we do not (dividends of about 2 percent or more), and between two
-Ex-Dates its adjustment is one constant, so a stretch that ends at an Ex-Date
-at a steady factor is explained by that action.
+Kite's close over ours across it, to four places. Between two Ex-Dates Kite's
+adjustment is one constant, so a stretch that ends at an Ex-Date at a steady
+factor is explained by that action.
 
 Nothing is written: this is a read.
 """
@@ -24,6 +30,7 @@ Nothing is written: this is a read.
 from __future__ import annotations
 
 import statistics
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -34,6 +41,7 @@ import psycopg
 
 from tradeline import queries
 from tradeline.adjust import ADJUSTED_KINDS, FLAGGED_KINDS, CorporateAction
+from tradeline.kite_adjustment import Close, FactorJudgement, decimal_text, factor_agreement
 
 SERIES = "EQ"
 FACTOR_PLACES = Decimal("0.0001")
@@ -141,29 +149,89 @@ class SymbolComparison:
 
 
 @dataclass(frozen=True)
+class InstrumentAgreement:
+    """Factor Agreement for one Instrument: each split and bonus Ex-Date in the range."""
+
+    instrument: str
+    # The Symbols it is known by here, sorted.
+    symbols: tuple[str, ...]
+    judgements: tuple[FactorJudgement, ...]
+
+
+@dataclass(frozen=True)
 class AdjustedComparison:
     start: date
     end: date
     as_of: date
+    # Bar by bar, for each named Symbol; none unless Symbols are named.
     symbols: tuple[SymbolComparison, ...]
+    # Each Instrument with a split or bonus Ex-Date in the range.
+    agreement: tuple[InstrumentAgreement, ...]
 
     @property
     def passed(self) -> bool:
-        return all(s.matches for s in self.symbols)
+        """Factor Agreement holds: no Ex-Date disagrees. Bars gate nothing."""
+        return not any(j.outcome == "disagrees" for a in self.agreement for j in a.judgements)
+
+    @property
+    def judged(self) -> tuple[tuple[InstrumentAgreement, FactorJudgement], ...]:
+        """Every Ex-Date judged, by Instrument then Ex-Date."""
+        return tuple((a, j) for a in self.agreement for j in a.judgements)
 
     def summary(self) -> dict[str, Any]:
+        outcomes = Counter(j.outcome for _, j in self.judged)
         return {
             "start": self.start.isoformat(),
             "end": self.end.isoformat(),
             "as_of": self.as_of.isoformat(),
+            "factor_agreement": {
+                "agrees": outcomes["agrees"],
+                "disagrees": outcomes["disagrees"],
+                "not_judged": outcomes["not_judged"],
+                "not_judged_by_reason": dict(
+                    sorted(Counter(j.reason for _, j in self.judged if j.reason).items())
+                ),
+                "ex_dates": [
+                    {
+                        "instrument": a.instrument,
+                        "symbols": list(a.symbols),
+                        "ex_date": j.ex_date.isoformat(),
+                        "outcome": j.outcome,
+                        "factor": decimal_text(j.factor),
+                        "kite_factor": None
+                        if j.kite_factor is None
+                        else decimal_text(j.kite_factor),
+                        "reason": j.reason,
+                    }
+                    for a, j in self.judged
+                ],
+            },
             "symbols_matching": sum(s.matches for s in self.symbols),
             "symbols": [s.summary() for s in self.symbols],
             "passed": self.passed,
         }
 
     def text(self) -> str:
-        """One line per symbol, then a line per mismatched stretch and per action."""
-        lines = [f"Adjusted series against Kite's candles, {self.start} to {self.end}:"]
+        """Factor Agreement's counts and every Ex-Date not agreeing; then, for each named
+        Symbol, a line, a line per mismatched stretch and one per action."""
+        outcomes = Counter(j.outcome for _, j in self.judged)
+        lines = [
+            f"Factor Agreement, {self.start} to {self.end}: {len(self.judged)} split and bonus"
+            f" Ex-Dates of {len(self.agreement)} Instruments: {outcomes['agrees']} agree,"
+            f" {outcomes['disagrees']} disagree, {outcomes['not_judged']} not judged"
+            f"  {'PASS' if self.passed else 'FAIL'}"
+        ]
+        for a, j in self.judged:
+            name = "/".join(a.symbols)
+            if j.outcome == "disagrees":
+                lines.append(
+                    f"  {name} {j.ex_date} DISAGREES: ours {decimal_text(j.factor)},"
+                    f" Kite's {decimal_text(_of(j.kite_factor))}"
+                )
+            elif j.outcome == "not_judged":
+                lines.append(f"  {name} {j.ex_date} not judged: {j.reason}")
+        if self.symbols:
+            lines.append(f"Adjusted series against Kite's candles, {self.start} to {self.end}:")
         for s in self.symbols:
             verdict = "match" if s.matches else "MISMATCH"
             lines.append(f"  {s.symbol:<12} {s.matched}/{s.bars} bars equal  {verdict}")
@@ -174,24 +242,65 @@ class AdjustedComparison:
                 )
             if s.only_kite or s.only_ours:
                 lines.append(f"    Kite only: {len(s.only_kite)}  ours only: {len(s.only_ours)}")
-            for a in s.listed_actions:
-                lines.append(f"    ex {a.ex_date} {a.kind}: {a.subject}")
+            for action in s.listed_actions:
+                lines.append(f"    ex {action.ex_date} {action.kind}: {action.subject}")
         return "\n".join(lines) + "\n"
 
 
 def compare_adjusted(
     conn: psycopg.Connection,
     *,
-    symbols: Sequence[str],
+    symbols: Sequence[str] | None,
     start: date,
     end: date,
     as_of: date,
 ) -> AdjustedComparison:
+    """Factor Agreement for every ever-member, or for the named Symbols with their bars."""
+    if symbols is None:
+        named: dict[str, set[str]] = {}
+        for m in queries.universe_ever_members(conn):
+            if m.instrument is not None:
+                named.setdefault(m.instrument, set()).add(m.symbol)
+    else:
+        named = {s: {s} for s in symbols}
     return AdjustedComparison(
         start=start,
         end=end,
         as_of=as_of,
-        symbols=tuple(_compare(conn, s, start=start, end=end, as_of=as_of) for s in symbols),
+        symbols=tuple(_compare(conn, s, start=start, end=end, as_of=as_of) for s in symbols or ()),
+        agreement=tuple(
+            found
+            for instrument in sorted(named)
+            if (found := _agreement(conn, instrument, named[instrument], start=start, end=end))
+            is not None
+        ),
+    )
+
+
+def _agreement(
+    conn: psycopg.Connection, instrument: str, symbols: set[str], *, start: date, end: date
+) -> InstrumentAgreement | None:
+    """The Instrument's split and bonus Ex-Dates in the range judged in series EQ, its
+    whole history's actions replayed; None where it has none in the range."""
+    actions = queries.corporate_actions(conn, instrument, as_of=end)
+    if not any(a.kind in ADJUSTED_KINDS and start <= a.ex_date <= end for a in actions):
+        return None
+    nse = {
+        r.trade_date: r.close
+        for r in queries.end_of_day(conn, instrument, start=start, end=end, series=SERIES)
+        if r.close  # NSE can state no close
+    }
+    candles = queries.instrument_daily_candles(
+        conn, instrument, start=start, end=end, series=SERIES
+    ).candles
+    closes = [
+        Close(c.trade_date, nse[c.trade_date], c.close) for c in candles if c.trade_date in nse
+    ]
+    judgements = factor_agreement(closes, actions, nse_closes=nse)
+    return InstrumentAgreement(
+        instrument=instrument,
+        symbols=tuple(sorted(symbols)),
+        judgements=tuple(j for j in judgements if start <= j.ex_date <= end),
     )
 
 
@@ -231,3 +340,9 @@ def _stretch(run: list[BarMismatch]) -> Stretch:
     ratios = [m.kite.close / m.ours.close for m in run if m.kite.close and m.ours.close]
     factor = statistics.median(ratios).quantize(FACTOR_PLACES) if ratios else None
     return Stretch(run[0].trade_date, run[-1].trade_date, len(run), factor)
+
+
+def _of[T](value: T | None) -> T:
+    if value is None:
+        raise ValueError("a value was expected")
+    return value

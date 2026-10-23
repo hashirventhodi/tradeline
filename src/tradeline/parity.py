@@ -95,7 +95,6 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from enum import StrEnum
-from fractions import Fraction
 from pathlib import Path
 from typing import Any, Literal, get_args
 
@@ -112,6 +111,7 @@ from tradeline.kite_adjustment import (
     KiteBasis,
     Replay,
     Stage,
+    decimal_text,
     replay,
 )
 from tradeline.trading_calendar import load_trading_calendar
@@ -252,9 +252,9 @@ class ReplayedBasis:
                     "ex_date": s.ex_date.isoformat(),
                     "how": "fitted" if s.fitted else "computed",
                     "form": s.form,
-                    "divisor": _number(s.divisor),
-                    "subtracted": _number(s.subtracted),
-                    "tick": _number(s.tick),
+                    "divisor": decimal_text(s.divisor),
+                    "subtracted": decimal_text(s.subtracted),
+                    "tick": decimal_text(s.tick),
                     "ties": s.ties,
                 }
                 for s in self.basis.stages
@@ -294,10 +294,10 @@ def _bounded_text(b: BoundedSearch) -> str:
 
 def _does(stage: Stage) -> str:
     """What a stage does to each older close, in words: "divides by 2, rounds to 5 half_even"."""
-    steps = [f"divides by {_number(stage.divisor)}"] if stage.multiplier != 1 else []
+    steps = [f"divides by {decimal_text(stage.divisor)}"] if stage.multiplier != 1 else []
     if stage.subtracted:
-        steps.append(f"subtracts {_number(stage.subtracted)}")
-    steps.append(f"rounds to {_number(stage.tick)} {stage.ties}")
+        steps.append(f"subtracts {decimal_text(stage.subtracted)}")
+    steps.append(f"rounds to {decimal_text(stage.tick)} {stage.ties}")
     return ", ".join(steps)
 
 
@@ -487,7 +487,7 @@ class ParityReport:
             lines.append("")
             lines.append(
                 f"{count} stretch{'es' if count != 1 else ''} not standing (more than"
-                f" {_number(MAX_OFF * 100)} percent of its closes off every replay tried;"
+                f" {decimal_text(MAX_OFF * 100)} percent of its closes off every replay tried;"
                 " none of its closes is explained):"
             )
             lines.extend(
@@ -991,13 +991,6 @@ def _of[T](value: T | None) -> T:
 
 def _text(value: Decimal | None) -> str | None:
     return None if value is None else str(value)
-
-
-def _number(value: Fraction) -> str:
-    """A ratio, amount or tick: exact where it ends within six decimals, else to six."""
-    exact = Decimal(value.numerator) / Decimal(value.denominator)
-    shown = exact.quantize(Decimal("0.000001"))
-    return f"{shown.normalize():f}"
 
 
 def _pct(value: Decimal) -> str:

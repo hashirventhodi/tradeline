@@ -53,6 +53,15 @@ The stages found for one gap form a group, and the group shares its rounding (AD
 0018): one tick for its computed stages, its own for its fitted stage, and one tie
 rule for all of them. A gap with more than ``EXHAUSTIVE`` layouts is searched one
 Ex-Date's choice at a time, and reported (``BoundedSearch``).
+
+**Factor Agreement** (ADR 0018, amended by #68) judges our factor at each split and
+bonus Ex-Date by the replay (``factor_agreement``), from the nearest standing stretch
+on each side. It **agrees** where the older side's Kite Basis has the Ex-Date's
+computed split stage, exact or rounded to two decimals. It **disagrees** where one
+Kite Basis spans it, or the older one has no stage there (Kite adjusted nothing), or
+where no stretch before it stands until its ratio is read from Kite's closes instead,
+as a fitted stage, and that ratio is more than ``NEAR`` from ours. Otherwise it is
+**not judged**, for a stated reason (``NotJudged``).
 """
 
 from __future__ import annotations
@@ -60,7 +69,7 @@ from __future__ import annotations
 import bisect
 import math
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
@@ -237,13 +246,145 @@ def replay(
     """Kite's Adjustment for one Instrument and series: its compared ``closes``, the
     Corporate Actions filed under any of its Symbols, and NSE's close on every day it
     has one in the series, a candle or not (a dividend's P)."""
-    found = _distinct(actions)
+    return _replay(closes, _distinct(actions), nse_closes, fitted_splits=frozenset())
+
+
+def _replay(
+    closes: Sequence[Close],
+    found: list[CorporateAction],
+    nse_closes: Mapping[date, Decimal],
+    *,
+    fitted_splits: frozenset[date],
+) -> Replay:
+    """``replay`` of distinct actions, each split, bonus and consolidation on an Ex-Date
+    in ``fitted_splits`` read from Kite's closes as a fitted stage instead."""
     ex_dates = sorted({a.ex_date for a in found})
     grouped: dict[int, list[Close]] = {}
     for c in sorted(closes, key=lambda c: c.trade_date):
         grouped.setdefault(bisect.bisect_right(ex_dates, c.trade_date), []).append(c)
     previous = _previous_closes(nse_closes, ex_dates)
-    return _Replayer(found, ex_dates, previous, grouped).run()
+    return _Replayer(found, ex_dates, previous, grouped, fitted_splits).run()
+
+
+Outcome = Literal["agrees", "disagrees", "not_judged"]
+NotJudged = Literal[
+    # Kite has no compared close before it, or none from it (fetched before it).
+    "no_closes_before",
+    "no_closes_after",
+    # No stretch on that side stands, with our ratio or with Kite's read from its closes.
+    "not_standing_before",
+    "not_standing_after",
+    # A Kite Basis either side has fewer than ``MIN_BASIS_BARS`` compared bars.
+    "short_basis",
+    # Our ratio stands only read from Kite's closes, on a tick of its own.
+    "kites_ratio_is_ours",
+]
+
+
+@dataclass(frozen=True)
+class FactorJudgement:
+    """One split or bonus Ex-Date judged by Factor Agreement (ADR 0018, amended by #68)."""
+
+    ex_date: date
+    outcome: Outcome
+    # Ours: the product of the Ex-Date's split, bonus and consolidation factors.
+    factor: Fraction
+    # Kite's, as its closes show it; None where not judged.
+    kite_factor: Fraction | None
+    # Why it is not judged; None otherwise.
+    reason: NotJudged | None
+
+
+def factor_agreement(
+    closes: Sequence[Close],
+    actions: Iterable[CorporateAction],
+    *,
+    nse_closes: Mapping[date, Decimal],
+) -> tuple[FactorJudgement, ...]:
+    """Each split and bonus Ex-Date of one Instrument and series, judged by whether
+    Kite's Adjustment stands with our ratio there; arguments as ``replay``'s."""
+    found = _distinct(actions)
+    result = _replay(closes, found, nse_closes, fitted_splits=frozenset())
+
+    def refit(ex_date: date) -> Callable[[], Replay]:
+        return lambda: _replay(closes, found, nse_closes, fitted_splits=frozenset({ex_date}))
+
+    split_dates = sorted({a.ex_date for a in found if _class(a) == "split" and a.factor})
+    return tuple(_judge(result, e, _split_factor(found, e), refit=refit(e)) for e in split_dates)
+
+
+def _split_factor(actions: Sequence[CorporateAction], ex_date: date) -> Fraction:
+    """Our factor at ``ex_date``: the product of its splits', bonuses' and consolidations'."""
+    factors = [a.factor for a in actions if a.ex_date == ex_date and _class(a) == "split"]
+    return math.prod((Fraction(f) for f in factors if f), start=Fraction(1))
+
+
+def _judge(
+    result: Replay, ex_date: date, factor: Fraction, *, refit: Callable[[], Replay]
+) -> FactorJudgement:
+    """The Ex-Date's outcome in ``result``. Where no stretch before it stands, ``refit``
+    replays the Instrument with its ratio read from Kite's closes: a stretch standing
+    only so shows Kite applied another ratio."""
+
+    def judgement(outcome: Outcome, kites: Fraction) -> FactorJudgement:
+        return FactorJudgement(ex_date, outcome, factor, kites, None)
+
+    def not_judged(reason: NotJudged) -> FactorJudgement:
+        return FactorJudgement(ex_date, "not_judged", factor, None, reason)
+
+    sides = _sides(result, ex_date)
+    if isinstance(sides, str):
+        return not_judged(sides)
+    older, newer = sides
+    refitted = older is None
+    if refitted:
+        sides = _sides(refit(), ex_date)
+        if isinstance(sides, str) or sides[0] is None:
+            return not_judged("not_standing_before")
+        older, newer = sides
+    if newer is None:
+        return not_judged("not_standing_after")
+    if min(_of(older).bars, newer.bars) < MIN_BASIS_BARS:
+        return not_judged("short_basis")
+    if older is newer:  # one Kite Basis across it: Kite adjusted nothing there
+        return judgement("disagrees", Fraction(1))
+    stages = [s for s in _of(older).stages if s.ex_date == ex_date]
+    fitted = next((s for s in stages if s.fitted), None)
+    if refitted and fitted is not None:
+        # Our ratio, read freely, only on a tick of its own: not evidence against it.
+        if any(abs(fitted.multiplier / m - 1) <= NEAR for m in _split_multipliers(factor)):
+            return not_judged("kites_ratio_is_ours")
+        return judgement("disagrees", fitted.multiplier)
+    split = next((s for s in stages if s.form.startswith("split")), None)
+    # Its stretches stand apart, but no stage sits on it: Kite adjusted nothing there.
+    if split is None:
+        return judgement("disagrees", Fraction(1))
+    # The stage's multiplier also carries any dividend of the day; its split part is ours.
+    exact, two_decimals = _split_multipliers(factor)
+    return judgement("agrees", two_decimals if split.form.startswith("split_2dp") else exact)
+
+
+def _split_multipliers(factor: Fraction) -> tuple[Fraction, Fraction]:
+    """A split's multiplier exact, and with its divisor rounded to two decimals."""
+    return factor, 1 / Fraction(round(1 / factor * 100), 100)
+
+
+def _sides(result: Replay, ex_date: date) -> NotJudged | tuple[KiteBasis | None, KiteBasis | None]:
+    """The Kite Bases of the nearest standing stretch on each side of ``ex_date``, None
+    for a side whose stretches all fail to stand; or why a side has no closes at all."""
+    stretches: list[tuple[tuple[date, date], KiteBasis | None]] = [
+        *((s, b) for b in result.bases for s in b.stretches),
+        *((s, None) for s in result.not_standing),
+    ]
+    before = sorted(((s, b) for s, b in stretches if s[1] < ex_date), key=lambda x: x[0])
+    after = sorted(((s, b) for s, b in stretches if s[0] >= ex_date), key=lambda x: x[0])
+    if not before:
+        return "no_closes_before"
+    if not after:
+        return "no_closes_after"
+    older = next((b for _, b in reversed(before) if b is not None), None)
+    newer = next((b for _, b in after if b is not None), None)
+    return older, newer
 
 
 Point = tuple[Fraction, Fraction]
@@ -490,7 +631,12 @@ class _Replayer:
         ex_dates: list[date],
         previous: dict[date, Fraction],
         grouped: dict[int, list[Close]],
+        fitted_splits: frozenset[date] = frozenset(),
     ) -> None:
+        def class_of(a: CorporateAction) -> Class:
+            found = _class(a)
+            return "fitted" if found == "split" and a.ex_date in fitted_splits else found
+
         self.ex_dates = ex_dates
         self.grouped = grouped
         self.ambiguous: list[AmbiguousFit] = []
@@ -504,9 +650,9 @@ class _Replayer:
             previous_close = previous.get(ex_date)
             split, dividend = Fraction(1), Fraction(0)
             for a in at:
-                if _class(a) == "split" and a.factor:
+                if class_of(a) == "split" and a.factor:
                     split *= a.factor
-                elif _class(a) == "dividend" and previous_close:
+                elif class_of(a) == "dividend" and previous_close:
                     amount = _dividend(a.subject)
                     if amount is not None:
                         dividend += amount
@@ -514,7 +660,7 @@ class _Replayer:
             if previous_close is not None and dividend >= previous_close:
                 dividend = Fraction(0)
             self.gaps[ex_date] = _Gap(
-                ex_date, frozenset(_class(a) for a in at), split, dividend, previous_close
+                ex_date, frozenset(class_of(a) for a in at), split, dividend, previous_close
             )
 
     def run(self) -> Replay:
@@ -819,6 +965,13 @@ def _absorbs(divisor: Fraction, absorbable: tuple[tuple[Fraction, ...], ...]) ->
     for values in absorbable:
         products += [p * v for p in products for v in values]
     return any(abs(divisor / p - 1) <= NEAR for p in products[1:])
+
+
+def decimal_text(value: Fraction) -> str:
+    """A ratio, amount or tick: exact where it ends within six decimals, else to six."""
+    exact = Decimal(value.numerator) / Decimal(value.denominator)
+    shown = exact.quantize(Decimal("0.000001"))
+    return f"{shown.normalize():f}"
 
 
 def _of[T](value: T | None) -> T:
