@@ -38,6 +38,19 @@ Accept when:
 
 Liquidity coverage and monthly turnover were measured and not proposed (`docs/research.md`). Reproducibility stays as written above.
 
+**#68, 2026-10-23, proposed; adopted when the Operator approves the pull request that builds it.** The original line was:
+
+> Our adjusted series matches the broker's displayed adjusted chart on a sample of 20 symbols with known splits or bonuses, to the paisa.
+
+#13 measured 26,310 of 48,699 bars equal and failed it. The line cannot pass by design. ADR 0006 adjusts splits and bonuses only, and Kite also adjusts dividends from 2023-07-01 and demergers. Kite rounds each stage to its own tick (#62), and our rounding is kept by convention, not to match Kite. Agreement with Kite's closes is already gated by Kite Parity (ADR 0018). What our adjustment claims, and Kite can check, is the factor at each split and bonus. The line is retired. The proposed replacement is:
+
+- Factor Agreement holds for every ever-member over the ten years, run by `tradeline compare-adjusted` over stored data with no network. Each split (either direction) and bonus Ex-Date of an ever-member, followed across renames, gets one outcome from Kite's Adjustment:
+  - **agrees:** Kite's Adjustment stands with that Ex-Date's computed stage, our ratio exact or rounded to two decimals (ADR 0018);
+  - **disagrees:** Kite's Adjustment stands across that Ex-Date only without that stage, with no stage or a fitted ratio in its place;
+  - **not judged:** the replay leaves no standing stretch to judge it by, Kite has no closes on one side, or the Ex-Date is after the candles were fetched.
+
+  The line passes when no Ex-Date disagrees. Ex-Dates not judged are listed, each with its reason, and counted, and never fail it. The bar-by-bar comparison to the paisa stays in `compare-adjusted` as detail for a named Symbol and gates nothing.
+
 ## Phase 2: Engine, Strategy, backtester, Gates
 
 Build: event-driven engine with a simulated clock, Strategy interface and `pullback_v1`, cost model for Indian delivery, Paper Broker fill model against historical opens, Walk-Forward and Holdout protocol, Backtest Gate evaluation, backtest report.

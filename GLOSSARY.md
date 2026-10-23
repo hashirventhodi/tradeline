@@ -207,6 +207,10 @@ _Avoid_: Additive adjustment, coarse rounding (both are cases of it), Kite facto
 A span of an Instrument's consecutive stretches between Ex-Dates over which Kite applied the same adjustment. It ends only where Kite's own closes show that Kite adjusted again.
 _Avoid_: Run (a command's run), stretch (one span between two Ex-Dates), segment
 
+**Factor Agreement**:
+The check that our Adjustment Factor at each split and bonus of an ever-member is the one Kite applied: Kite's Adjustment, replayed from NSE's raw closes, reproduces Kite's closes with a stage of that ratio at that Ex-Date. An Ex-Date where Kite's closes show a different factor, or none, disagrees and fails it. One Kite's Adjustment cannot reproduce on either side is not judged, and is reported but never a failure.
+_Avoid_: Chart match, chart check, adjusted chart comparison
+
 **Large Move**:
 A close-to-close change of more than 1.5 times, either way, in an Instrument's Adjusted Series across its listing series. Unless a split or bonus on that day explains it, it must be explained by a reviewed record with its reason and source, because an unexplained one may be a split or bonus the Adjusted Series lacks.
 _Avoid_: Jump, spike, outlier

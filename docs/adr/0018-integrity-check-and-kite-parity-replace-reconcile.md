@@ -66,3 +66,29 @@ The 0.1 percent gate is a property of each run, never of this rule. On the #59 d
 - **Keep per-close rupee rounding as a fallback** for BAJFINANCE. Rejected: it explained those closes one at a time, by coincidence against a median factor, not by anything Kite did.
 - **No fitted stage between two stretches that also holds a split, bonus, consolidation or dividend.** Rejected: it drops fitted stages for rights issues and demergers that conflict with nothing. MOTHERSUMI's demerger is one: it stands with its bonus as a separate computed stage. Measured, it changes no flagged close.
 - **Fitted ratios only for rights and demergers.** Rejected: no rule computes Kite's ratio for any action outside splits, bonuses, consolidations and dividends, so all of them are treated alike and reported as fitted.
+
+## Amendment (2026-10-23, #68): `compare-adjusted` judges our factors by Kite's Adjustment
+
+This ADR twice says `compare-adjusted` is unchanged, the bar-by-bar check of our adjustment arithmetic against Kite. Phase 1 gated it at "to the paisa" on 20 symbols, and #13 failed it at 26,310 of 48,699 bars. That line cannot pass by design: ADR 0006 adjusts splits and bonuses only, Kite also adjusts dividends from 2023-07-01 and demergers, and Kite rounds each stage to its own tick. Agreement with Kite's closes is this ADR's Kite Parity. What `compare-adjusted` can still check, and nothing else does, is our factor at each split and bonus. An Integrity Check Large Move catches only a factor wrong by more than 1.5 times, so a 1:2 bonus read as 1:1 would pass it. So:
+
+- **`compare-adjusted` gives Factor Agreement as its verdict.** It covers every split (either direction) and bonus Ex-Date of every ever-member, following Instruments across renames, and judges each by the replay Kite Parity uses. No tolerance is added.
+  - **Agrees:** Kite's Adjustment stands with that Ex-Date's computed stage, our ratio exact or rounded to two decimals.
+  - **Disagrees:** Kite's Adjustment stands across that Ex-Date only without that stage: no stage, or a fitted ratio in its place.
+  - **Not judged:** no standing stretch to judge it by (BAJFINANCE before mid-2025, NMDC before 2024-02-27, listing months, a Kite Basis under 20 bars), no Kite closes on one side, or an Ex-Date after the candles were fetched. Each is listed with its reason and counted.
+- **Only a disagreement fails it.** An Ex-Date not judged is Kite's convention we cannot replay, not evidence against our factor, just as a gap is reported and never fails the Integrity Check.
+- **The bar-by-bar comparison stays as detail** for a named Symbol, and gates nothing.
+
+### Consequences of the amendment
+
+- Phase 1's adjusted-chart line in `docs/phases.md` is replaced by Factor Agreement, proposed until the pull request that builds it is approved.
+- Our rounding, 5 paisa with ties to even, is no longer checked against Kite by anything. ADR 0006 already keeps it by convention.
+- A computed stage's ratio is read from the same stored action as our factor. Agreement shows that Kite's closes are reproduced with that ratio, so a misread subject shows as a disagreement or as a stretch that does not stand. It does not show that NSE's subject is right.
+
+### Considered options (#68)
+
+- **Keep the line and record it failed and explained.** Rejected: a gate that fails by design checks nothing, and our factors would go unchecked.
+- **Retire it, relying on the Integrity Check and Kite Parity.** Rejected: a factor wrong by less than 1.5 times leaves no Large Move, and Kite Parity compares Kite with the Raw Series, never with our Adjusted Series.
+- **Pass when every bar that differs from Kite is explained by Kite's Adjustment.** Rejected: it rebuilds Kite Parity's replay on top of our series to check, mostly, the actions we deliberately do not adjust.
+- **Kite's factor as the steady ratio of Kite's close to NSE's either side of the Ex-Date** (#13's method). Rejected: it needs a tolerance, and a dividend or other stage near the Ex-Date moves it.
+- **The 20 named symbols.** Rejected: a hand-picked sample, and all ever-members cost no more.
+- **Fail on Ex-Dates not judged, or above a share of them.** Rejected: BAJFINANCE's 2016 split would fail it for Kite's rounding, which says nothing about our factor.
