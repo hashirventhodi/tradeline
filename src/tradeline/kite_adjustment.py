@@ -268,6 +268,8 @@ def _replay(
 
 Outcome = Literal["agrees", "disagrees", "not_judged"]
 NotJudged = Literal[
+    # A split or bonus of it has no factor, which the Adjusted Series refuses (``adjust``).
+    "no_factor",
     # Kite has no compared close before it, or none from it (fetched before it).
     "no_closes_before",
     "no_closes_after",
@@ -287,8 +289,9 @@ class FactorJudgement:
 
     ex_date: date
     outcome: Outcome
-    # Ours: the product of the Ex-Date's split, bonus and consolidation factors.
-    factor: Fraction
+    # Ours: the product of the Ex-Date's split, bonus and consolidation factors; None
+    # where one has no factor.
+    factor: Fraction | None
     # Kite's, as its closes show it: for one that agrees, the stage's ratio, ours exact or
     # to two decimals; None where not judged.
     kite_factor: Fraction | None
@@ -310,14 +313,24 @@ def factor_agreement(
     def refit(ex_date: date) -> Callable[[], Replay]:
         return lambda: _replay(closes, found, nse_closes, fitted_splits=frozenset({ex_date}))
 
-    split_dates = sorted({a.ex_date for a in found if _class(a) == "split" and a.factor})
-    return tuple(_judge(result, e, _split_factor(found, e), refit=refit(e)) for e in split_dates)
+    judgements = []
+    for ex_date in sorted({a.ex_date for a in found if _class(a) == "split"}):
+        factor = _split_factor(found, ex_date)
+        judgements.append(
+            FactorJudgement(ex_date, "not_judged", None, None, "no_factor")
+            if factor is None
+            else _judge(result, ex_date, factor, refit=refit(ex_date))
+        )
+    return tuple(judgements)
 
 
-def _split_factor(actions: Sequence[CorporateAction], ex_date: date) -> Fraction:
-    """Our factor at ``ex_date``: the product of its splits', bonuses' and consolidations'."""
+def _split_factor(actions: Sequence[CorporateAction], ex_date: date) -> Fraction | None:
+    """Our factor at ``ex_date``: the product of its splits', bonuses' and consolidations';
+    None where one has no factor."""
     factors = [a.factor for a in actions if a.ex_date == ex_date and _class(a) == "split"]
-    return math.prod((Fraction(f) for f in factors if f), start=Fraction(1))
+    if any(not f for f in factors):
+        return None
+    return math.prod((Fraction(_of(f)) for f in factors), start=Fraction(1))
 
 
 def _judge(

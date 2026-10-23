@@ -74,7 +74,7 @@ This ADR twice says `compare-adjusted` is unchanged, the bar-by-bar check of our
 - **`compare-adjusted` gives Factor Agreement as its verdict.** It covers every split (either direction) and bonus Ex-Date of every ever-member, following Instruments across renames, and judges each by the replay Kite Parity uses. No tolerance is added.
   - **Agrees:** Kite's Adjustment stands with that Ex-Date's computed stage, our ratio exact or rounded to two decimals.
   - **Disagrees:** Kite's Adjustment stands across that Ex-Date only without that stage: no stage, or a fitted ratio in its place.
-  - **Not judged:** no standing stretch to judge it by (BAJFINANCE before mid-2025, NMDC before 2024-02-27, listing months, a Kite Basis under 20 bars), no Kite closes on one side, or an Ex-Date after the candles were fetched. Each is listed with its reason and counted.
+  - **Not judged:** no standing stretch to judge it by (BAJFINANCE before mid-2025, NMDC before 2024-02-27, listing months, a Kite Basis under 20 bars), no Kite closes on one side, an Ex-Date after the candles were fetched, our ratio standing only when read from Kite's closes on a tick of its own, or a split or bonus with no factor. Each is listed with its reason and counted.
 - **Only a disagreement fails it.** An Ex-Date not judged is Kite's convention we cannot replay, not evidence against our factor, just as a gap is reported and never fails the Integrity Check.
 - **The bar-by-bar comparison stays as detail** for a named Symbol, and gates nothing.
 

@@ -687,3 +687,15 @@ def test_an_ex_date_before_kites_first_close_is_not_judged() -> None:
     assert judged(closes, [action("2024-10-28", "Bonus 1:1")]) == [
         (date(2024, 10, 28), "not_judged", Fraction(1, 2), None, "no_closes_before")
     ]
+
+
+def test_a_split_with_no_factor_is_listed_as_not_judged() -> None:
+    # The Adjusted Series refuses such a row (``adjust``); Factor Agreement still lists it.
+    days = weekdays("2024-09-23", 50)
+    closes = compared(days, prices(50), lambda _, n: n)
+    unread = CorporateAction(
+        symbol="X", series="EQ", ex_date=date(2024, 10, 28), subject="Face Value Split",
+        kind="split", factor=None,
+    )  # fmt: skip
+
+    assert judged(closes, [unread]) == [(date(2024, 10, 28), "not_judged", None, None, "no_factor")]

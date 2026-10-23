@@ -203,7 +203,7 @@ class AdjustedComparison:
                         "symbols": list(a.symbols),
                         "ex_date": j.ex_date.isoformat(),
                         "outcome": j.outcome,
-                        "factor": decimal_text(j.factor),
+                        "factor": None if j.factor is None else decimal_text(j.factor),
                         "kite_factor": None
                         if j.kite_factor is None
                         else decimal_text(j.kite_factor),
@@ -236,10 +236,10 @@ class AdjustedComparison:
         for a, j in self.judged:
             name = "/".join(a.symbols)
             if j.outcome == "agrees":
-                lines.append(f"  {name} {j.ex_date} agrees: ours {decimal_text(j.factor)}")
+                lines.append(f"  {name} {j.ex_date} agrees: ours {decimal_text(_of(j.factor))}")
             elif j.outcome == "disagrees":
                 lines.append(
-                    f"  {name} {j.ex_date} DISAGREES: ours {decimal_text(j.factor)},"
+                    f"  {name} {j.ex_date} DISAGREES: ours {decimal_text(_of(j.factor))},"
                     f" Kite's {decimal_text(_of(j.kite_factor))}"
                 )
             elif j.outcome == "not_judged":
@@ -304,11 +304,7 @@ def _agreement(
     """The Instrument's split and bonus Ex-Dates in the range judged in series EQ, its
     whole history's actions replayed; None where it has none in the range."""
     actions = queries.corporate_actions(conn, instrument)
-    # As ``factor_agreement`` judges them: a split or bonus with no factor is refused by
-    # the Adjusted Series itself (``adjust``), so has none to judge.
-    if not any(
-        a.kind in ADJUSTED_KINDS and a.factor and start <= a.ex_date <= end for a in actions
-    ):
+    if not any(a.kind in ADJUSTED_KINDS and start <= a.ex_date <= end for a in actions):
         return None
     nse = {
         r.trade_date: r.close

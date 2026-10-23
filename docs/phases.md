@@ -47,7 +47,7 @@ Liquidity coverage and monthly turnover were measured and not proposed (`docs/re
 - Factor Agreement holds for every ever-member over the ten years, run by `tradeline compare-adjusted` over stored data with no network. Each split (either direction) and bonus Ex-Date of an ever-member, followed across renames, gets one outcome from Kite's Adjustment:
   - **agrees:** Kite's Adjustment stands with that Ex-Date's computed stage, our ratio exact or rounded to two decimals (ADR 0018);
   - **disagrees:** Kite's Adjustment stands across that Ex-Date only without that stage, with no stage or a fitted ratio in its place;
-  - **not judged:** the replay leaves no standing stretch to judge it by, Kite has no closes on one side, or the Ex-Date is after the candles were fetched.
+  - **not judged:** the replay leaves no standing stretch to judge it by, Kite has no closes on one side, the Ex-Date is after the candles were fetched, our ratio stands only when read from Kite's closes on a tick of its own, or a split or bonus there has no factor.
 
   The line passes when no Ex-Date disagrees. Ex-Dates not judged are listed, each with its reason, and counted, and never fail it. The bar-by-bar comparison to the paisa stays in `compare-adjusted` as detail for a named Symbol and gates nothing.
 
