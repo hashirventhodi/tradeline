@@ -289,7 +289,8 @@ class FactorJudgement:
     outcome: Outcome
     # Ours: the product of the Ex-Date's split, bonus and consolidation factors.
     factor: Fraction
-    # Kite's, as its closes show it; None where not judged.
+    # Kite's, as its closes show it: for one that agrees, the stage's ratio, ours exact or
+    # to two decimals; None where not judged.
     kite_factor: Fraction | None
     # Why it is not judged; None otherwise.
     reason: NotJudged | None
@@ -631,7 +632,7 @@ class _Replayer:
         ex_dates: list[date],
         previous: dict[date, Fraction],
         grouped: dict[int, list[Close]],
-        fitted_splits: frozenset[date] = frozenset(),
+        fitted_splits: frozenset[date],
     ) -> None:
         def class_of(a: CorporateAction) -> Class:
             found = _class(a)

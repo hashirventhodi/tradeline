@@ -167,6 +167,8 @@ class AdjustedComparison:
     symbols: tuple[SymbolComparison, ...]
     # Each Instrument with a split or bonus Ex-Date in the range.
     agreement: tuple[InstrumentAgreement, ...]
+    # Ever-members' Symbols no Instrument answers for: not judged, and listed.
+    unresolved: tuple[str, ...] = ()
 
     @property
     def passed(self) -> bool:
@@ -178,8 +180,12 @@ class AdjustedComparison:
         """Every Ex-Date judged, by Instrument then Ex-Date."""
         return tuple((a, j) for a in self.agreement for j in a.judgements)
 
+    @property
+    def outcomes(self) -> Counter[str]:
+        return Counter(j.outcome for _, j in self.judged)
+
     def summary(self) -> dict[str, Any]:
-        outcomes = Counter(j.outcome for _, j in self.judged)
+        outcomes = self.outcomes
         return {
             "start": self.start.isoformat(),
             "end": self.end.isoformat(),
@@ -205,6 +211,7 @@ class AdjustedComparison:
                     }
                     for a, j in self.judged
                 ],
+                "unresolved_members": list(self.unresolved),
             },
             "symbols_matching": sum(s.matches for s in self.symbols),
             "symbols": [s.summary() for s in self.symbols],
@@ -212,18 +219,25 @@ class AdjustedComparison:
         }
 
     def text(self) -> str:
-        """Factor Agreement's counts and every Ex-Date not agreeing; then, for each named
+        """Factor Agreement's counts and every Ex-Date's outcome; then, for each named
         Symbol, a line, a line per mismatched stretch and one per action."""
-        outcomes = Counter(j.outcome for _, j in self.judged)
+        outcomes = self.outcomes
         lines = [
             f"Factor Agreement, {self.start} to {self.end}: {len(self.judged)} split and bonus"
             f" Ex-Dates of {len(self.agreement)} Instruments: {outcomes['agrees']} agree,"
             f" {outcomes['disagrees']} disagree, {outcomes['not_judged']} not judged"
             f"  {'PASS' if self.passed else 'FAIL'}"
         ]
+        if self.unresolved:
+            lines.append(
+                f"  Ever-members no Instrument answers for, not judged:"
+                f" {', '.join(self.unresolved)}"
+            )
         for a, j in self.judged:
             name = "/".join(a.symbols)
-            if j.outcome == "disagrees":
+            if j.outcome == "agrees":
+                lines.append(f"  {name} {j.ex_date} agrees: ours {decimal_text(j.factor)}")
+            elif j.outcome == "disagrees":
                 lines.append(
                     f"  {name} {j.ex_date} DISAGREES: ours {decimal_text(j.factor)},"
                     f" Kite's {decimal_text(_of(j.kite_factor))}"
@@ -256,13 +270,19 @@ def compare_adjusted(
     as_of: date,
 ) -> AdjustedComparison:
     """Factor Agreement for every ever-member, or for the named Symbols with their bars."""
+    # Each Instrument judged, with the Symbols it is known by here.
+    symbols_of: dict[str, set[str]] = {}
+    unresolved: set[str] = set()
     if symbols is None:
-        named: dict[str, set[str]] = {}
         for m in queries.universe_ever_members(conn):
-            if m.instrument is not None:
-                named.setdefault(m.instrument, set()).add(m.symbol)
+            if m.instrument is None:
+                unresolved.add(m.symbol)
+            else:
+                symbols_of.setdefault(m.instrument, set()).add(m.symbol)
     else:
-        named = {s: {s} for s in symbols}
+        for s in symbols:
+            key = queries.instrument_key(conn, s, as_of=end)
+            symbols_of.setdefault(key, set()).add(s)
     return AdjustedComparison(
         start=start,
         end=end,
@@ -270,10 +290,11 @@ def compare_adjusted(
         symbols=tuple(_compare(conn, s, start=start, end=end, as_of=as_of) for s in symbols or ()),
         agreement=tuple(
             found
-            for instrument in sorted(named)
-            if (found := _agreement(conn, instrument, named[instrument], start=start, end=end))
+            for instrument in sorted(symbols_of)
+            if (found := _agreement(conn, instrument, symbols_of[instrument], start=start, end=end))
             is not None
         ),
+        unresolved=tuple(sorted(unresolved)),
     )
 
 
@@ -282,8 +303,12 @@ def _agreement(
 ) -> InstrumentAgreement | None:
     """The Instrument's split and bonus Ex-Dates in the range judged in series EQ, its
     whole history's actions replayed; None where it has none in the range."""
-    actions = queries.corporate_actions(conn, instrument, as_of=end)
-    if not any(a.kind in ADJUSTED_KINDS and start <= a.ex_date <= end for a in actions):
+    actions = queries.corporate_actions(conn, instrument)
+    # As ``factor_agreement`` judges them: a split or bonus with no factor is refused by
+    # the Adjusted Series itself (``adjust``), so has none to judge.
+    if not any(
+        a.kind in ADJUSTED_KINDS and a.factor and start <= a.ex_date <= end for a in actions
+    ):
         return None
     nse = {
         r.trade_date: r.close

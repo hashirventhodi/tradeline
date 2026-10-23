@@ -156,6 +156,7 @@ def test_a_split_kites_closes_carry_straight_across_disagrees_and_fails_the_run(
                 "reason": None,
             }
         ],
+        "unresolved_members": [],
     }
     assert "  TCS 2024-08-01 DISAGREES: ours 0.5, Kite's 1\n" in report.text()
 
@@ -184,3 +185,67 @@ def test_a_split_kite_adjusted_by_our_factor_agrees_and_a_named_symbol_lists_its
     (tcs,) = report.symbols
     assert (tcs.symbol, tcs.bars) == ("TCS", TRADING_DAYS)
     assert report.passed
+
+
+def divided_by_three_before_the_split(request: Request, candles: list[Candle]) -> list[Candle]:
+    """TCS's closes before the split divided by 3, a ratio other than the stored 2 for 1."""
+    if f"/historical/{TCS_TOKEN}/" not in request.url:
+        return candles
+    for candle in candles:
+        if date.fromisoformat(candle[0][:10]) < SPLIT:
+            third = (Decimal(str(candle[4])) / 3 / Decimal("0.05")).quantize(
+                Decimal(1), ROUND_HALF_EVEN
+            ) * Decimal("0.05")
+            candle[1:5] = [float(third)] * 4
+    return candles
+
+
+def test_a_split_kite_divided_by_another_ratio_disagrees_and_fails_the_run(
+    fresh_database_url: str,
+) -> None:
+    with app_connection(fresh_database_url) as conn:
+        load_split(conn, divided_by_three_before_the_split)
+        report = compare_adjusted(conn, symbols=None, start=START, end=END, as_of=FETCHED_ON)
+
+    ((_, judgement),) = report.judged
+    assert (judgement.ex_date, judgement.outcome) == (SPLIT, "disagrees")
+    assert abs(1 / _of(judgement.kite_factor) - 3) < Fraction(1, 2000)
+    assert not report.passed
+
+
+def before_the_split(request: Request, candles: list[Candle]) -> list[Candle]:
+    """TCS's candles up to the day before the split, as if fetched then."""
+    if f"/historical/{TCS_TOKEN}/" not in request.url:
+        return candles
+    return [c for c in candles if date.fromisoformat(c[0][:10]) < SPLIT]
+
+
+def test_an_ex_date_not_judged_is_listed_with_its_reason_and_does_not_fail_the_run(
+    fresh_database_url: str,
+) -> None:
+    with app_connection(fresh_database_url) as conn:
+        load_split(conn, before_the_split)
+        report = compare_adjusted(conn, symbols=None, start=START, end=END, as_of=FETCHED_ON)
+
+    assert outcomes(report) == [
+        (("TCS",), SPLIT, "not_judged", Fraction(1, 2), None, "no_closes_after")
+    ]
+    assert report.passed
+    assert "  TCS 2024-08-01 not judged: no_closes_after\n" in report.text()
+
+
+def test_a_named_symbol_is_judged_as_its_instrument_and_every_ex_date_is_printed(
+    fresh_database_url: str,
+) -> None:
+    with app_connection(fresh_database_url) as conn:
+        load_split(conn, halved_before_the_split)
+        report = compare_adjusted(conn, symbols=["TCS"], start=START, end=END, as_of=FETCHED_ON)
+
+    ((agreement, _),) = report.judged
+    assert agreement.instrument == "TCS@2004-08-25"
+    assert "  TCS 2024-08-01 agrees: ours 0.5\n" in report.text()
+
+
+def _of[T](value: T | None) -> T:
+    assert value is not None
+    return value

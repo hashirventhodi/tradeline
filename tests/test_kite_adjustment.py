@@ -678,3 +678,12 @@ def test_a_bonus_with_fewer_than_twenty_bars_on_one_side_is_not_judged() -> None
     assert judged(compared(days, prices(45), kite), [action("2024-10-28", "Bonus 1:1")]) == [
         (ex, "not_judged", Fraction(1, 2), None, "short_basis")
     ]
+
+
+def test_an_ex_date_before_kites_first_close_is_not_judged() -> None:
+    days = weekdays("2024-11-04", 25)
+    closes = compared(days, prices(25), lambda _, n: n)
+
+    assert judged(closes, [action("2024-10-28", "Bonus 1:1")]) == [
+        (date(2024, 10, 28), "not_judged", Fraction(1, 2), None, "no_closes_before")
+    ]

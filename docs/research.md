@@ -1852,9 +1852,10 @@ Phase 1's line "our adjusted series matches the broker's displayed adjusted char
 |---|---|
 | Command | `uv run tradeline compare-adjusted --from 2016-10-21 --to 2026-10-20 --as-of 2026-10-22` (read-only) |
 | Database | The #59 database, as #62's run used it |
-| Code | Branch `factor-agreement-68`, commit 2684ac9 |
+| Code | Branch `factor-agreement-68`, commit 2684ac9; the review's fixes after it change how named Symbols resolve and what is printed, not how an ever-member is judged |
 | Result | **209 split and bonus Ex-Dates of 148 Instruments: 191 agree, 0 disagree, 18 not judged. PASS.** |
 | Not judged, by reason | 7 not standing before, 6 no closes before, 3 short basis, 2 Kite's ratio is ours |
+| Ever-members no Instrument answers for | 0 (counted after the run by `universe_ever_members`' rule; the review added the count to the report, and the run's Ex-Dates are unchanged by that fix) |
 | Time | 18 min 14 s wall, 712 s of CPU, on the development machine with other work running (load average 11 at the start, 14 at the end). |
 
 Six Ex-Dates agree through the ratio rounded to two decimals, as ADR 0018 allows: ASTRAL 2021 and 2023, GAIL 2017 and 2018, OIL 2017 and WIPRO 2019.

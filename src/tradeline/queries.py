@@ -467,6 +467,17 @@ def _owned(conn: psycopg.Connection, instrument: str, *, as_of: date) -> _Owned:
         return _Owned(None, instrument)
 
 
+def instrument_key(conn: psycopg.Connection, instrument: str, *, as_of: date) -> str:
+    """What an Instrument read reads ``instrument`` as on ``as_of`` (``_owned``): its
+    Instrument's key, or a Symbol no Instrument has had, standing for its own."""
+    owned = _owned(conn, instrument, as_of=as_of)
+    if owned.key is not None:
+        return owned.key
+    if owned.symbol is None:
+        raise ValueError("an owner names an Instrument key or a Symbol")
+    return owned.symbol
+
+
 @dataclass(frozen=True)
 class Announcement:
     source: str  # 'nse' or 'bse'
