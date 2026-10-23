@@ -249,3 +249,17 @@ def test_a_named_symbol_is_judged_as_its_instrument_and_every_ex_date_is_printed
 def _of[T](value: T | None) -> T:
     assert value is not None
     return value
+
+
+def test_an_ever_member_no_instrument_answers_for_is_listed_and_not_judged(
+    fresh_database_url: str,
+) -> None:
+    with app_connection(fresh_database_url) as conn:
+        ingest_eod(conn, PlaybackTransport(FIXTURES / "ingest_eod"), start=START, end=END)
+        compute_universe(conn, EVER_MEMBERS, month=date(2024, 8, 1))  # before any rebuild
+        report = compare_adjusted(conn, symbols=None, start=START, end=END, as_of=FETCHED_ON)
+
+    assert report.unresolved == ("INFY", "RELIANCE", "TCS")
+    assert report.judged == ()
+    assert report.summary()["factor_agreement"]["unresolved_members"] == ["INFY", "RELIANCE", "TCS"]
+    assert "not judged: INFY, RELIANCE, TCS\n" in report.text()
