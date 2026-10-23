@@ -12,7 +12,7 @@ Build: Kite candle ingestion (daily and minute), NSE end-of-day file ingestion, 
 
 Accept when:
 - Ten years of NSE end-of-day files pass the Integrity Check: a file for every day in the Trading Calendar, and every Large Move of an ever-member explained (ADR 0018).
-- Ten years of daily candles for every Instrument that was ever in the Universe are loaded, and Kite Parity against NSE's end-of-day files has unexplained differences under 0.1% (ADR 0018).
+- Ten years of daily candles are loaded for every ever-member Kite still serves, each one without them listed with an end reason other than still trading, and Kite Parity against NSE's end-of-day files has unexplained differences under 0.1% (ADR 0018; #13, below).
 - Factor Agreement holds for every ever-member over the ten years: no split or bonus Ex-Date disagrees, run by `tradeline compare-adjusted` (ADR 0018; #68, below).
 - The Universe Rule, run for every month in the last ten years, is reproducible: two runs produce byte-identical membership tables.
 - The Conformance Check passes for every stored month under the configured rule, run by `tradeline check-universe`; the current Universe is compared with the current NIFTY 200 as a report, not a gate (#18, below).
@@ -50,6 +50,18 @@ Liquidity coverage and monthly turnover were measured and not proposed (`docs/re
   - **not judged:** the replay leaves no standing stretch to judge it by, Kite has no closes on one side, the Ex-Date is after the candles were fetched, our ratio stands only when read from Kite's closes on a tick of its own, or a split or bonus there has no factor.
 
   The line passes when no Ex-Date disagrees. Ex-Dates not judged are listed, each with its reason, and counted, and never fail it. The bar-by-bar comparison to the paisa stays in `compare-adjusted` as detail for a named Symbol and gates nothing.
+
+**#13, 2026-10-23, adopted with the pull request that records it (no build).** The original line was:
+
+> Ten years of daily candles for every Instrument that was ever in the Universe are loaded, and Kite Parity against NSE's end-of-day files has unexplained differences under 0.1% (ADR 0018).
+
+Kite serves no history for an instrument token that no longer exists, so the coverage half cannot be met as written: 54 of the 517 ever-members have no Kite candles (`tradeline instruments`, 2026-10-23). 45 ended with no reason stated, 8 moved to BE or BZ, and 1 was delisted. NSE's end-of-day rows cover all 517, and the Integrity Check and the Adjusted Series read those. Kite's candles are only the cross-check. The coverage half is replaced by:
+
+- Candles are loaded for every ever-member Kite still serves. An ever-member without candles is accepted only when `tradeline instruments` gives it an end reason showing it no longer trades in the series it was ranked in: series moved, merged, delisted, or ended with reason not stated. One whose end reason is still trading fails the line: that is a fetch that was missed.
+- The ever-members that moved to BE or BZ are accepted as listed. Kite's token for each now names that series. Whether that token would return their EQ years was not measured: fetching it was considered and not done.
+- INFIBEAM is listed as ended only because CCAVENUE's 2026 consolidation is not yet in NSE's Corporate Action list. Kite serves its history under CCAVENUE's token, and #31 tracks fetching it.
+
+The Kite Parity half is unchanged. Parity compares only Instruments with candles stored, so its result covers the ever-members that have them, and a re-score states how many.
 
 ## Phase 2: Engine, Strategy, backtester, Gates
 
