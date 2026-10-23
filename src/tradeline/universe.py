@@ -55,6 +55,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from decimal import Decimal
+from typing import Literal
 
 import psycopg
 from psycopg.types.json import Jsonb
@@ -206,6 +207,21 @@ def compute_universe(
     )
 
 
+# The rule's eligibility filters, in the order they are applied.
+ExclusionReason = Literal["series", "fund_unit", "listing_age", "presence"]
+
+
+@dataclass(frozen=True)
+class Exclusion:
+    """The first of the rule's filters a candidate fails, and how."""
+
+    reason: ExclusionReason
+    detail: str
+
+    def __str__(self) -> str:
+        return self.detail
+
+
 @dataclass(frozen=True)
 class Standing:
     """Where the rule places one symbol with a row in its series in the window."""
@@ -216,7 +232,7 @@ class Standing:
     # Traded value in the rule's series over the window.
     traded_value: Decimal
     # Why the symbol is not eligible; None if it is.
-    excluded: str | None
+    excluded: Exclusion | None
     # The Instrument ranked when the rule ranks Instruments, else None.
     instrument: str | None = None
 
@@ -230,6 +246,34 @@ def standings(conn: psycopg.Connection, rule: UniverseRule, *, month: date) -> l
     if month.day != 1:
         raise ValueError(f"a Universe month is given by its first day, not {month}")
     return _rank(conn, rule, month)[2]
+
+
+@dataclass(frozen=True)
+class Eligibility:
+    """How the rule judges one Instrument or Symbol for a month."""
+
+    # The Symbol the rule ranks it by: of its latest row in the window.
+    symbol: str
+    # Why it is not eligible; None if it is.
+    excluded: Exclusion | None
+
+
+def eligibility(
+    conn: psycopg.Connection, rule: UniverseRule, *, month: date, keys: Sequence[str]
+) -> dict[str, Eligibility]:
+    """How the rule judges each of ``keys`` for the month.
+
+    A key is an Instrument's key under a rule that ranks Instruments, else a
+    Symbol. The rule's own filters are applied to only these, so the cost is
+    theirs and not the whole window's. A key with no row in the rule's series
+    in the window is left out.
+    """
+    window = _window(conn, rule, month)
+    if rule.rank_by == "instrument":
+        candidates = _instrument_candidates(conn, rule, month, window[0], only=keys)
+    else:
+        candidates = _candidates(conn, rule, month, window[0], only=keys)
+    return {c.instrument or c.symbol: Eligibility(c.symbol, _excluded(rule, c)) for c in candidates}
 
 
 def _rank(
@@ -279,16 +323,23 @@ def _window(conn: psycopg.Connection, rule: UniverseRule, month: date) -> list[d
 
 
 def _candidates(
-    conn: psycopg.Connection, rule: UniverseRule, month: date, window_start: date
+    conn: psycopg.Connection,
+    rule: UniverseRule,
+    month: date,
+    window_start: date,
+    *,
+    only: Sequence[str] | None = None,
 ) -> list[_Candidate]:
-    """Every symbol with a row in the rule's series in the window, with what eligibility needs."""
+    """Every symbol with a row in the rule's series in the window, with what eligibility needs;
+    only the symbols ``only`` names, if given."""
     rows = conn.execute(
         # Materialized: inlined into the per-symbol count below, the calendar
         # would be rebuilt from every end-of-day row once per candidate.
         "WITH calendar AS MATERIALIZED ("
         "  SELECT DISTINCT trade_date FROM eod_bhavcopy WHERE trade_date < %(month)s),"
         " window_rows AS ("
-        "  SELECT * FROM eod_bhavcopy WHERE trade_date >= %(start)s AND trade_date < %(month)s),"
+        "  SELECT * FROM eod_bhavcopy WHERE trade_date >= %(start)s AND trade_date < %(month)s"
+        "  AND (%(only)s::text[] IS NULL OR symbol = ANY(%(only)s))),"
         " stats AS ("
         "  SELECT symbol, count(*) AS days, sum(traded_value) AS traded_value"
         "  FROM window_rows WHERE series = %(series)s GROUP BY symbol),"
@@ -308,15 +359,26 @@ def _candidates(
         "  (SELECT count(*) FROM calendar c WHERE c.trade_date >= ls.listing_date)"
         " FROM stats st JOIN latest l USING (symbol) JOIN listed ls USING (symbol)"
         " ORDER BY st.symbol",
-        {"start": window_start, "month": month, "series": rule.series},
+        {
+            "start": window_start,
+            "month": month,
+            "series": rule.series,
+            "only": None if only is None else list(only),
+        },
     ).fetchall()
     return [_Candidate(*row) for row in rows]
 
 
 def _instrument_candidates(
-    conn: psycopg.Connection, rule: UniverseRule, month: date, window_start: date
+    conn: psycopg.Connection,
+    rule: UniverseRule,
+    month: date,
+    window_start: date,
+    *,
+    only: Sequence[str] | None = None,
 ) -> list[_Candidate]:
-    """Every Instrument with a row in the rule's series in the window, across its Symbols.
+    """Every Instrument with a row in the rule's series in the window, across its Symbols;
+    only the Instruments whose keys ``only`` names, if given.
 
     A window row belongs to the Instrument whose interval holds it. A row in
     NSE's listing series that no interval holds was loaded after the last
@@ -328,6 +390,7 @@ def _instrument_candidates(
         "series": rule.series,
         "listing_series": list(LISTING_SERIES),
         "listing_age_from": rule.listing_age_from,
+        "only": None if only is None else list(only),
     }
     row = conn.execute(
         "SELECT count(*) FROM eod_bhavcopy e"
@@ -350,7 +413,8 @@ def _instrument_candidates(
         "  SELECT i.instrument_key, e.* FROM eod_bhavcopy e JOIN instrument_intervals i"
         "  ON i.symbol = e.symbol AND i.series = e.series"
         "  AND e.trade_date BETWEEN i.first_day AND i.last_day"
-        "  WHERE e.trade_date >= %(start)s AND e.trade_date < %(month)s),"
+        "  WHERE e.trade_date >= %(start)s AND e.trade_date < %(month)s"
+        "  AND (%(only)s::text[] IS NULL OR i.instrument_key = ANY(%(only)s))),"
         " stats AS ("
         "  SELECT instrument_key, count(DISTINCT trade_date) AS days,"
         "  sum(traded_value) AS traded_value"
@@ -375,21 +439,23 @@ def _instrument_candidates(
     return [_Candidate(*row) for row in rows]
 
 
-def _excluded(rule: UniverseRule, candidate: _Candidate) -> str | None:
+def _excluded(rule: UniverseRule, candidate: _Candidate) -> Exclusion | None:
     """Why ``candidate`` is not eligible under ``rule``, or None if it is."""
     if candidate.latest_series != rule.series:
-        return f"last traded in series {candidate.latest_series} in the window"
+        return Exclusion("series", f"last traded in series {candidate.latest_series} in the window")
     if (candidate.isin or "").startswith(rule.excluded_isin_prefix):
-        return f"ISIN {candidate.isin} is a fund unit (ETF)"
+        return Exclusion("fund_unit", f"ISIN {candidate.isin} is a fund unit (ETF)")
     if candidate.listing_trading_days < rule.min_listing_trading_days:
-        return (
+        return Exclusion(
+            "listing_age",
             f"listed {candidate.listing_trading_days} trading days,"
-            f" fewer than {rule.min_listing_trading_days}"
+            f" fewer than {rule.min_listing_trading_days}",
         )
     if candidate.days * 100 < rule.min_presence_percent * rule.lookback_trading_days:
-        return (
+        return Exclusion(
+            "presence",
             f"rows on {candidate.days} of {rule.lookback_trading_days} window days,"
-            f" under {rule.min_presence_percent}%"
+            f" under {rule.min_presence_percent}%",
         )
     return None
 

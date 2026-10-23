@@ -182,7 +182,7 @@ def _outside(rule: UniverseRule, standing: Standing | None, symbol: str) -> Comp
         return ComparedSymbol(
             symbol, standing.rank, standing.traded_value, f"ranked below the top {rule.top_n}"
         )
-    return ComparedSymbol(symbol, None, standing.traded_value, standing.excluded or "")
+    return ComparedSymbol(symbol, None, standing.traded_value, str(standing.excluded or ""))
 
 
 def _rank_order(row: ComparedSymbol) -> tuple[int, int, str]:

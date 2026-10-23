@@ -480,6 +480,38 @@ def test_universe_computes_each_month_under_the_configured_rule_and_logs_it(
     assert len(str(computed[0]["rule_version"])) == 64
 
 
+def test_check_universe_prints_the_conformance_check_and_fails_on_a_failing_month(
+    database_url: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = tmp_path / "tradeline.toml"
+    config.write_text(
+        "[universe]\ntop_n = 4\nlookback_trading_days = 20\nmin_listing_trading_days = 21\n"
+    )
+    monkeypatch.setenv("TRADELINE_CONFIG", str(config))
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    ingest = ["ingest", "eod", "--from", "2024-07-01", "--to", "2024-08-02"]
+    assert main([*ingest, "--play-fixtures", str(UNIVERSE_FIXTURES)]) == 0
+    assert main(["universe", "--month", "2024-08"]) == 0
+    capsys.readouterr()
+
+    assert main(["check-universe", "--month", "2024-08"]) == 0
+    passed = capsys.readouterr()
+    # September is not computed, so it fails.
+    assert main(["check-universe", "--month", "2024-08", "--to", "2024-09"]) == 1
+    failed = capsys.readouterr()
+
+    assert passed.err.startswith("Conformance Check, rule ")
+    assert ": 1 months, 1 conform, 0 fail\n" in passed.err
+    summary = json_lines(passed.out)[-1]
+    assert (summary["msg"], summary["report"]["passed"]) == ("check-universe finished", True)
+    assert "2024-09 fails:\n  no Universe is stored for the month\n" in failed.err
+    summary = json_lines(failed.out)[-1]
+    assert (summary["level"], summary["report"]["failed_months"]) == ("ERROR", ["2024-09-01"])
+
+
 def test_universe_reports_a_month_it_cannot_compute_as_a_json_error(
     database_url: str,
     repo_config: None,
