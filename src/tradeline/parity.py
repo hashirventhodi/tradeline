@@ -278,6 +278,20 @@ class ReplayedBasis:
         )
 
 
+def _bounded_text(b: BoundedSearch) -> str:
+    """A bounded search in words: its stretch, its layouts, and whether it stood."""
+    searched = (
+        ""
+        if b.fitted_at is None
+        else f" a fitted stage at {b.fitted_at} only (for an ambiguous fit),"
+    )
+    return (
+        f"{b.stretch[0]} to {b.stretch[1]}: {b.layouts} layouts over {len(b.ex_dates)}"
+        f" Ex-Date{'s' if len(b.ex_dates) != 1 else ''},{searched}"
+        f" {'stands' if b.stands else 'does not stand'}"
+    )
+
+
 def _does(stage: Stage) -> str:
     """What a stage does to each older close, in words: "divides by 2, rounds to 5 half_even"."""
     steps = [f"divides by {_number(stage.divisor)}"] if stage.multiplier != 1 else []
@@ -403,6 +417,7 @@ class ParityReport:
                     "ex_dates": [d.isoformat() for d in b.ex_dates],
                     "layouts": b.layouts,
                     "stands": b.stands,
+                    "fitted_at": None if b.fitted_at is None else b.fitted_at.isoformat(),
                 }
                 for instrument, series, b in self.bounded_searches
             ],
@@ -505,9 +520,7 @@ class ParityReport:
                 " (more layouts than are tried one by one):"
             )
             lines.extend(
-                f"  {instrument} {series} {b.stretch[0]} to {b.stretch[1]}: {b.layouts} layouts"
-                f" over {len(b.ex_dates)} Ex-Date{'s' if len(b.ex_dates) != 1 else ''},"
-                f" {'stands' if b.stands else 'does not stand'}"
+                f"  {instrument} {series} {_bounded_text(b)}"
                 for instrument, series, b in self.bounded_searches
             )
         if self.candle_disagreements:

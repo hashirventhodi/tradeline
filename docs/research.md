@@ -1622,7 +1622,7 @@ These are the results of `tradeline parity` itself, not the prototype. Its one r
 | Kite Bases | 111 in the JSON summary (the text lists 100): 106 with stages, and 5 of Kite's raw closes that leave a close unexplained |
 | Where the 833 unexplained closes are | 783 in 45 stretches that do not stand (NMDC 546, BAJFINANCE 215, SHANKARA 20, HINDZINC 1, MAJESCO 1), 37 in Kite Bases with stages, 13 in Kite's raw closes: the first days after listing of DMART and HUDCO (3 each), SBILIFE and TEJASNET (2 each), and CROMPGREAV's 8 to 10 March 2017 (3), the CGPOWER closes noted above under that key |
 | Ambiguous fits, bounded searches | 0 and 0 |
-| Time | 10 min 53 s on the development machine (524 s of CPU, NMDC alone most of it) |
+| Time | 14 min 49 s wall, 587 s of CPU, on the development machine with other work running (load average 7 at the start, 13 at the end). An earlier run of the same rules under lighter load took 11 min 59 s and 543 s, with identical output. NMDC's replay is most of it: about 520 s of CPU on its own. |
 
 The count matches the prototype's, but that alone does not show each choice below is right.
 
@@ -1631,13 +1631,25 @@ The count matches the prototype's, but that alone does not show each choice belo
 - **Arithmetic and actions.** Arithmetic is exact throughout. An action filed under two Symbols or series is applied once. Dividends on one Ex-Date are summed before the guard against an amount at or above NSE's close; the prototype guarded each amount separately.
 - **A dividend's P** is NSE's close on the last day before the Ex-Date that NSE has one, whether or not Kite has a candle that day. The prototype took the last day with both closes. This is an inferred rule: it reproduces Kite's closes exactly (ITC's 343 among them), but Kite publishes no reference-price convention.
 - **A fitted stage is placed only where one Ex-Date of its gap could hold it.** The prototype put the ratio at the latest of several. Where several could hold it and one would let the stretch stand, nothing in Kite's closes says which action the ratio belongs to. So none is placed, the stretch's closes stay unexplained, and the report lists the case as an ambiguous fit. This run has none: every fitted stage behind the 2,848 closes sits in a gap with one fittable Ex-Date.
-- **A gap with more than 64 layouts** is still searched one Ex-Date's choice at a time. The report now lists each such search and whether its stretch stood. This run has none: every mixed gap among the replayed Instruments has 64 layouts or fewer.
+- **A gap with more than 64 layouts** is still searched one Ex-Date's choice at a time. The report now lists each such search and whether its stretch stood. That includes a search at one Ex-Date for an ambiguous fit, which the report marks with that Ex-Date. This run has none: every gap the replay searched has 64 layouts or fewer.
 - **A fitted ratio is refused where it repeats any split, bonus, consolidation or dividend of its gap, staged or not.** The prototype compared it only with the gap's actions left without a stage, so a fitted ratio could apply a staged action a second time.
 - **The report gives every unexplained close mismatch its place.** Each sits in a stretch that does not stand, in a Kite Basis with stages, or in a basis of Kite's raw closes, and each of the three is listed with its days.
 
-**A known limit kept.** A group of stages found for one gap shares one tick among its computed stages, and one tie rule among all of them. ADR 0018 gives each stage its own. No group of more than one stage stands in any replayed Instrument of this run, so the choice changes no close here. A tick and tie rule per stage would multiply the search by 18 for each stage after the first. A test pins the limit: a bonus rounded to the rupee followed by a dividend subtracted to the paisa, in one gap, is not reproduced.
+**Every split, bonus, consolidation and dividend of a gap can have its own stage.** The prototype gave a gap with no fittable action at most one computed stage, against ADR 0018's "every split, bonus, consolidation and dividend among them has its own computed stage". The implementation now searches each such Ex-Date's choice for every gap: one of its computed stages, or none where the rules allow none. This was measured on the same extract (the 47 Instruments and series with a close mismatch) both ways:
 
-**A limit not measured.** A gap with no fittable action gets one computed stage at most, however many of its Ex-Dates hold a split or dividend. The prototype had the same rule. Whether any close would need two such stages was never measured.
+| | One stage per such gap (`159df3e`) | A stage per action |
+|---|---|---|
+| Unexplained | 841 | 841 |
+| Explained through a fitted stage | 2,848 | 2,848 |
+| Groups of more than one stage | 0 | 0 |
+| Bounded searches | 0 | 0 |
+| NMDC's replay, CPU, run back to back | 530 s | 522 s |
+| Acceptance run | 10 min 53 s, 524 s CPU | 11 min 59 s, 543 s CPU, under heavier load |
+| Report output | | identical: every JSON key, and every text line after the first |
+
+Nothing in this run needs two computed stages in one gap, and the search costs no more. The whole runs differ in time only by the machine's load: NMDC, timed back to back, does not. A test covers a gap of two subtracted dividends, which only two stages reproduce.
+
+**The stages of one gap share their rounding.** They take one tick for the computed stages, the fitted stage's own tick, and one tie rule. ADR 0018 now says so. With a stage per action, a gap can hold a group of several stages, but none stands in this run, among 106 Kite Bases with stages. A tick and tie rule per stage would multiply the search by 18 for each stage after the first, and no group of more than one stage stands here, so no close shows Kite rounding the stages of one gap differently. A test pins the rule: a bonus rounded to the rupee followed by a dividend subtracted to the paisa, in one gap, is not reproduced.
 
 ### Unresolved
 

@@ -386,9 +386,9 @@ def test_a_gap_of_more_layouts_than_are_tried_one_by_one_is_reported_as_a_bounde
 
 
 def test_a_group_whose_computed_stages_need_different_ticks_is_not_reproduced() -> None:
-    # A known limit (docs/research.md, #62): a group's computed stages share one tick. The
-    # bonus of 1 August rounds to the rupee and the dividend of 2 August to the paisa,
-    # with a rights issue on 5 August making the three one gap.
+    # ADR 0018: the stages found for one gap share one tick. The bonus of 1 August
+    # rounds to the rupee and the dividend of 2 August to the paisa, and no compared
+    # day falls between them and the rights issue of 5 August, so all three are one gap.
     days = [d for d in weekdays("2024-07-01", 48) if not date(2024, 8, 1) <= d < date(2024, 8, 6)]
 
     def kite(d: date, n: Decimal) -> Decimal:
@@ -490,3 +490,57 @@ def test_a_subject_that_misspells_dividend_as_divided_is_a_dividend() -> None:
     _, older = result.bases
     ((stage),) = older.stages
     assert (stage.form, stage.divisor) == ("dividend_ratio", Fraction(divisor))
+
+
+def test_a_bounded_search_for_an_ambiguous_fit_is_reported_with_the_ex_date_it_tried() -> None:
+    # Four dividends and two rights issues between two stretches, Kite's older closes
+    # unreproducible: the gap's own search is bounded, and so is the search at each
+    # rights issue for a fitted stage that would make the fit ambiguous.
+    gap = ["2024-08-01", "2024-08-02", "2024-08-05", "2024-08-06"]
+    days = [d for d in weekdays("2024-07-01", 50) if not date(2024, 8, 1) <= d < date(2024, 8, 9)]
+
+    def kite(d: date, n: Decimal) -> Decimal:
+        return to_tick(n - 30 - d.day % 2, FIVE_PAISA) if d < date(2024, 8, 5) else n
+
+    actions = [
+        action(gap[0], "Dividend - Rs 1 Per Share"),
+        action(gap[1], "Dividend - Rs 1.50 Per Share"),
+        action(gap[2], "Dividend - Rs 30 Per Share"),
+        action(gap[3], "Dividend - Rs 2 Per Share"),
+        action("2024-08-07", RIGHTS),
+        action("2024-08-08", RIGHTS),
+    ]
+
+    result = replayed(compared(days, prices(len(days)), kite), actions)
+
+    assert [(b.fitted_at, b.layouts, b.stands) for b in result.bounded_searches] == [
+        (None, 256, False),
+        (date(2024, 8, 7), 256, False),
+        (date(2024, 8, 8), 256, False),
+    ]
+    assert result.ambiguous_fits == ()
+
+
+def test_each_dividend_of_a_gap_without_a_fittable_action_can_have_its_own_stage() -> None:
+    # Rs 10 subtracted on 1 August and Rs 5 on 5 August, no compared day between them:
+    # neither amount alone reproduces the Rs 15 Kite took off, so both are stages.
+    days = [d for d in weekdays("2024-07-01", 47) if not date(2024, 8, 1) <= d < date(2024, 8, 5)]
+
+    def kite(d: date, n: Decimal) -> Decimal:
+        if d < date(2024, 8, 1):
+            n = to_tick(n - 10, FIVE_PAISA)
+        return to_tick(n - 5, FIVE_PAISA) if d < date(2024, 8, 5) else n
+
+    actions = [
+        action("2024-08-01", "Dividend - Rs 10 Per Share"),
+        action("2024-08-05", "Dividend - Rs 5 Per Share"),
+    ]
+
+    result = replayed(compared(days, prices(len(days)), kite), actions)
+
+    _, older = result.bases
+    assert [(s.ex_date, s.form, s.subtracted) for s in older.stages] == [
+        (date(2024, 8, 1), "dividend_subtracted", Fraction(10)),
+        (date(2024, 8, 5), "dividend_subtracted", Fraction(5)),
+    ]
+    assert set(result.explained) == {d for d in days if d < date(2024, 8, 1)}

@@ -841,6 +841,13 @@ def test_ambiguous_fits_and_bounded_searches_are_reported_with_their_instrument(
         ),
         bounded_searches=(
             ("NMDC", "EQ", BoundedSearch(stretch, (date(2024, 8, 1),), 256, stands=False)),
+            (
+                "NMDC",
+                "EQ",
+                BoundedSearch(
+                    stretch, (date(2024, 8, 1),), 256, stands=False, fitted_at=date(2024, 8, 1)
+                ),
+            ),
         ),
     )
 
@@ -864,7 +871,18 @@ def test_ambiguous_fits_and_bounded_searches_are_reported_with_their_instrument(
             "ex_dates": ["2024-08-01"],
             "layouts": 256,
             "stands": False,
-        }
+            "fitted_at": None,
+        },
+        {
+            "instrument": "NMDC",
+            "series": "EQ",
+            "start": "2024-07-01",
+            "end": "2024-07-31",
+            "ex_dates": ["2024-08-01"],
+            "layouts": 256,
+            "stands": False,
+            "fitted_at": "2024-08-01",
+        },
     ]
     text = report.text()
     assert (
@@ -872,8 +890,10 @@ def test_ambiguous_fits_and_bounded_searches_are_reported_with_their_instrument(
         " Ex-Date; none is placed):\n  GNFC EQ 2024-07-01 to 2024-07-31: 2024-08-01, 2024-08-05"
     ) in text
     assert (
-        "1 bounded search (more layouts than are tried one by one):\n"
-        "  NMDC EQ 2024-07-01 to 2024-07-31: 256 layouts over 1 Ex-Date, does not stand"
+        "2 bounded searches (more layouts than are tried one by one):\n"
+        "  NMDC EQ 2024-07-01 to 2024-07-31: 256 layouts over 1 Ex-Date, does not stand\n"
+        "  NMDC EQ 2024-07-01 to 2024-07-31: 256 layouts over 1 Ex-Date, a fitted stage at"
+        " 2024-08-01 only (for an ambiguous fit), does not stand"
     ) in text
 
 
