@@ -9,7 +9,18 @@ import pytest
 
 from tradeline.db import app_connection
 
-LEDGER_TABLES = ("strategies", "runs", "candidates", "plans", "passes", "blocks", "verdicts")
+LEDGER_TABLES = (
+    "strategies",
+    "runs",
+    "candidates",
+    "plans",
+    "passes",
+    "blocks",
+    "verdicts",
+    "orders",
+    "fills",
+    "positions",
+)
 INSERTS = {
     "strategies": "INSERT INTO strategies (mode, backtest_id, family, name, code_revision,"
     " ranking) VALUES (%s, %s, 'pullback', 'pullback_v1', 'r', 'by return')",
@@ -29,6 +40,17 @@ INSERTS = {
     " VALUES (%s, %s, gen_random_uuid(), 1, 'max_gross', 100, 94, 112, 10, 0, 's', '{}')",
     "verdicts": "INSERT INTO verdicts (mode, backtest_id, run_id, rank, verdict, reason)"
     " VALUES (%s, %s, gen_random_uuid(), 1, 'SKIP', 'max_gross')",
+    "orders": "INSERT INTO orders (mode, backtest_id, id, event, day, seq, run_id, rank,"
+    " position_id, instrument, symbol, side, purpose, limit_price, shares, session)"
+    " VALUES (%s, %s, gen_random_uuid(), 'placed', '2023-06-15', 1, gen_random_uuid(), 1,"
+    " gen_random_uuid(), 'A', 'A', 'buy', 'entry', 100, 50, '2023-06-16')",
+    "fills": "INSERT INTO fills (mode, backtest_id, order_id, day, seq, position_id, instrument,"
+    " symbol, side, price, shares) VALUES (%s, %s, gen_random_uuid(), '2023-06-16', 1,"
+    " gen_random_uuid(), 'A', 'A', 'buy', 100, 50)",
+    "positions": "INSERT INTO positions (mode, backtest_id, position_id, event, day, seq,"
+    " run_id, rank, instrument, symbol, opened_on, shares, entry, stop, target,"
+    " time_stop_days) VALUES (%s, %s, gen_random_uuid(), 'opened', '2023-06-16', 2,"
+    " gen_random_uuid(), 1, 'A', 'A', '2023-06-16', 50, 100, 94, 112, 10)",
 }
 
 

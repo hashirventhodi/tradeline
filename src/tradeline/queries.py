@@ -1788,3 +1788,157 @@ def verdicts(conn: psycopg.Connection, run_id: uuid.UUID) -> list[LedgerVerdict]
         (run_id,),
     ).fetchall()
     return [LedgerVerdict(*row) for row in rows]
+
+
+# An account is one mode's Orders, Fills and Positions: a backtest's (mode backtest and its
+# id), or the paper or the live account (no backtest id). ``day`` and ``seq`` order every
+# event of an account across the three tables.
+
+
+@dataclass(frozen=True)
+class LedgerOrder:
+    """One Order: its terms, when it was placed, and how it ended: a Fill, a cancellation,
+    or neither yet (open)."""
+
+    id: uuid.UUID
+    run_id: uuid.UUID
+    # The Pass's rank, for an entry.
+    rank: int | None
+    position_id: uuid.UUID
+    instrument: str
+    symbol: str
+    side: str
+    # ``entry``, ``target``, ``stop`` or ``time``.
+    purpose: str
+    limit_price: Decimal
+    shares: int
+    # The trading day it can fill on.
+    session: date
+    placed: tuple[date, int]
+    cancelled: tuple[date, int] | None
+    cancel_reason: str | None
+    filled: tuple[date, int] | None
+    fill_price: Decimal | None
+
+    @property
+    def status(self) -> str:
+        if self.filled is not None:
+            return "filled"
+        return "open" if self.cancelled is None else "cancelled"
+
+
+@dataclass(frozen=True)
+class LedgerFill:
+    order_id: uuid.UUID
+    day: date
+    seq: int
+    position_id: uuid.UUID
+    instrument: str
+    symbol: str
+    side: str
+    price: Decimal
+    shares: int
+
+
+@dataclass(frozen=True)
+class LedgerPosition:
+    """A Position as it stands: open, or closed with its exit's price and reason."""
+
+    id: uuid.UUID
+    run_id: uuid.UUID
+    rank: int
+    instrument: str
+    symbol: str
+    opened_on: date
+    shares: int
+    entry: Decimal
+    stop: Decimal
+    target: Decimal
+    time_stop_days: int
+    # The day of its latest event: the day it closed, once closed.
+    as_of: date
+    # ``stop``, ``target`` or ``time``; None while open.
+    exit_reason: str | None
+    exit_price: Decimal | None
+
+    @property
+    def closed_on(self) -> date | None:
+        return None if self.exit_reason is None else self.as_of
+
+
+def orders(
+    conn: psycopg.Connection,
+    *,
+    mode: EngineMode,
+    backtest_id: uuid.UUID | None,
+    open_only: bool = False,
+) -> list[LedgerOrder]:
+    """An account's Orders in the order they were placed; only those neither filled nor
+    cancelled when ``open_only``."""
+    rows = conn.execute(
+        "SELECT p.id, p.run_id, p.rank, p.position_id, p.instrument, p.symbol, p.side,"
+        " p.purpose, p.limit_price, p.shares, p.session, p.day, p.seq, c.day, c.seq, c.reason,"
+        " f.day, f.seq, f.price"
+        " FROM orders p"
+        " LEFT JOIN orders c ON (c.mode, c.id, c.event) = (p.mode, p.id, 'cancelled')"
+        " LEFT JOIN fills f ON (f.mode, f.order_id) = (p.mode, p.id)"
+        " WHERE p.event = 'placed' AND p.mode = %(mode)s"
+        " AND p.backtest_id IS NOT DISTINCT FROM %(backtest_id)s"
+        " AND (NOT %(open_only)s OR (c.id IS NULL AND f.order_id IS NULL))"
+        " ORDER BY p.day, p.seq",
+        {"mode": mode, "backtest_id": backtest_id, "open_only": open_only},
+    ).fetchall()
+    return [
+        LedgerOrder(
+            id=row[0],
+            run_id=row[1],
+            rank=row[2],
+            position_id=row[3],
+            instrument=row[4],
+            symbol=row[5],
+            side=row[6],
+            purpose=row[7],
+            limit_price=row[8],
+            shares=row[9],
+            session=row[10],
+            placed=(row[11], row[12]),
+            cancelled=None if row[13] is None else (row[13], row[14]),
+            cancel_reason=row[15],
+            filled=None if row[16] is None else (row[16], row[17]),
+            fill_price=row[18],
+        )
+        for row in rows
+    ]
+
+
+def fills(
+    conn: psycopg.Connection, *, mode: EngineMode, backtest_id: uuid.UUID | None
+) -> list[LedgerFill]:
+    """An account's Fills in the order they happened."""
+    rows = conn.execute(
+        "SELECT order_id, day, seq, position_id, instrument, symbol, side, price, shares"
+        " FROM fills WHERE mode = %(mode)s AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s"
+        " ORDER BY day, seq",
+        {"mode": mode, "backtest_id": backtest_id},
+    ).fetchall()
+    return [LedgerFill(*row) for row in rows]
+
+
+def positions(
+    conn: psycopg.Connection,
+    *,
+    mode: EngineMode,
+    backtest_id: uuid.UUID | None,
+    open_only: bool = False,
+) -> list[LedgerPosition]:
+    """An account's Positions as they stand (the ``current_positions`` view), in the order
+    they opened; only the open ones when ``open_only``."""
+    rows = conn.execute(
+        "SELECT position_id, run_id, rank, instrument, symbol, opened_on, shares, entry, stop,"
+        " target, time_stop_days, day, exit_reason, exit_price FROM current_positions"
+        " WHERE mode = %(mode)s AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s"
+        " AND (NOT %(open_only)s OR event <> 'closed')"
+        " ORDER BY opened_on, symbol, position_id",
+        {"mode": mode, "backtest_id": backtest_id, "open_only": open_only},
+    ).fetchall()
+    return [LedgerPosition(*row) for row in rows]
