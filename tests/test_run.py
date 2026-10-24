@@ -97,6 +97,12 @@ def test_run_in_backtest_mode_writes_one_run_with_its_ranked_candidates_and_plan
     assert run.strategy.family == "pullback"
     assert run.strategy.ranking == "126-trading-day return descending, ties by Symbol ascending"
     assert run.universe_rule_version == MARKET.rule.version
+    assert (
+        queries.universe_month_mode(
+            conn, run.universe_month, rule_version=run.universe_rule_version
+        )
+        == "recorded"
+    )
 
     candidates = queries.candidates(conn, run.id)
     assert [(c.rank, c.symbol) for c in candidates] == [(1, "ALPHA"), (2, "GAMMA"), (3, "BETA")]

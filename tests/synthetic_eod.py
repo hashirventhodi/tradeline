@@ -8,8 +8,9 @@ Trading Calendar has closed), the equity master, Kite's instrument dump, and
 NSE's corporate-action lists for each calendar year, as the JSON files
 ``PlaybackTransport`` serves. ``load_market`` then loads them through
 ``ingest eod`` and ``ingest corporate-actions`` playback, the way real data
-arrives, and ``compute_universe_months`` stores the Universe under the
-Market's rule.
+arrives, declaring the Market's Universe Rule in force when the Market says
+when (``RuleDeclaration``, ADR 0005's Rule Validity), and
+``compute_universe_months`` stores the Universe under that rule.
 
 A ``Stock`` is described by its path, the prices NSE would publish if it had
 no Corporate Actions: a starting close, a slope (the close moves by it every
@@ -44,7 +45,7 @@ import json
 import zipfile
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import date
+from datetime import date, datetime, time
 from decimal import Decimal
 from fractions import Fraction
 from pathlib import Path
@@ -52,13 +53,13 @@ from pathlib import Path
 import psycopg
 
 from tradeline.config import UniverseRule
-from tradeline.dates import calendar_days, month_of, next_month
+from tradeline.dates import IST, calendar_days, month_of, next_month
 from tradeline.ingest.corporate_actions import ingest_corporate_actions, year_chunks
 from tradeline.ingest.eod import ingest_eod
 from tradeline.sources import kite, nse
 from tradeline.trading_calendar import TradingCalendar, load_trading_calendar
 from tradeline.transport import PlaybackTransport, RecordingTransport, Request, Response
-from tradeline.universe import compute_universe
+from tradeline.universe import compute_universe, declare_rule_validity
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TICK = Decimal("0.05")
@@ -233,11 +234,21 @@ class Stock:
 
 
 @dataclass(frozen=True)
+class RuleDeclaration:
+    """The Operator's declaration that the Market's rule is in force from a day."""
+
+    in_force_from: date
+    declared_at: datetime
+
+
+@dataclass(frozen=True)
 class Market:
     start: date
     end: date
     stocks: tuple[Stock, ...]
     rule: UniverseRule = field(default_factory=UniverseRule)
+    # None: the rule is never declared, so every month under it is Reconstructed.
+    declaration: RuleDeclaration | None = None
 
     def trading_days(self, calendar: TradingCalendar) -> list[date]:
         return list(calendar.trading_days(self.start, self.end))
@@ -387,9 +398,18 @@ def _zip(name: str, text: str) -> bytes:
 
 
 def load_market(conn: psycopg.Connection, fixtures: Path, market: Market) -> None:
-    """Load the Market's fixtures through ``ingest eod`` and ``ingest corporate-actions``."""
+    """Load the Market's fixtures through ``ingest eod`` and ``ingest corporate-actions``,
+    then declare its rule in force if the Market declares it."""
     ingest_eod(conn, PlaybackTransport(fixtures), start=market.start, end=market.end)
     ingest_corporate_actions(conn, PlaybackTransport(fixtures), start=market.start, end=market.end)
+    if market.declaration is not None:
+        declare_rule_validity(
+            conn,
+            market.rule.version,
+            in_force_from=market.declaration.in_force_from,
+            declared_at=market.declaration.declared_at,
+            rule=market.rule,
+        )
 
 
 def compute_universe_months(
@@ -425,11 +445,16 @@ def base_market() -> Market:
       ``RUN_DAY`` and has a 1:1 bonus in 2024-02.
     - DELTA rises without dipping. EPSILON falls (below its 200-day average)
       and dips. OMEGA dips but trades too little to be in the Universe.
+
+    ``BASE_RULE`` is declared in force from the first day, before it, so every
+    month computed under it is a Recorded Universe.
     """
+    start = date(2022, 1, 1)
     return Market(
-        start=date(2022, 1, 1),
+        start=start,
         end=date(2024, 6, 30),
         rule=BASE_RULE,
+        declaration=RuleDeclaration(start, datetime.combine(start, time(), IST)),
         stocks=(
             Stock(
                 "GAMMA",
