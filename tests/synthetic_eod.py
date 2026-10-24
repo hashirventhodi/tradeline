@@ -1,0 +1,492 @@
+"""Deterministic synthetic NSE end-of-day files, written as playback fixtures.
+
+Phase 2's test dataset (#72): a few Instruments over two to three years whose
+prices are stated, not recorded, so a test can say exactly which day a Strategy
+surfaces a Candidate and what its Plan is. ``write_fixtures`` writes, for every
+calendar day of a ``Market``, the bhavcopy NSE would serve (a 404 on a day the
+Trading Calendar has closed), the equity master, Kite's instrument dump, and
+NSE's corporate-action lists for each calendar year, as the JSON files
+``PlaybackTransport`` serves. ``load_market`` then loads them through
+``ingest eod`` and ``ingest corporate-actions`` playback, the way real data
+arrives, and ``compute_universe_months`` stores the Universe under the
+Market's rule.
+
+A ``Stock`` is described by its path, the prices NSE would publish if it had
+no Corporate Actions: a starting close, a slope (the close moves by it every
+trading day), and a half range (each bar's high and low sit that far outside
+its open and close). Each day opens at the previous close. ``events`` change
+that path from a day on:
+
+- ``Trend``: a new slope from that day.
+- ``Dip``: the day's low reaches ``depth`` below its close (a pullback wick).
+- ``Gap``: the day opens ``amount`` away from the previous close and the path
+  continues from there (a gap past a stop is a large negative ``Gap``).
+- ``CircuitLock``: the day is pinned at the previous close plus ``amount``,
+  open, high, low and close equal (GLOSSARY: Circuit Lock).
+- ``Split`` and ``Bonus``: a Corporate Action. From its Ex-Date NSE publishes
+  the path times the factor (a Rs 10 to Rs 5 split halves the price and
+  doubles the volume), so adding an action changes no bar before its Ex-Date.
+  Read as of a day on or after the Ex-Date, the Adjusted Series is the path
+  times the factor throughout; read as of a day before it, the path itself.
+  An action whose published prices fall off the 5 paisa tick, or whose volume
+  is fractional, is refused, so every published price is one a test can state.
+
+Every price is stated in rupees as a ``Decimal`` on the 5 paisa tick. To
+extend the dataset, add a ``Stock`` or an event to ``base_market`` (or derive a
+variant with ``Market.with_events``) and state the new expected values in the
+test from the description, never from the generator's output.
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import zipfile
+from collections.abc import Iterable, Iterator, Sequence
+from dataclasses import dataclass, field, replace
+from datetime import date
+from decimal import Decimal
+from fractions import Fraction
+from pathlib import Path
+
+import psycopg
+
+from tradeline.config import UniverseRule
+from tradeline.dates import calendar_days, month_of, next_month
+from tradeline.ingest.corporate_actions import ingest_corporate_actions, year_chunks
+from tradeline.ingest.eod import ingest_eod
+from tradeline.sources import kite, nse
+from tradeline.trading_calendar import TradingCalendar, load_trading_calendar
+from tradeline.transport import PlaybackTransport, RecordingTransport, Request, Response
+from tradeline.universe import compute_universe
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+TICK = Decimal("0.05")
+
+
+def repo_calendar() -> TradingCalendar:
+    return load_trading_calendar(REPO_ROOT / "trading_calendar.csv")
+
+
+# --- Events -------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Trend:
+    day: date
+    slope: Decimal
+
+
+@dataclass(frozen=True)
+class Dip:
+    day: date
+    depth: Decimal
+
+
+@dataclass(frozen=True)
+class Gap:
+    day: date
+    amount: Decimal
+
+
+@dataclass(frozen=True)
+class CircuitLock:
+    day: date
+    amount: Decimal
+
+
+@dataclass(frozen=True)
+class Split:
+    """A face-value split, e.g. Rs 10 to Rs 5 (factor 1/2)."""
+
+    ex_date: date
+    from_face: int
+    to_face: int
+
+    @property
+    def factor(self) -> Fraction:
+        return Fraction(self.to_face, self.from_face)
+
+    @property
+    def subject(self) -> str:
+        return f"Face Value Split From Rs {self.from_face} To Rs {self.to_face}"
+
+
+@dataclass(frozen=True)
+class Bonus:
+    """A bonus of ``new`` shares for every ``held``, e.g. 1:1 (factor 1/2)."""
+
+    ex_date: date
+    new: int
+    held: int
+
+    @property
+    def factor(self) -> Fraction:
+        return Fraction(self.held, self.held + self.new)
+
+    @property
+    def subject(self) -> str:
+        return f"Bonus {self.new}:{self.held}"
+
+
+PathEvent = Trend | Dip | Gap | CircuitLock
+Action = Split | Bonus
+Event = PathEvent | Action
+
+
+# --- Stocks and the Market ----------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Bar:
+    """One synthetic bar: on the path, or as NSE publishes it after Corporate Actions."""
+
+    day: date
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: int
+
+
+@dataclass(frozen=True)
+class Stock:
+    symbol: str
+    isin: str
+    start: Decimal  # the close before the Market's first trading day
+    slope: Decimal
+    half_range: Decimal
+    volume: int  # shares a day on the path
+    listed: date = date(2010, 1, 4)
+    series: str = "EQ"
+    events: tuple[Event, ...] = ()
+
+    @property
+    def actions(self) -> list[Action]:
+        return sorted(
+            (e for e in self.events if isinstance(e, Split | Bonus)), key=lambda a: a.ex_date
+        )
+
+    def path_bars(self, days: Sequence[date]) -> list[Bar]:
+        """The path, one bar per trading day: NSE's prices had there been no action."""
+        by_day: dict[date, list[PathEvent]] = {}
+        for event in self.events:
+            if not isinstance(event, Split | Bonus):
+                by_day.setdefault(event.day, []).append(event)
+        slope, previous, bars = self.slope, self.start, []
+        for day in days:
+            today = by_day.get(day, [])
+            for event in today:
+                if isinstance(event, Trend):
+                    slope = event.slope
+            gap = sum((e.amount for e in today if isinstance(e, Gap)), Decimal(0))
+            lock = next((e for e in today if isinstance(e, CircuitLock)), None)
+            if lock is not None:
+                price = previous + lock.amount
+                bar = Bar(day, price, price, price, price, self.volume)
+            else:
+                open_ = previous + gap
+                close = open_ + slope
+                low = min(open_, close) - self.half_range
+                for event in today:
+                    if isinstance(event, Dip):
+                        low = min(low, close - event.depth)
+                high = max(open_, close) + self.half_range
+                bar = Bar(day, open_, high, low, close, self.volume)
+            if bar.low <= 0:
+                raise ValueError(f"{self.symbol}'s path falls to {bar.low} on {day}")
+            bars.append(bar)
+            previous = bar.close
+        return bars
+
+    def raw_bars(self, days: Sequence[date]) -> list[Bar]:
+        """The bars NSE publishes: from each Ex-Date, the path times the action's factor."""
+        return [self._raw(bar) for bar in self.path_bars(days)]
+
+    def _raw(self, bar: Bar) -> Bar:
+        factor = Fraction(1)
+        for action in self.actions:
+            if action.ex_date <= bar.day:
+                factor *= action.factor
+
+        def price(value: Decimal) -> Decimal:
+            raw = Fraction(value) * factor
+            ticks = raw / Fraction(TICK)
+            if ticks.denominator != 1:
+                raise ValueError(
+                    f"{self.symbol}'s raw price {float(raw)} on {bar.day} is off the tick;"
+                    " state a path the factor multiplies onto the tick"
+                )
+            return Decimal(ticks.numerator) * TICK
+
+        volume = bar.volume / factor
+        if volume.denominator != 1:
+            raise ValueError(f"{self.symbol}'s raw volume on {bar.day} is fractional")
+        return Bar(
+            bar.day,
+            price(bar.open),
+            price(bar.high),
+            price(bar.low),
+            price(bar.close),
+            volume.numerator,
+        )
+
+
+@dataclass(frozen=True)
+class Market:
+    start: date
+    end: date
+    stocks: tuple[Stock, ...]
+    rule: UniverseRule = field(default_factory=UniverseRule)
+
+    def trading_days(self, calendar: TradingCalendar) -> list[date]:
+        return list(calendar.trading_days(self.start, self.end))
+
+    def stock(self, symbol: str) -> Stock:
+        (found,) = (s for s in self.stocks if s.symbol == symbol)
+        return found
+
+    def with_events(self, symbol: str, *events: Event) -> Market:
+        """This Market with ``events`` added to one Stock."""
+        stocks = tuple(
+            replace(s, events=s.events + events) if s.symbol == symbol else s for s in self.stocks
+        )
+        return replace(self, stocks=stocks)
+
+
+# --- Writing fixtures ---------------------------------------------------------
+
+
+class _Served:
+    """Answers each request from a fixed table; the inner transport of a recording."""
+
+    def __init__(self, responses: dict[str, Response]) -> None:
+        self._responses = responses
+
+    def send(self, request: Request) -> Response:
+        return self._responses[request.url]
+
+
+def write_fixtures(market: Market, directory: Path, calendar: TradingCalendar) -> Path:
+    """Write every response ``load_market`` asks for into ``directory``; returns it."""
+    responses = dict(_responses(market, calendar))
+    recorder = RecordingTransport(_Served(responses), directory)
+    for url in responses:
+        recorder.send(Request("GET", url))
+    return directory
+
+
+def _responses(market: Market, calendar: TradingCalendar) -> Iterator[tuple[str, Response]]:
+    days = market.trading_days(calendar)
+    raw = {s.symbol: {b.day: b for b in s.raw_bars(days)} for s in market.stocks}
+    previous: dict[str, Decimal] = {}
+    open_days = set(days)
+    for day in calendar_days(market.start, market.end):
+        if day not in open_days:
+            yield nse.bhavcopy_url(day), Response(404, (), b"")
+            continue
+        lines = [",".join(_UDIFF_HEADER)]
+        for stock in market.stocks:
+            bar = raw[stock.symbol][day]
+            lines.append(_udiff_line(stock, bar, previous.get(stock.symbol, bar.open)))
+            previous[stock.symbol] = bar.close
+        yield nse.bhavcopy_url(day), _ok(_zip(f"{day:%Y%m%d}.csv", "\n".join(lines) + "\n"))
+    yield nse.EQUITY_MASTER_URL, _ok(_equity_master(market.stocks).encode())
+    yield kite.INSTRUMENTS_URL, _ok(_kite_dump(market.stocks).encode())
+    yield f"{nse.SITE_HOST}/", Response(200, (("set-cookie", "nsit=synthetic; Path=/"),), b"")
+    for chunk_start, chunk_end in year_chunks(market.start, market.end):
+        for nse_list in nse.CORPORATE_ACTION_LISTS:
+            records = (
+                _corporate_actions(market.stocks, chunk_start, chunk_end)
+                if nse_list == "equities"
+                else []
+            )
+            url = nse.corporate_actions_url(chunk_start, chunk_end, nse_list=nse_list)
+            yield url, _ok(json.dumps(records).encode())
+
+
+_UDIFF_HEADER = (
+    "TradDt",
+    "TckrSymb",
+    "SctySrs",
+    "ISIN",
+    "OpnPric",
+    "HghPric",
+    "LwPric",
+    "ClsPric",
+    "LastPric",
+    "PrvsClsgPric",
+    "TtlTradgVol",
+    "TtlTrfVal",
+    "TtlNbOfTxsExctd",
+)
+
+
+def _udiff_line(stock: Stock, bar: Bar, previous_close: Decimal) -> str:
+    values = (
+        bar.day.isoformat(),
+        stock.symbol,
+        stock.series,
+        stock.isin,
+        bar.open,
+        bar.high,
+        bar.low,
+        bar.close,
+        bar.close,
+        previous_close,
+        bar.volume,
+        bar.close * bar.volume,
+        1000,
+    )
+    return ",".join(str(v) for v in values)
+
+
+def _equity_master(stocks: Iterable[Stock]) -> str:
+    lines = ["SYMBOL,NAME OF COMPANY, SERIES, DATE OF LISTING, ISIN NUMBER"]
+    for s in stocks:
+        lines.append(f"{s.symbol},{s.symbol} Limited,{s.series},{s.listed:%d-%b-%Y},{s.isin}")
+    return "\n".join(lines) + "\n"
+
+
+def _kite_dump(stocks: Sequence[Stock]) -> str:
+    lines = ["instrument_token,tradingsymbol,instrument_type,segment"]
+    for token, s in enumerate(stocks, start=1001):
+        lines.append(f"{token},{kite.trading_symbol(s.symbol, s.series)},EQ,NSE")
+    return "\n".join(lines) + "\n"
+
+
+def _corporate_actions(stocks: Iterable[Stock], start: date, end: date) -> list[dict[str, str]]:
+    return [
+        {
+            "symbol": s.symbol,
+            "series": s.series,
+            "isin": s.isin,
+            "exDate": f"{a.ex_date:%d-%b-%Y}",
+            "recDate": f"{a.ex_date:%d-%b-%Y}",
+            "faceVal": "10",
+            "subject": a.subject,
+        }
+        for s in stocks
+        for a in s.actions
+        if start <= a.ex_date <= end
+    ]
+
+
+def _ok(body: bytes) -> Response:
+    return Response(200, (), body)
+
+
+def _zip(name: str, text: str) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr(zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0)), text)
+    return buffer.getvalue()
+
+
+# --- Loading ------------------------------------------------------------------
+
+
+def load_market(conn: psycopg.Connection, fixtures: Path, market: Market) -> None:
+    """Load the Market's fixtures through ``ingest eod`` and ``ingest corporate-actions``."""
+    ingest_eod(conn, PlaybackTransport(fixtures), start=market.start, end=market.end)
+    ingest_corporate_actions(conn, PlaybackTransport(fixtures), start=market.start, end=market.end)
+
+
+def compute_universe_months(
+    conn: psycopg.Connection, market: Market, first: date, last: date
+) -> None:
+    """Store the Universe under the Market's rule for each month from ``first`` to ``last``."""
+    month = month_of(first)
+    while month <= last:
+        compute_universe(conn, market.rule, month=month)
+        month = next_month(month)
+
+
+# --- The base Market ----------------------------------------------------------
+
+D = Decimal
+# The Run day #74's tests ask about; every Dip that makes a pullback is on it.
+RUN_DAY = date(2023, 6, 15)
+
+BASE_RULE = UniverseRule(
+    top_n=5, lookback_trading_days=20, min_listing_trading_days=20, min_presence_percent=90
+)
+
+
+def base_market() -> Market:
+    """Six EQ stocks from 2022-01-01 to 2024-06-30.
+
+    - GAMMA and ALPHA share a path, so their 126-day returns tie; both dip
+      below their 20-day average on ``RUN_DAY``. ALPHA splits Rs 10 to Rs 5 in
+      2022-09, so it is read on ``RUN_DAY`` at half GAMMA's prices. GAMMA gaps
+      60 rupees down in 2023-07, past any stop a Plan on ``RUN_DAY`` would set;
+      ALPHA is circuit-locked in 2023-07.
+    - BETA rises from a higher price, so its 126-day return is lower; it dips on
+      ``RUN_DAY`` and has a 1:1 bonus in 2024-02.
+    - DELTA rises without dipping. EPSILON falls (below its 200-day average)
+      and dips. OMEGA dips but trades too little to be in the Universe.
+    """
+    return Market(
+        start=date(2022, 1, 1),
+        end=date(2024, 6, 30),
+        rule=BASE_RULE,
+        stocks=(
+            Stock(
+                "GAMMA",
+                "INE000G01014",
+                start=D("200.00"),
+                slope=D("1.00"),
+                half_range=D("2.00"),
+                volume=100_000,
+                events=(Dip(RUN_DAY, D("17.00")), Gap(date(2023, 7, 3), D("-60.00"))),
+            ),
+            Stock(
+                "ALPHA",
+                "INE000A01016",
+                start=D("200.00"),
+                slope=D("1.00"),
+                half_range=D("2.00"),
+                volume=100_000,
+                events=(
+                    Split(date(2022, 9, 15), from_face=10, to_face=5),
+                    Dip(RUN_DAY, D("17.00")),
+                    CircuitLock(date(2023, 7, 10), D("-30.00")),
+                ),
+            ),
+            Stock(
+                "BETA",
+                "INE000B01018",
+                start=D("300.00"),
+                slope=D("0.50"),
+                half_range=D("1.00"),
+                volume=150_000,
+                events=(Dip(RUN_DAY, D("8.50")), Bonus(date(2024, 2, 15), new=1, held=1)),
+            ),
+            Stock(
+                "DELTA",
+                "INE000D01010",
+                start=D("150.00"),
+                slope=D("0.50"),
+                half_range=D("1.00"),
+                volume=150_000,
+            ),
+            Stock(
+                "EPSILON",
+                "INE000E01012",
+                start=D("500.00"),
+                slope=D("-0.25"),
+                half_range=D("1.00"),
+                volume=100_000,
+                events=(Dip(RUN_DAY, D("10.00")),),
+            ),
+            Stock(
+                "OMEGA",
+                "INE000O01016",
+                start=D("100.00"),
+                slope=D("0.50"),
+                half_range=D("1.00"),
+                volume=1_000,
+                events=(Dip(RUN_DAY, D("8.50")),),
+            ),
+        ),
+    )
