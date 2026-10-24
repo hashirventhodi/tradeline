@@ -543,3 +543,91 @@ def base_market() -> Market:
             ),
         ),
     )
+
+
+# --- The two-year Market ------------------------------------------------------
+
+# The two years #77's backtest runs over; the Market starts a year earlier, so the
+# 200-day average has its bars on the first day.
+TWO_YEARS = (date(2022, 7, 1), date(2024, 6, 28))
+
+
+def two_year_market() -> Market:
+    """Three EQ stocks from 2021-07-01 to 2024-06-30, each rising 1.00 a day on a half range
+    of 2.00 from a different start, so its close on the Market's i-th trading day is its
+    start plus i until an event moves it. Each pullback is a ``Dip`` of 17.00, which makes
+    ATR(14) 6.00 (thirteen true ranges of 5.00 and the dip's 19.00), so ``pullback_v1``
+    at k = 2, r = 2 plans a stop 12.00 under the close and a target 24.00 over it.
+    What follows each pullback is one exit, or one cancelled entry:
+
+    - ASTER (from 400): a pullback on 2022-08-03 held to its time stop; one on 2023-03-01
+      whose next bar but one rises 30.00 and reaches both stop and target; one on
+      2024-01-03 that gaps 15.00 down through its stop and then 60.00 down past the
+      exit's band, falling 1.00 a day from then.
+    - BIRCH (from 300): a pullback on 2022-11-01 followed by a rise of 2.75 a day for
+      nine days, whose high equals the target on the eighth and passes it on the ninth;
+      one on 2023-05-02 whose next day opens 5.00 above the close; one on 2024-03-12
+      locked 20.00 down at the stop on its next bar but one, locked again the day after,
+      then falling 1.00 a day.
+    - CEDAR (from 200): a pullback on 2023-01-02 whose next bar but one gaps 30.00 above
+      the target.
+
+    No action is ex-dated, and no Stock has a sector.
+    """
+    start = date(2021, 7, 1)
+
+    def stock(symbol: str, isin: str, price: str, *events: Event) -> Stock:
+        return Stock(
+            symbol,
+            isin,
+            start=D(price),
+            slope=D("1.00"),
+            half_range=D("2.00"),
+            volume=100_000,
+            events=events,
+        )
+
+    pullback = D("17.00")
+    return Market(
+        start=start,
+        end=date(2024, 6, 30),
+        rule=BASE_RULE,
+        declaration=RuleDeclaration(start, datetime.combine(start, time(), IST)),
+        stocks=(
+            stock(
+                "ASTER",
+                "INE000S01011",
+                "400.00",
+                Dip(date(2022, 8, 3), pullback),
+                Dip(date(2023, 3, 1), pullback),
+                Trend(date(2023, 3, 3), D("30.00")),
+                Dip(date(2023, 3, 3), D("44.00")),
+                Trend(date(2023, 3, 6), D("1.00")),
+                Dip(date(2024, 1, 3), pullback),
+                Gap(date(2024, 1, 5), D("-15.00")),
+                Gap(date(2024, 1, 8), D("-60.00")),
+                Trend(date(2024, 1, 8), D("-1.00")),
+            ),
+            stock(
+                "BIRCH",
+                "INE000H01019",
+                "300.00",
+                Dip(date(2022, 11, 1), pullback),
+                Trend(date(2022, 11, 2), D("2.75")),
+                Trend(date(2022, 11, 16), D("1.00")),
+                Dip(date(2023, 5, 2), pullback),
+                Gap(date(2023, 5, 3), D("5.00")),
+                Dip(date(2024, 3, 12), pullback),
+                CircuitLock(date(2024, 3, 14), D("-20.00")),
+                CircuitLock(date(2024, 3, 15), D("-1.00")),
+                Trend(date(2024, 3, 18), D("-1.00")),
+            ),
+            stock(
+                "CEDAR",
+                "INE000C01014",
+                "200.00",
+                Dip(date(2023, 1, 2), pullback),
+                Gap(date(2023, 1, 4), D("30.00")),
+            ),
+        ),
+    )

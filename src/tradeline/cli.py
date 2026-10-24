@@ -14,6 +14,7 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
 
 from tradeline import universe as universe_service
@@ -505,6 +506,39 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
     return 0
 
 
+def backtest(ctx: Context, args: argparse.Namespace) -> int:
+    """A backtest of ``pullback_v1`` at fixed parameters from ``--from`` to ``--to``: one Run a
+    trading day under the configured Universe Rule and Limits, the Paper Broker filling each
+    day's Orders against the next day's bar."""
+    end = args.end or args.start
+    calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
+    tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
+    strategy = PullbackV1(k=Decimal(args.k), r=Decimal(args.r), n=args.n)
+    with _scope(args.start, end), app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        results = backtest_service(
+            conn,
+            strategy,
+            start=args.start,
+            end=end,
+            calendar=calendar,
+            rule_version=ctx.config.universe.version,
+            limits=ctx.config.risk.limits(),
+            tick_sizes=tick_sizes,
+        )
+    log.info(
+        "backtest finished",
+        extra={
+            "backtest_id": str(results[0].backtest_id),
+            "parameters": dict(strategy.parameters()),
+            "runs": len(results),
+            "passes": sum(r.passes for r in results),
+            "fills": sum(r.fills for r in results),
+            "open_positions": results[-1].open_positions,
+        },
+    )
+    return 0
+
+
 Command = Callable[[Context, argparse.Namespace], int]
 
 COMMANDS: dict[str, Command] = {
@@ -524,6 +558,7 @@ COMMANDS: dict[str, Command] = {
     "collect-daily": collect_daily,
     "integrity": integrity,
     "run": run,
+    "backtest": backtest,
 }
 
 
@@ -792,6 +827,22 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--mode", choices=["backtest"], required=True)
     run_parser.add_argument(
         "--date", dest="day", metavar="DATE", type=date.fromisoformat, required=True
+    )
+    backtest_parser = subparsers.add_parser(
+        "backtest",
+        parents=[date_range],
+        help="backtest the Strategy at fixed parameters over stored data, one Run a trading"
+        " day, written to the Ledger with its Orders, Fills and Positions",
+    )
+    defaults = PullbackV1()
+    backtest_parser.add_argument(
+        "--k", default=str(defaults.k), help="stop distance in ATRs (default %(default)s)"
+    )
+    backtest_parser.add_argument(
+        "--r", default=str(defaults.r), help="target in multiples of the risk (default %(default)s)"
+    )
+    backtest_parser.add_argument(
+        "--n", type=int, default=defaults.n, help="time stop in trading days (default %(default)s)"
     )
     return parser
 

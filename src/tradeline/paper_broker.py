@@ -1,0 +1,117 @@
+"""The Paper Broker's fill model: what one day's bar fills (ADR 0003 and 0004, amended for #72).
+
+Code only, the same in every Engine Mode; in a Backtest the bar is the stored
+end-of-day bar, in paper mode the next day's end-of-day bar (live quotes in
+Phase 3). Every Order is a limit Order:
+
+- An entry is an after-market limit buy at the Run day's close. It fills at the
+  open when the open is at or below the limit (the pre-open auction fills a buy
+  at the auction price), and is otherwise cancelled.
+- A target is a limit sell at the Plan's target, resting through the day. It
+  fills at the open when the open is above the target, else at the target when
+  the high is strictly above it; a high equal to it fills nothing.
+- A stop or time-stop exit is an after-market limit sell at the close less the
+  protective band. It fills at the open when the open is at or above the limit;
+  an open below leaves the Position open.
+- A Circuit Lock day (open, high, low and close equal) fills nothing, and nor
+  does a day the Instrument did not trade (no bar).
+
+An exit triggers on the completed bar: a stop when the low is at or below it, a
+time stop when the Position has been held its time stop in trading days. A bar
+that reaches both the stop and the target is a stop: the target fills nothing
+on it, whatever the order of the day's prices, so the fill model never credits
+a target the day could have taken away.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from decimal import Decimal
+from typing import Literal
+
+from tradeline.strategy.pricing import round_down
+
+UnfilledReason = Literal[
+    "no_bar", "circuit_lock", "open_above_limit", "open_below_limit", "not_reached", "stop_reached"
+]
+ExitReason = Literal["stop", "time"]
+
+
+@dataclass(frozen=True)
+class Bar:
+    """One day of an Instrument as the Paper Broker sees it."""
+
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+
+    @property
+    def circuit_lock(self) -> bool:
+        return self.open == self.high == self.low == self.close
+
+
+@dataclass(frozen=True)
+class Filled:
+    price: Decimal
+
+
+@dataclass(frozen=True)
+class Unfilled:
+    reason: UnfilledReason
+
+
+Outcome = Filled | Unfilled
+
+
+def fill_entry(limit: Decimal, bar: Bar | None) -> Outcome:
+    """An after-market limit buy at ``limit`` against the day's open."""
+    if bar is None:
+        return Unfilled("no_bar")
+    if bar.circuit_lock:
+        return Unfilled("circuit_lock")
+    if bar.open > limit:
+        return Unfilled("open_above_limit")
+    return Filled(bar.open)
+
+
+def fill_exit(limit: Decimal, bar: Bar | None) -> Outcome:
+    """An after-market limit sell at ``limit`` (a stop or time-stop exit) against the open."""
+    if bar is None:
+        return Unfilled("no_bar")
+    if bar.circuit_lock:
+        return Unfilled("circuit_lock")
+    if bar.open < limit:
+        return Unfilled("open_below_limit")
+    return Filled(bar.open)
+
+
+def fill_target(target: Decimal, bar: Bar | None, *, stop: Decimal) -> Outcome:
+    """A limit sell at ``target`` resting through the day, for a Position stopped at ``stop``."""
+    if bar is None:
+        return Unfilled("no_bar")
+    if bar.circuit_lock:
+        return Unfilled("circuit_lock")
+    if bar.low <= stop:
+        return Unfilled("stop_reached")
+    if bar.open > target:
+        return Filled(bar.open)
+    if bar.high > target:
+        return Filled(target)
+    return Unfilled("not_reached")
+
+
+def exit_trigger(
+    bar: Bar, *, stop: Decimal, days_held: int, time_stop_days: int
+) -> ExitReason | None:
+    """The exit the completed bar triggers, if any; a stop before a time stop."""
+    if bar.low <= stop:
+        return "stop"
+    if days_held >= time_stop_days:
+        return "time"
+    return None
+
+
+def exit_limit(close: Decimal, *, band: Decimal, tick: Decimal) -> Decimal:
+    """A stop or time-stop exit's limit: the close less the band, rounded down to the tick."""
+    return round_down(close * (1 - band), tick)
