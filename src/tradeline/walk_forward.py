@@ -11,7 +11,8 @@ kept, continuing the Stitched Curve: one account from the starting Equity
 under one backtest id (``walk_forwards``), its Positions carried across Window
 boundaries with the stop, target and time stop they were opened with. A Window
 that makes no selection plans no new Position, but the account still steps
-its days, so a Position carried into it keeps its exits; before any Window
+its days (its Runs recording the last chosen parameters), so a Position
+carried into it keeps its exits; before any Window
 has chosen, the account holds nothing and has no Runs. At the last
 out-of-sample day's close every open Position takes a Boundary Exit, after
 costs. Each Window's selection and out-of-sample result is then recorded
@@ -25,7 +26,9 @@ account's last Run), and ends with the same result.
 What makes it fast enough: the data snapshot is verified once, not per cell;
 the cells of a Window and its Out-of-Sample run share one ``SeriesCache``, so
 the Window's bars load once and each day's market (the screen's Candidates,
-sectors, traded values, tick reference closes) is read once between them.
+sectors, traded values, tick reference closes) is read once between them; and
+the engine pipelines each Run's writes, since a cell is bound by round trips
+to Postgres more than by its own work.
 
 ``choose`` is pure.
 """
