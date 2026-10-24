@@ -2056,49 +2056,62 @@ def orders(
     """An account's Orders in the order they were placed; only those neither filled nor
     cancelled when ``open_only``.
 
-    Each placed Order's cancellation and Fill are looked up by its key (the laterals,
-    kept from being flattened into joins by ``OFFSET 0``). A backtest's account is
+    Read as three scans of the account's own rows (its placed Orders, its cancellations
+    and its Fills) joined here by Order id, not as a join in SQL. A backtest's account is
     written and read inside one transaction, so the planner's statistics see empty
-    tables, and as plain joins it compared every placed Order with every cancelled
-    one: a call grew with the square of the account's Orders, 0.84 s for the one call
-    a day a year into an In-Sample cell (3,519 Orders; one cell alone on the laptop with
-    the Compose Postgres, #85)."""
-    rows = conn.execute(
-        "SELECT p.id, p.run_id, p.rank, p.position_id, p.instrument, p.symbol, p.side,"
-        " p.purpose, p.limit_price, p.shares, p.session, p.day, p.seq, c.day, c.seq, c.reason,"
-        " f.day, f.seq, f.price"
-        " FROM orders p"
-        " LEFT JOIN LATERAL (SELECT c.id, c.day, c.seq, c.reason FROM orders c"
-        "  WHERE (c.mode, c.id, c.event) = (p.mode, p.id, 'cancelled') OFFSET 0) c ON true"
-        " LEFT JOIN LATERAL (SELECT f.order_id, f.day, f.seq, f.price FROM fills f"
-        "  WHERE (f.mode, f.order_id) = (p.mode, p.id) OFFSET 0) f ON true"
-        " WHERE p.event = 'placed' AND p.mode = %(mode)s"
-        f" AND {_account_predicate(backtest_id, 'p.backtest_id')} AND p.dry_run = %(dry_run)s"
-        " AND (NOT %(open_only)s OR (c.id IS NULL AND f.order_id IS NULL))"
-        " ORDER BY p.day, p.seq",
-        {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run, "open_only": open_only},
-    ).fetchall()
-    return [
-        LedgerOrder(
-            id=row[0],
-            run_id=row[1],
-            rank=row[2],
-            position_id=row[3],
-            instrument=row[4],
-            symbol=row[5],
-            side=row[6],
-            purpose=row[7],
-            limit_price=row[8],
-            shares=row[9],
-            session=row[10],
-            placed=(row[11], row[12]),
-            cancelled=None if row[13] is None else (row[13], row[14]),
-            cancel_reason=row[15],
-            filled=None if row[16] is None else (row[16], row[17]),
-            fill_price=row[18],
+    tables, costs every lookup at one row, and can look an Order's cancellation or Fill
+    up through any index on the Engine Mode alone: every row of the partition per Order,
+    the dead rows each rolled-back Walk-Forward cell leaves included. As a join, a call
+    grew with the square of the account's Orders, 0.84 s for the one call a day a year
+    into an In-Sample cell (3,519 Orders; one cell alone on the laptop with the Compose
+    Postgres), and a lateral lookup by key lasted only until a vacuum re-planned it (#85).
+    """
+    account = f"mode = %(mode)s AND {_account_predicate(backtest_id)} AND dry_run = %(dry_run)s"
+    params = {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run}
+    cancelled = {
+        row[0]: row[1:]
+        for row in conn.execute(
+            f"SELECT id, day, seq, reason FROM orders WHERE {account} AND event = 'cancelled'",
+            params,
+        ).fetchall()
+    }
+    filled = {
+        row[0]: row[1:]
+        for row in conn.execute(
+            f"SELECT order_id, day, seq, price FROM fills WHERE {account}", params
+        ).fetchall()
+    }
+    found = []
+    for row in conn.execute(
+        "SELECT id, run_id, rank, position_id, instrument, symbol, side, purpose, limit_price,"
+        f" shares, session, day, seq FROM orders WHERE {account} AND event = 'placed'"
+        " ORDER BY day, seq",
+        params,
+    ).fetchall():
+        cancel, fill = cancelled.get(row[0]), filled.get(row[0])
+        if open_only and (cancel is not None or fill is not None):
+            continue
+        found.append(
+            LedgerOrder(
+                id=row[0],
+                run_id=row[1],
+                rank=row[2],
+                position_id=row[3],
+                instrument=row[4],
+                symbol=row[5],
+                side=row[6],
+                purpose=row[7],
+                limit_price=row[8],
+                shares=row[9],
+                session=row[10],
+                placed=(row[11], row[12]),
+                cancelled=None if cancel is None else (cancel[0], cancel[1]),
+                cancel_reason=None if cancel is None else cancel[2],
+                filled=None if fill is None else (fill[0], fill[1]),
+                fill_price=None if fill is None else fill[2],
+            )
         )
-        for row in rows
-    ]
+    return found
 
 
 def fills(
