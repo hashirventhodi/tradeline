@@ -1873,6 +1873,45 @@ Six Ex-Dates agree through the ratio rounded to two decimals, as ADR 0018 allows
 
 None shows Kite applying a different ratio: a ratio Kite's closes show more than 0.1 percent from ours would have disagreed. The causes of the seven stretches that do not stand were not investigated.
 
+## Phase 2 acceptance run (#85)
+
+Run on 2026-10-24 on the #13 database (NSE end-of-day files 2015-01-01 to 2026-10-23), on the laptop against the Compose Postgres. "Alone" below means no other tradeline work, the test suite included, and only the ordinary desktop load (load average 3 to 6 on 10 cores). `pullback_v1` under the Universe Rule `f4997f66b273`.
+
+| Step | Result | Runtime |
+|---|---|---|
+| `migrate` | 0027 to 0038, the Phase 2 tables | not timed |
+| `backfill-universe-builds` | 360 builds (120 months under each of the 3 stored rule versions), every one from the ingest run history, none cutoff-inferred | 202.5 s, alone |
+| Window boundaries, checked independently | 12 of 12 dates agree with the Trading Calendar file and with the stored end-of-day days (2,416 trading days 2017-01-01 to 2026-09-30, the two sets equal) | seconds |
+| `protocol freeze` | Protocol `41e47fd39af3` at `c5588e7`: 108 Universe months 2017-10 to 2026-09, all Reconstructed, none cutoff-inferred; Adjusted Series hashes of 491 Instruments from 2016-09-29 (250 trading days of warm-up) | 70.5 s |
+| `backtest` (Walk-Forward) | 180 cells, every Window chose (36 of 36 cells eligible in each); 691 trades on the Stitched Curve | 3,592.8 s, alone |
+| `backtest holdout` | 496 Runs at Window 5's k 2.5, r 1.5, n 15; independent, consumes the family's Holdout | 147.8 s, alone |
+| `backtest report` | Backtest Gate **fail** on all six gated thresholds; c sensitivity 4 runs | 948.6 s, alone |
+| `backtest --from 2017-10-03 --to 2019-09-30 --k 2 --r 2 --n 10` | One two-year cell, rows kept for the hand check below | 155.8 s from start-up, alone |
+
+The Gate's figures, the Windows' choices, every Gapped Stop and the days a Halt would have fired are in the report posted on #72. The Holdout's drawdown Halt would have fired from 2025-01-21 to its end; the Stitched Curve's from 2022-02-21 to 2024-02-05.
+
+### What the run found
+
+- **Rows in other series were read as an Instrument's bars.** The first Walk-Forward stopped in its first cell: a held Position's Instrument had two bars on 2018-06-14. NSE's file lists, under an Instrument's Symbol, block deals (BL, for 355 of the 491 Instruments in the snapshot), the issuer's bonds (N*, Y*, Z*), preference and partly paid shares and warrants, 123,713 rows over the snapshot's span; `queries._end_of_day` returned every series. They also fed the Strategy's averages, the 20-day traded value of the participation cap, the tick's reference close and the hashes a Protocol freezes. The reads are now restricted to the equity listing series (`58e208f`), as the Glossary's Instrument already said. Protocol `b3c591ddb52c`, frozen before the fix, ran nothing.
+- **The Walk-Forward was quadratic in a cell's Orders.** Under `c0527f5740ff` the cells that trade slowed from 0.07 s a day to about 2.5 s over their two years: 8 cells in 49 minutes, up to 9.5 minutes each, about 24 hours projected against the 4-hour budget. A cell's account is written and read in one transaction that is rolled back, so the Ledger partitions' statistics read empty, and the planner can choose any index on the Engine Mode alone. `queries.orders`, read every day, compared every placed Order with every cancelled one (0.84 s a call a year into a lone cell, 3,519 Orders), and the account reads filtered on `backtest_id IS NOT DISTINCT FROM`, which no index serves, so they also walked every rolled-back cell's dead rows. A lateral lookup by key (`3a6af7b`) held only until autovacuum re-planned it; the account reads by `=` (`89a7531`) and the Orders read as three scans of the account's own rows joined in Python (`b297dc5`) leave the planner nothing to choose. A trading cell in a Walk-Forward then took 18 to 25 s.
+- **The speed fixes changed no result.** Protocol `f9285f6631ca`, frozen at `b297dc5`, differs from `c0527f5740ff` only in `git_commit`, and its first eight Window 1 cells reproduced the eight `c0527f5740ff` recorded exactly: runs, trades, Sharpe, drawdown and ending Equity. Protocols `8ca3f03353b8` and `1567d6fe6df3` are earlier attempts at the same reproduction, stopped when a further fix was needed; `1567d6fe6df3`'s worktree was checked out to another commit while a cell ran, which #87 tracks.
+- **At r = 1.5 rounding Blocked almost every Plan.** The r = 1.5 cells made 32 trades in two years against 331 to 446 at r = 2 and 3. Pricing rounded the stop and the target down, so the rounded reward to risk fell under r. Under `c0527f5740ff`, over Window 1's first six months at k 1.5, n 5 (rolled back, Block reasons only), the Risk Engine Blocked 2,020 of 2,058 Plans for `min_reward_to_risk`, every one at a rounded reward to risk from 1.389 to 1.49999; at r = 2, none. The target is now the Plan's own multiple of the rounded risk, rounded up (`c5588e7`). This was decided from the trade counts and Block reasons before any result was read. It changes `pullback_v1`'s code revision, so the final Protocol differs from `c0527f5740ff` in that and its commit, and in nothing else.
+- **The c sensitivity is small and not monotone.** The Stitched Curve's Sharpe is 0.0724 at c = 0, 0.0731 at 0.1 and 0.0804 at 0.2, its trades 692, 691 and 693: a different impact changes Fill prices, then Equity, then sizes, then which Plans pass, so the path differs. The Holdout moves by under 0.01 in Sharpe.
+
+### Five trades checked by hand
+
+Chosen before any were looked at: the first five Positions the two-year cell k 2, r 2, n 10 opened in Window 1's In-Sample run. A script that imports nothing from the package recomputed each from NSE's raw EQ rows, applying the splits and bonuses filed under any of the Instrument's Symbols ex-dated by the Run (MOTHERSUMI's 1:2 bonus of 2017-07-05 is filed under MOTHERSON, its Symbol today): the screen, the entry limit, the stop at the close less 2 ATR(14) rounded down, the target rounded up, the shares, the entry Fill at the next open, and the time-stop exit at the next open after ten trading days, with no stop or target touched in between. All 45 checks agree with the Ledger.
+
+| Symbol | Run | Entry limit | Stop | Target | Shares | Bought | Sold | Exit |
+|---|---|---|---|---|---|---|---|---|
+| MOTHERSUMI | 2017-10-04 | 335.50 | 316.40 | 373.70 | 223 | 2017-10-05 at 334.00 | 2017-10-23 at 355.95 | time |
+| IGL | 2017-10-05 | 1,438.55 | 1,344.90 | 1,625.85 | 52 | 2017-10-06 at 1,435.00 | 2017-10-24 at 1,624.00 | time |
+| JSWSTEEL | 2017-10-06 | 257.70 | 240.15 | 292.80 | 285 | 2017-10-09 at 257.40 | 2017-10-25 at 261.95 | time |
+| IBULHSGFIN | 2017-10-11 | 1,260.40 | 1,177.80 | 1,425.60 | 58 | 2017-10-12 at 1,256.00 | 2017-10-30 at 1,266.00 | time |
+| JPASSOCIAT | 2017-10-12 | 19.20 | 16.30 | 25.00 | 1,759 | 2017-10-13 at 19.15 | 2017-10-31 at 18.50 | time |
+
+MOTHERSUMI and IGL are sized by the 15 percent position Limit, JSWSTEEL and JPASSOCIAT by the 1 percent risk (285 shares at 17.55 and 1,759 at 2.90 a share), and IBULHSGFIN by no leverage: Equity 507,811.02 less the three Positions held at the 2017-10-11 close (230,648.40) and the Run's three earlier Passes (203,765.15) buys 58.2 shares at 1,260.40.
+
 ## US-market findings (for reference; not the chosen market)
 
 Alpaca offers free paper trading with IEX data and ₹99-equivalent full SIP data; Massive (formerly Polygon) runs 29 to 199 dollars a month; SEC EDGAR is free. These made the US the easier engineering choice. The Operator chose Indian equities, which cost more in friction (no sandbox, daily login, static IP) but is the market they trade.
