@@ -286,6 +286,10 @@ def test_the_application_role_cannot_update_or_delete_universe_tables(database_u
         "DELETE FROM universe_rule_versions",
         "UPDATE universe_membership SET rank = rank + 1",
         "DELETE FROM universe_membership",
+        "UPDATE universe_rule_validity SET in_force_from = '2024-01-01'",
+        "DELETE FROM universe_rule_validity",
+        "UPDATE universe_month_builds SET cutoff_inferred = true",
+        "DELETE FROM universe_month_builds",
     )
     with app_connection(database_url) as conn:
         for statement in statements:
