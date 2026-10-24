@@ -39,6 +39,7 @@ from synthetic_eod import (
     Split,
     base_market,
     compute_universe_months,
+    freeze_protocol,
     load_market,
     repo_calendar,
     repo_costs,
@@ -75,6 +76,13 @@ def loaded(database_url: str, fixtures: Path) -> str:
     return database_url
 
 
+@pytest.fixture(scope="module")
+def protocol(loaded: str) -> str:
+    """A Protocol whose Holdout is ``RUN_DAY``'s month, for the CLI's one-day backtest."""
+    with app_connection(loaded) as conn:
+        return freeze_protocol(conn, MARKET, date(2023, 4, 1), RUN_DAY).hash
+
+
 @pytest.fixture
 def conn(loaded: str) -> Iterator[psycopg.Connection]:
     with app_connection(loaded) as conn:
@@ -96,9 +104,10 @@ def config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, loaded: str) -> None
 
 
 def test_run_in_backtest_mode_writes_one_run_with_its_ranked_candidates_and_plans(
-    config: None, conn: psycopg.Connection
+    config: None, conn: psycopg.Connection, protocol: str
 ) -> None:
-    assert main(["run", "--mode", "backtest", "--date", RUN_DAY.isoformat()]) == 0
+    day = RUN_DAY.isoformat()
+    assert main(["run", "--mode", "backtest", "--date", day, "--protocol", protocol]) == 0
 
     (run,) = queries.runs(conn, as_of=RUN_DAY)
     assert run.mode == "backtest"
