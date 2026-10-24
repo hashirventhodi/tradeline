@@ -32,6 +32,7 @@ from tradeline.engine import backtest as backtest_service
 from tradeline.engine import paper as paper_service
 from tradeline.environment import Environment
 from tradeline.freeze import freeze_protocol
+from tradeline.holdout import run_holdout
 from tradeline.ingest.announcements import ingest_announcements
 from tradeline.ingest.candles import CurrentUniverse, ingest_candles
 from tradeline.ingest.cited_actions import ingest_cited_actions
@@ -580,6 +581,8 @@ def backtest(ctx: Context, args: argparse.Namespace) -> int:
     ``backtest report`` reports one cell."""
     if args.backtest_command == "report":
         return backtest_report(ctx, args)
+    if args.backtest_command == "holdout":
+        return holdout(ctx, args)
     if args.start is None:
         return walk_forward(ctx, args)
     end = args.end or args.start
@@ -618,18 +621,32 @@ def walk_forward(ctx: Context, args: argparse.Namespace) -> int:
         raise ValueError("--to needs --from; without either, backtest runs the whole Protocol")
     calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
     tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
-
-    def strategy(parameters: Mapping[str, Decimal]) -> PullbackV1:
-        return PullbackV1(k=parameters["k"], r=parameters["r"], n=int(parameters["n"]))
-
     with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
         result = walk_forward_service(
-            conn, strategy, protocol=args.protocol, calendar=calendar, tick_sizes=tick_sizes
+            conn, _pullback, protocol=args.protocol, calendar=calendar, tick_sizes=tick_sizes
         )
     if args.out is not None:
         args.out.write_text(result.report.text())
     log.info("walk-forward finished", extra=result.summary())
     return 0
+
+
+def holdout(ctx: Context, args: argparse.Namespace) -> int:
+    """The Holdout of the Protocol ``--protocol`` names, once its Walk-Forward has finished:
+    run once per version, a second run refused and recorded (ADR 0007)."""
+    calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
+    tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = run_holdout(
+            conn, _pullback, protocol=args.protocol, calendar=calendar, tick_sizes=tick_sizes
+        )
+    log.info("holdout finished", extra=result.summary())
+    return 0
+
+
+def _pullback(parameters: Mapping[str, Decimal]) -> PullbackV1:
+    """``pullback_v1`` at a cell's parameters."""
+    return PullbackV1(k=parameters["k"], r=parameters["r"], n=int(parameters["n"]))
 
 
 def backtest_report(ctx: Context, args: argparse.Namespace) -> int:
@@ -1011,6 +1028,12 @@ def build_parser() -> argparse.ArgumentParser:
     report_parser.add_argument(
         "--out", metavar="FILE", type=Path, required=True, help="where the JSON is written"
     )
+    holdout_parser = reports.add_parser(
+        "holdout",
+        help="run the Protocol's Holdout once, after its Walk-Forward, under the last Window's"
+        " parameters; a second run by the same version is refused and recorded",
+    )
+    holdout_parser.add_argument(*PROTOCOL[0], **PROTOCOL[1])
     protocol_parser = subparsers.add_parser(
         "protocol", help="the Protocol a Strategy version is validated under (ADR 0007)"
     )
