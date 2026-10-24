@@ -69,6 +69,7 @@ from tradeline import queries
 from tradeline.cli import main
 from tradeline.db import app_connection
 from tradeline.metrics import HaltLimits
+from tradeline.report import Scores
 from tradeline.risk import Limits
 
 D = Decimal
@@ -302,3 +303,18 @@ def test_the_report_counts_the_candidates_beyond_the_passes(
     assert report["candidates_beyond_passes"] == 2
     assert report["unclassified_blocks"] == 0
     assert report["blocks_by_limit"] == {"max_new_entries": 2}
+
+
+def test_an_unbounded_profit_factor_reads_as_infinity_in_the_report() -> None:
+    scores = Scores(
+        trades=2,
+        sharpe=None,
+        max_drawdown=D(0),
+        profit_factor=D("Infinity"),
+        expectancy_rupees=D(150),
+        expectancy_fraction=D("0.0003"),
+        ending_equity=D(500300),
+        open_positions=0,
+    )
+
+    assert scores.as_json()["profit_factor"] == "∞"

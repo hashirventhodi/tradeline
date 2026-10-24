@@ -40,9 +40,17 @@ def test_max_drawdown_is_the_largest_fall_from_a_peak_as_a_fraction_of_it() -> N
     assert max_drawdown([D(100), D(101), D(102)]) == D(0)
 
 
-def test_profit_factor_is_gross_profit_over_gross_loss_and_undefined_without_a_loser() -> None:
+def test_profit_factor_is_gross_profit_over_gross_loss() -> None:
     assert profit_factor([D(300), D(-100), D(200), D(-50)]) == D(500) / D(150)
-    assert profit_factor([D(300), D(0)]) is None
+
+
+def test_profit_factor_with_winners_and_no_loser_is_unbounded() -> None:
+    assert profit_factor([D(300), D(0)]) == D("Infinity")
+
+
+def test_profit_factor_is_undefined_without_a_closed_position_or_a_winner_or_loser() -> None:
+    assert profit_factor([]) is None
+    assert profit_factor([D(0), D(0)]) is None
 
 
 def test_expectancy_is_the_mean_net_pnl_per_trade_in_rupees_and_as_a_fraction_of_equity() -> None:

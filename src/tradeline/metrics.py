@@ -10,7 +10,8 @@ costs (``docs/risk-controls.md``, Gates):
 - Max drawdown: the largest peak-to-trough fall of the curve, as a fraction of
   the peak.
 - Profit factor: gross profit of the winning trades over gross loss of the
-  losing ones.
+  losing ones; unbounded (``Decimal("Infinity")``) when some win and none
+  lose, undefined (None) when none win or lose.
 - Expectancy: the mean net rupee P&L per closed trade, and the mean of each
   trade's P&L as a fraction of the Equity it was sized against.
 
@@ -107,10 +108,12 @@ def max_drawdown(curve: Sequence[Decimal]) -> Decimal:
 
 
 def profit_factor(pnls: Sequence[Decimal]) -> Decimal | None:
-    """None when no trade lost."""
+    """Infinity when some trades won and none lost; None when none won or lost."""
     profit = sum((p for p in pnls if p > 0), Decimal(0))
     loss = -sum((p for p in pnls if p < 0), Decimal(0))
-    return None if loss == 0 else profit / loss
+    if loss == 0:
+        return None if profit == 0 else Decimal("Infinity")
+    return profit / loss
 
 
 def expectancy(trades: Sequence[PositionResult]) -> Expectancy | None:

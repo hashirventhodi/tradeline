@@ -507,5 +507,10 @@ def halt_days_json(days: list[HaltDay]) -> list[dict[str, Any]]:
 
 
 def rounded(value: Decimal | None, places: Decimal) -> str | None:
-    """``value`` as the reports print it: quantized to ``places`` (half-even), None as is."""
-    return None if value is None else str(value.quantize(places))
+    """``value`` as the reports print it: quantized to ``places`` (half-even), an unbounded
+    value (a profit factor with no losing trade) as ``∞``, None as is."""
+    if value is None:
+        return None
+    if value.is_infinite():
+        return "∞" if value > 0 else "-∞"
+    return str(value.quantize(places))
