@@ -520,7 +520,6 @@ def protocol(ctx: Context, args: argparse.Namespace) -> int:
             halts=ctx.config.risk.halts(),
             schedule=load_cost_schedule(Path(ctx.config.costs.schedule)),
             slippage=ctx.config.costs.slippage(),
-            costs_as_of=args.costs_as_of or datetime.now(IST).date(),
             calendar=calendar,
             commit=git_commit(),
         )
@@ -1090,17 +1089,10 @@ def build_parser() -> argparse.ArgumentParser:
         "protocol", help="the Protocol a Strategy version is validated under (ADR 0007)"
     )
     protocol_actions = protocol_parser.add_subparsers(dest="action", required=True)
-    freeze = protocol_actions.add_parser(
+    protocol_actions.add_parser(
         "freeze",
-        help="freeze the configured Protocol with the data snapshot read now, at this commit,"
-        " and print its Window boundaries as trading days",
-    )
-    freeze.add_argument(
-        "--costs-as-of",
-        metavar="DATE",
-        type=date.fromisoformat,
-        default=None,
-        help="price every trade on the cost schedule in force on DATE (default today)",
+        help="freeze the configured Protocol with the data snapshot and the cost schedule as of"
+        " now, at this commit, and print its Window boundaries as trading days",
     )
     protocol_actions.add_parser(
         "windows",

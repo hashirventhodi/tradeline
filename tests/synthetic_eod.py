@@ -540,7 +540,7 @@ def freeze_protocol(
         halts=halts or HaltLimits(daily_loss=D("0.03"), drawdown=D("0.10")),
         schedule=load_cost_schedule(REPO_ROOT / "cost_rates.csv"),
         slippage=Slippage(),
-        costs_as_of=COSTS_AS_OF,
+        costs_as_of_for_tests=COSTS_AS_OF,
         calendar=repo_calendar(),
         commit=commit or git_commit(),
     )

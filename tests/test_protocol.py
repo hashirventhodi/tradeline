@@ -41,6 +41,7 @@ from synthetic_eod import (
 from tradeline import queries
 from tradeline.cli import main
 from tradeline.costs import CostModel, Slippage, load_cost_schedule
+from tradeline.dates import IST
 from tradeline.db import app_connection
 from tradeline.engine import backtest
 from tradeline.metrics import HaltLimits
@@ -104,7 +105,7 @@ def config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, loaded: str) -> Path
 
 
 def freeze_cli() -> list[str]:
-    return ["protocol", "freeze", "--costs-as-of", COSTS_AS_OF.isoformat()]
+    return ["protocol", "freeze"]
 
 
 def test_protocol_freeze_writes_the_protocol_once_and_prints_its_window_boundaries(
@@ -121,11 +122,24 @@ def test_protocol_freeze_writes_the_protocol_once_and_prints_its_window_boundari
     assert frozen.protocol.holdout == HOLDOUT
     # The configured Halts, so the days a report lists are the frozen ones.
     assert frozen.protocol.halts == HaltLimits(daily_loss=D("0.02"), drawdown=D("0.08"))
+    # The cost schedule as of the freeze: the day it was frozen, in India.
+    assert frozen.protocol.costs_as_of == frozen.frozen_at.astimezone(IST).date()
 
     assert main(freeze_cli()) == 0
 
     assert "already frozen, nothing written" in capsys.readouterr().err
     assert queries.protocols(conn) == [frozen]
+
+
+def test_protocol_freeze_takes_no_cost_schedule_date_but_the_freeze_s_own(
+    config: Path, conn: psycopg.Connection
+) -> None:
+    before = queries.protocols(conn)
+
+    with pytest.raises(SystemExit):
+        main(["protocol", "freeze", "--costs-as-of", COSTS_AS_OF.isoformat()])
+
+    assert queries.protocols(conn) == before
 
 
 def test_protocol_windows_prints_the_boundaries_and_freezes_nothing(

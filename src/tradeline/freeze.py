@@ -19,13 +19,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import psycopg
 
 from tradeline import queries
 from tradeline.costs import CostSchedule, Slippage
+from tradeline.dates import IST
 from tradeline.metrics import HaltLimits
 from tradeline.protocol import (
     OBJECTIVE,
@@ -95,11 +96,16 @@ def freeze_protocol(
     halts: HaltLimits,
     schedule: CostSchedule,
     slippage: Slippage,
-    costs_as_of: date,
     calendar: TradingCalendar,
     commit: str,
+    costs_as_of_for_tests: date | None = None,
 ) -> FreezeResult:
-    """Freeze the Protocol these state, with the data snapshot read now, at ``commit``."""
+    """Freeze the Protocol these state, with the data snapshot read now, at ``commit``, its
+    trades priced on ``schedule`` as of the freeze: the day it is frozen, in India.
+
+    ``costs_as_of_for_tests`` replaces that day, so a test's hand-worked costs do not move
+    with the day it runs; nothing else passes it."""
+    costs_as_of = costs_as_of_for_tests or datetime.now(IST).date()
     parameters = set(strategy.parameters())
     if set(terms.grid) != parameters:
         raise ValueError(
