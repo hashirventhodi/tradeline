@@ -27,6 +27,7 @@ from collections.abc import Iterator
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import psycopg
 import pytest
@@ -45,11 +46,18 @@ from synthetic_eod import (
 from tradeline import queries
 from tradeline.cli import main
 from tradeline.db import app_connection
-from tradeline.engine import StoredMarketData, run
+from tradeline.engine import STARTING_EQUITY, StoredMarketData, run
+from tradeline.risk import Limits
 from tradeline.strategy.pullback import PullbackV1
+from tradeline.tick_sizes import load_tick_sizes
 
 MARKET = base_market()
 NEXT_DAY = date(2023, 6, 16)
+RISK: dict[str, Any] = {
+    "limits": Limits(),
+    "tick_sizes": load_tick_sizes(REPO_ROOT / "tick_sizes.csv"),
+    "equity": STARTING_EQUITY,
+}
 
 
 @pytest.fixture(scope="module")
@@ -135,6 +143,7 @@ def backtest_run(conn: psycopg.Connection) -> tuple[list[tuple[object, ...]], ..
         calendar=repo_calendar(),
         rule_version=MARKET.rule.version,
         backtest_id=uuid.uuid4(),
+        **RISK,
     )
     candidates = queries.candidates(conn, result.run_id)
     plans = queries.plans(conn, result.run_id)
@@ -198,5 +207,6 @@ def test_a_run_is_refused_on_a_closed_day_or_without_the_months_universe(
             calendar=repo_calendar(),
             rule_version=MARKET.rule.version,
             backtest_id=uuid.uuid4(),
+            **RISK,
         )
     assert queries.runs(conn, as_of=day) == []

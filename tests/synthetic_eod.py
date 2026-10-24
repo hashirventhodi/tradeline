@@ -5,12 +5,14 @@ prices are stated, not recorded, so a test can say exactly which day a Strategy
 surfaces a Candidate and what its Plan is. ``write_fixtures`` writes, for every
 calendar day of a ``Market``, the bhavcopy NSE would serve (a 404 on a day the
 Trading Calendar has closed), the equity master, Kite's instrument dump, and
-NSE's corporate-action lists for each calendar year, as the JSON files
-``PlaybackTransport`` serves. ``load_market`` then loads them through
+NSE's corporate-action lists for each calendar year, and NSE's NIFTY Total
+Market list with each Stock's sector, as the JSON files ``PlaybackTransport``
+serves. ``load_market`` then loads them through
 ``ingest eod`` and ``ingest corporate-actions`` playback, the way real data
 arrives, declaring the Market's Universe Rule in force when the Market says
 when (``RuleDeclaration``, ADR 0005's Rule Validity), and
 ``compute_universe_months`` stores the Universe under that rule.
+``load_sectors_on`` loads the sectors as NSE's list read on a given day.
 
 A ``Stock`` is described by its path, the prices NSE would publish if it had
 no Corporate Actions: a starting close, a slope (the close moves by it every
@@ -49,6 +51,7 @@ from datetime import date, datetime, time
 from decimal import Decimal
 from fractions import Fraction
 from pathlib import Path
+from typing import Any
 
 import psycopg
 
@@ -56,6 +59,7 @@ from tradeline.config import UniverseRule
 from tradeline.dates import IST, calendar_days, month_of, next_month
 from tradeline.ingest.corporate_actions import ingest_corporate_actions, year_chunks
 from tradeline.ingest.eod import ingest_eod
+from tradeline.sectors import load_sectors
 from tradeline.sources import kite, nse
 from tradeline.trading_calendar import TradingCalendar, load_trading_calendar
 from tradeline.transport import PlaybackTransport, RecordingTransport, Request, Response
@@ -161,6 +165,8 @@ class Stock:
     listed: date = date(2010, 1, 4)
     series: str = "EQ"
     events: tuple[Event, ...] = ()
+    # NSE's sector (the Total Market list's Industry); None: not on the list.
+    sector: str | None = None
 
     @property
     def actions(self) -> list[Action]:
@@ -264,6 +270,11 @@ class Market:
         )
         return replace(self, stocks=stocks)
 
+    def with_stock(self, symbol: str, **changes: Any) -> Market:
+        """This Market with one Stock's fields changed, e.g. its volume or sector."""
+        stocks = tuple(replace(s, **changes) if s.symbol == symbol else s for s in self.stocks)
+        return replace(self, stocks=stocks)
+
 
 # --- Writing fixtures ---------------------------------------------------------
 
@@ -305,6 +316,10 @@ def _responses(market: Market, calendar: TradingCalendar) -> Iterator[tuple[str,
     yield nse.EQUITY_MASTER_URL, _ok(_equity_master(market.stocks).encode())
     yield kite.INSTRUMENTS_URL, _ok(_kite_dump(market.stocks).encode())
     yield f"{nse.SITE_HOST}/", Response(200, (("set-cookie", "nsit=synthetic; Path=/"),), b"")
+    yield (
+        nse.index_constituents_url(nse.TOTAL_MARKET_LIST),
+        _ok(_total_market_list(market.stocks).encode()),
+    )
     for chunk_start, chunk_end in year_chunks(market.start, market.end):
         for nse_list in nse.CORPORATE_ACTION_LISTS:
             records = (
@@ -359,6 +374,14 @@ def _equity_master(stocks: Iterable[Stock]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _total_market_list(stocks: Iterable[Stock]) -> str:
+    lines = ["Company Name,Industry,Symbol,Series,ISIN Code"]
+    for s in stocks:
+        if s.sector is not None:
+            lines.append(f"{s.symbol} Limited,{s.sector},{s.symbol},{s.series},{s.isin}")
+    return "\n".join(lines) + "\n"
+
+
 def _kite_dump(stocks: Sequence[Stock]) -> str:
     lines = ["instrument_token,tradingsymbol,instrument_type,segment"]
     for token, s in enumerate(stocks, start=1001):
@@ -410,6 +433,11 @@ def load_market(conn: psycopg.Connection, fixtures: Path, market: Market) -> Non
             declared_at=market.declaration.declared_at,
             rule=market.rule,
         )
+
+
+def load_sectors_on(conn: psycopg.Connection, fixtures: Path, day: date) -> None:
+    """Load each Stock's sector as NSE's Total Market list read on ``day``."""
+    load_sectors(conn, PlaybackTransport(fixtures), effective_date=day)
 
 
 def compute_universe_months(

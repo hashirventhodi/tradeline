@@ -13,8 +13,11 @@ import json
 import os
 import tomllib
 from dataclasses import dataclass, field, fields
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal, get_args, get_origin, get_type_hints
+
+from tradeline.risk import Limits
 
 CONFIG_PATH_VAR = "TRADELINE_CONFIG"
 DEFAULT_CONFIG_PATH = Path("tradeline.toml")
@@ -149,6 +152,39 @@ class Config:
         # (``tradeline.cited_actions``), relative to the working directory.
         cited: str = "cited_corporate_actions.csv"
 
+    @dataclass(frozen=True)
+    class Risk:
+        """The Limits of ``docs/risk-controls.md`` the Risk Engine enforces (``tradeline.risk``),
+        fractions of Equity where they are, and the tick table Plans are priced on."""
+
+        risk_per_trade: float = 0.01
+        max_open_positions: int = 8
+        max_position: float = 0.15
+        max_sector: float = 0.30
+        max_gross: float = 1.0
+        # Of the 20-day average daily traded value.
+        participation_cap: float = 0.01
+        # Rupees.
+        min_order_value: int = 5000
+        max_new_entries: int = 4
+        min_reward_to_risk: float = 1.5
+        # The checked-in dated table of NSE tick sizes (``tradeline.tick_sizes``),
+        # relative to the working directory.
+        tick_sizes: str = "tick_sizes.csv"
+
+        def limits(self) -> Limits:
+            return Limits(
+                risk_per_trade=Decimal(str(self.risk_per_trade)),
+                max_open_positions=self.max_open_positions,
+                max_position=Decimal(str(self.max_position)),
+                max_sector=Decimal(str(self.max_sector)),
+                max_gross=Decimal(str(self.max_gross)),
+                participation_cap=Decimal(str(self.participation_cap)),
+                min_order_value=Decimal(self.min_order_value),
+                max_new_entries=self.max_new_entries,
+                min_reward_to_risk=Decimal(str(self.min_reward_to_risk)),
+            )
+
     logging: Logging = field(default_factory=Logging)
     universe: UniverseRule = field(default_factory=UniverseRule)
     parity: Parity = field(default_factory=Parity)
@@ -156,6 +192,7 @@ class Config:
     instruments: Instruments = field(default_factory=Instruments)
     corporate_actions: CorporateActions = field(default_factory=CorporateActions)
     integrity: Integrity = field(default_factory=Integrity)
+    risk: Risk = field(default_factory=Risk)
 
     def __post_init__(self) -> None:
         # One Trading Calendar serves both checks (ADR 0018); two paths could drift apart.
