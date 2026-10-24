@@ -2037,6 +2037,14 @@ class LedgerPosition:
         return None if self.exit_reason is None else self.as_of
 
 
+def _account(backtest_id: uuid.UUID | None, column: str = "backtest_id") -> str:
+    """The predicate an account's Ledger rows are read by: its backtest id, or none for the
+    paper and live accounts. Stated as ``=`` or ``IS NULL``, never ``IS NOT DISTINCT FROM``,
+    which no index serves: a read then walked every account's rows, and the dead rows each
+    Walk-Forward cell rolls back, growing through a cell and from cell to cell (#85)."""
+    return f"{column} IS NULL" if backtest_id is None else f"{column} = %(backtest_id)s"
+
+
 def orders(
     conn: psycopg.Connection,
     *,
@@ -2064,7 +2072,7 @@ def orders(
         " LEFT JOIN LATERAL (SELECT f.order_id, f.day, f.seq, f.price FROM fills f"
         "  WHERE (f.mode, f.order_id) = (p.mode, p.id) OFFSET 0) f ON true"
         " WHERE p.event = 'placed' AND p.mode = %(mode)s"
-        " AND p.backtest_id IS NOT DISTINCT FROM %(backtest_id)s AND p.dry_run = %(dry_run)s"
+        f" AND {_account(backtest_id, 'p.backtest_id')} AND p.dry_run = %(dry_run)s"
         " AND (NOT %(open_only)s OR (c.id IS NULL AND f.order_id IS NULL))"
         " ORDER BY p.day, p.seq",
         {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run, "open_only": open_only},
@@ -2104,7 +2112,7 @@ def fills(
         "SELECT order_id, day, seq, position_id, instrument, symbol, side, price, shares, "
         + ", ".join(_CHARGE_COLUMNS)
         + " FROM fills WHERE mode = %(mode)s"
-        " AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s AND dry_run = %(dry_run)s"
+        f" AND {_account(backtest_id)} AND dry_run = %(dry_run)s"
         " ORDER BY day, seq",
         {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
     ).fetchall()
@@ -2138,7 +2146,7 @@ def positions(
         "SELECT position_id, run_id, rank, instrument, symbol, opened_on, shares, entry, stop,"
         " target, time_stop_days, day, exit_reason, exit_price FROM ("
         "  SELECT DISTINCT ON (position_id) * FROM positions"
-        "  WHERE mode = %(mode)s AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s"
+        f"  WHERE mode = %(mode)s AND {_account(backtest_id)}"
         "  AND dry_run = %(dry_run)s"
         "  ORDER BY position_id, day DESC, seq DESC) p"
         " WHERE NOT %(open_only)s OR event <> 'closed'"
@@ -2181,7 +2189,7 @@ def position_events(
     rows = conn.execute(
         "SELECT position_id, event, day, seq, instrument, symbol, shares, entry, stop, target,"
         " factor, cash_in_lieu, exit_price, exit_reason FROM positions"
-        " WHERE mode = %(mode)s AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s"
+        f" WHERE mode = %(mode)s AND {_account(backtest_id)}"
         " AND dry_run = %(dry_run)s ORDER BY day, seq",
         {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
     ).fetchall()
@@ -2220,10 +2228,10 @@ def account_cash_flows(
     row = conn.execute(
         "SELECT coalesce((SELECT sum(CASE side WHEN 'sell' THEN price * shares"
         " ELSE -price * shares END - (" + charges + ")) FROM fills"
-        " WHERE mode = %(mode)s AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s"
+        f" WHERE mode = %(mode)s AND {_account(backtest_id)}"
         " AND dry_run = %(dry_run)s), 0)"
         " + coalesce((SELECT sum(cash_in_lieu) FROM positions"
-        " WHERE mode = %(mode)s AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s"
+        f" WHERE mode = %(mode)s AND {_account(backtest_id)}"
         " AND dry_run = %(dry_run)s), 0)",
         {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
     ).fetchone()
