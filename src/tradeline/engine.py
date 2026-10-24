@@ -658,6 +658,7 @@ def backtest_span(
     entries: bool = True,
     boundary: bool = False,
     commit: bool = True,
+    fresh_period: bool = False,
 ) -> list[RunResult]:
     """``backtest``'s days from ``start`` to ``end`` in the account ``backtest_id``, which
     may already hold the days before ``start``, reading the market through ``cache``.
@@ -665,8 +666,21 @@ def backtest_span(
     Every refusal of ``backtest`` but one applies: the data snapshot is not verified here,
     since a caller running many spans over one Protocol verifies it once
     (``freeze.verify_snapshot``) for all of them. ``entries``, ``boundary`` (a Boundary
-    Exit on ``end``) and ``commit`` are ``run``'s."""
-    _protocol_for(conn, strategy, frozen.hash, start=start, end=end, verify=False)
+    Exit on ``end``) and ``commit`` are ``run``'s.
+
+    ``fresh_period`` is for a Not Independent version's Fresh Period alone
+    (``holdout.run_fresh_period``): its days lie after the Protocol's Holdout, past what
+    the Protocol froze, so the range must start after the Holdout's last day instead of
+    lying inside the Protocol's."""
+    _protocol_for(
+        conn,
+        strategy,
+        frozen.hash,
+        start=start,
+        end=end,
+        verify=False,
+        fresh_period=fresh_period,
+    )
     terms = frozen.protocol
     if costs is None:
         costs = terms.cost_model()
@@ -808,10 +822,12 @@ def _protocol_for(
     start: date,
     end: date,
     verify: bool = True,
+    fresh_period: bool = False,
 ) -> queries.FrozenProtocol:
     """The frozen Protocol a backtest of ``strategy`` from ``start`` to ``end`` may run
     under, or the reason it may not; its data snapshot verified unless ``verify`` is
-    false."""
+    false. A ``fresh_period`` range runs after the Protocol's Holdout instead of inside
+    the Protocol's range."""
     if not name:
         raise ValueError(
             "a backtest runs under a frozen Protocol and names none;"
@@ -848,7 +864,13 @@ def _protocol_for(
             )
     if end < start:
         raise ValueError(f"range end {end} is before start {start}")
-    if start < terms.first or end > terms.last:
+    if fresh_period:
+        if start <= terms.holdout.last:
+            raise ValueError(
+                f"a Fresh Period starts after Protocol {short}'s Holdout, which ends"
+                f" {terms.holdout.last}, not on {start}"
+            )
+    elif start < terms.first or end > terms.last:
         raise ValueError(
             f"{start} to {end} runs outside Protocol {short}'s {terms.first} to {terms.last}"
         )

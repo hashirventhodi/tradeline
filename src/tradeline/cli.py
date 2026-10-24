@@ -33,7 +33,7 @@ from tradeline.engine import backtest as backtest_service
 from tradeline.engine import paper as paper_service
 from tradeline.environment import Environment
 from tradeline.freeze import freeze_protocol
-from tradeline.holdout import run_holdout
+from tradeline.holdout import run_fresh_period, run_holdout
 from tradeline.ingest.announcements import ingest_announcements
 from tradeline.ingest.candles import CurrentUniverse, ingest_candles
 from tradeline.ingest.cited_actions import ingest_cited_actions
@@ -588,6 +588,8 @@ def backtest(ctx: Context, args: argparse.Namespace) -> int:
         return backtest_report(ctx, args)
     if args.backtest_command == "holdout":
         return holdout(ctx, args)
+    if args.backtest_command == "fresh":
+        return fresh_period(ctx, args)
     if args.start is None:
         return walk_forward(ctx, args)
     end = args.end or args.start
@@ -646,6 +648,20 @@ def holdout(ctx: Context, args: argparse.Namespace) -> int:
             conn, _pullback, protocol=args.protocol, calendar=calendar, tick_sizes=tick_sizes
         )
     log.info("holdout finished", extra=result.summary())
+    return 0
+
+
+def fresh_period(ctx: Context, args: argparse.Namespace) -> int:
+    """The Fresh Period of the version the Protocol ``--protocol`` names, whose Holdout run
+    is Not Independent: its Holdout's parameters in a fresh account over the trading days
+    after the Holdout and the freeze, to the last day with data (ADR 0007)."""
+    calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
+    tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = run_fresh_period(
+            conn, _pullback, protocol=args.protocol, calendar=calendar, tick_sizes=tick_sizes
+        )
+    log.info("fresh period finished", extra=result.summary())
     return 0
 
 
@@ -1085,6 +1101,12 @@ def build_parser() -> argparse.ArgumentParser:
         " parameters; a second run by the same version is refused and recorded",
     )
     holdout_parser.add_argument(*PROTOCOL[0], **PROTOCOL[1])
+    fresh_parser = reports.add_parser(
+        "fresh",
+        help="run a Not Independent version's Fresh Period under its Holdout's parameters,"
+        " from a fresh account to the last day with data, for the Backtest Gate to score",
+    )
+    fresh_parser.add_argument(*PROTOCOL[0], **PROTOCOL[1])
     protocol_parser = subparsers.add_parser(
         "protocol", help="the Protocol a Strategy version is validated under (ADR 0007)"
     )

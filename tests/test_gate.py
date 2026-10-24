@@ -16,6 +16,12 @@ Windows, so the Stitched Curve is the one ``test_walk_forward.py`` works.
   (both sides' charges), ASH 88 shares 849 -> 855 nets 257.75: profit factor 591.55 /
   274.11 = 2.1581, three trades.
 
+The market runs on to 2024-02-29, past the Holdout, for the Fresh Period: three more
+pullbacks (BIRCH 2023-03-01, ASH 2023-06-01, CEDAR 2023-09-01), each rising to its time
+stop, so at k = 2, r = 2, n = 5 a Fresh Period from 2023-02-01 closes three winning trades
+and none losing (an unbounded profit factor). Nothing after 2023-01-31 is read by the
+Windows or the Holdout.
+
 The fixture Protocol's Gate is lowered to fit them (Sharpe above 0.5, drawdown under 15
 percent, profit factor above 1.15, at least 7 Stitched Curve trades); the failing one
 asks a profit factor above 1.2, which the Stitched Curve misses and the Holdout clears.
@@ -29,7 +35,7 @@ import json
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import replace
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -43,6 +49,7 @@ from synthetic_eod import (
     Dip,
     Market,
     Trend,
+    compute_universe_months,
     config_text,
     freeze_protocol,
     load_market,
@@ -53,7 +60,8 @@ from synthetic_eod import (
 )
 from tradeline import queries
 from tradeline.cli import main
-from tradeline.db import app_connection
+from tradeline.dates import IST
+from tradeline.db import app_connection, connect
 from tradeline.holdout import run_holdout
 from tradeline.metrics import HaltLimits
 from tradeline.protocol import Gate
@@ -75,18 +83,23 @@ FAILING = replace(PASSING, profit_factor_above=D("1.2"))
 SAME_CHOICES = {"k": (D(2),), "r": (D(2),), "n": (D(5), D(10))}
 
 
+FRESH_FIRST = date(2023, 2, 1)
+FRESH_END = date(2024, 2, 29)
+
+
 def gate_market() -> Market:
     pullback = D("17.00")
     return (
-        walk_forward_market()
-        .with_events("BIRCH", Dip(date(2023, 1, 4), pullback))
+        replace(walk_forward_market(), end=FRESH_END)
+        .with_events("BIRCH", Dip(date(2023, 1, 4), pullback), Dip(date(2023, 3, 1), pullback))
         .with_events(
             "CEDAR",
             Dip(date(2023, 1, 11), pullback),
             Trend(date(2023, 1, 12), D(0)),
             Trend(date(2023, 1, 20), D("1.00")),
         )
-        .with_events("ASH", Dip(date(2023, 1, 18), pullback))
+        .with_events("CEDAR", Dip(date(2023, 9, 1), pullback))
+        .with_events("ASH", Dip(date(2023, 1, 18), pullback), Dip(date(2023, 6, 1), pullback))
     )
 
 
@@ -224,6 +237,68 @@ def test_a_not_independent_run_without_a_fresh_period_cannot_pass_whatever_its_m
     assert report["lineage"]["consumed_by"] == passing[1]
 
 
+def fresh_command(url: str, protocol: str, directory: Path) -> tuple[int, str]:
+    """``backtest fresh --protocol``: its exit code and what it logged."""
+    config = directory / "tradeline.toml"
+    config.write_text(config_text(gate_market()))
+    out = io.StringIO()
+    with pytest.MonkeyPatch.context() as patch, contextlib.redirect_stdout(out):
+        patch.setenv("TRADELINE_CONFIG", str(config))
+        patch.setenv("DATABASE_URL", url)
+        code = main(["backtest", "fresh", "--protocol", protocol])
+    return code, out.getvalue()
+
+
+def frozen_on_the_holdouts_last_day(url: str, *protocols: str) -> None:
+    """Stand in for versions frozen on 2023-01-31, in order, as history this suite cannot
+    replay: the owner's connection moves their freeze times, as no application role can."""
+    with connect(url) as conn:
+        for hour, protocol in enumerate(protocols, start=10):
+            conn.execute(
+                "UPDATE protocols SET frozen_at = %s WHERE hash = %s",
+                (datetime(2023, 1, 31, hour, tzinfo=IST), protocol),
+            )
+
+
+def test_a_not_independent_run_passes_with_twelve_fresh_months_that_clear_every_threshold(
+    passing: Reported, clone_database: Callable[[str], str], tmp_path: Path
+) -> None:
+    url = clone_database(passing[0])
+    later = run_version(url, PASSING, grid=SAME_CHOICES)
+    frozen_on_the_holdouts_last_day(url, passing[1], later)
+    with app_connection(url) as conn:
+        compute_universe_months(conn, gate_market(), FRESH_FIRST, FRESH_END)
+
+    code, _ = fresh_command(url, later, tmp_path)
+    report, markdown = report_command(url, later, tmp_path)
+
+    assert code == 0
+    gate = report["gate"]
+    assert gate["standing"]["independent"] is False
+    assert gate["standing"]["fresh_period"]["first"] == "2023-02-01"
+    assert gate["standing"]["fresh_period"]["long_enough"] is True
+    fresh = [c for c in gate["checks"] if c["curve"] == "fresh_period"]
+    assert [(c["metric"], c["passed"]) for c in fresh] == [
+        ("sharpe", True),
+        ("max_drawdown", True),
+        ("profit_factor", True),
+    ]
+    assert fresh[2]["value"] == "∞"
+    assert gate["fresh_period_trades"] == 3
+    assert gate["outcome"] == "pass"
+    assert "| Fresh Period | profit_factor | ∞ |" in markdown
+    assert "The Fresh Period closed 3 trades." in markdown
+
+
+def test_a_fresh_period_is_refused_to_a_version_whose_holdout_run_is_independent(
+    passing: Reported, tmp_path: Path
+) -> None:
+    code, logged = fresh_command(passing[0], passing[1], tmp_path)
+
+    assert code == 1
+    assert "independent" in logged
+
+
 def test_the_markdown_puts_the_gate_and_the_halt_days_together_at_the_top_then_every_section(
     passing: Reported,
 ) -> None:
@@ -351,8 +426,8 @@ def test_the_report_is_refused_before_the_holdout_has_run(
         assert queries.gate_evaluations(conn, protocol=found) == []
 
 
-@pytest.mark.parametrize("table", ["gate_evaluations", "cost_sensitivities"])
-def test_the_application_role_cannot_change_or_remove_an_evaluation_or_a_sensitivity(
+@pytest.mark.parametrize("table", ["gate_evaluations", "cost_sensitivities", "fresh_periods"])
+def test_the_application_role_cannot_change_or_remove_an_evaluation_a_sensitivity_or_a_fresh_period(
     passing: Reported, table: str
 ) -> None:
     with app_connection(passing[0]) as conn:

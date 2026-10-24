@@ -19,7 +19,11 @@ whatever family that run was.
 A Not Independent run passes the Backtest Gate only together with a Fresh
 Period: the trading days after both the consumed Holdout's last day and the
 version's freeze (the day it was frozen, in IST, is not one), at least twelve
-months long (``fresh_period``, ``standing``).
+months long (``fresh_period``, ``standing``). ``run_fresh_period`` runs it: the
+parameters the Holdout ran at, in a fresh account at the Protocol's starting
+Equity, over the Fresh Period's days to the last with data, recorded
+(``fresh_periods``) and extended as more data is collected; the Backtest Gate
+scores it with the Holdout's thresholds (``protocol_report``).
 """
 
 from __future__ import annotations
@@ -309,6 +313,120 @@ def standing(
             f" twelve months (to {period.twelve_months_to}), so it cannot pass"
         )
     return HoldoutStanding(attempt, period, period.long_enough, reason)
+
+
+@dataclass(frozen=True)
+class FreshPeriodResult:
+    run: queries.FreshPeriodRun
+    period: FreshPeriod
+    # Days run by this call (not those an earlier call wrote).
+    runs: int
+    seconds: float
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "protocol": self.run.protocol,
+            "backtest_id": str(self.run.backtest_id),
+            "parameters": self.run.parameters,
+            "first": self.run.first.isoformat(),
+            "last": None if self.period.last is None else self.period.last.isoformat(),
+            "long_enough": self.period.long_enough,
+            "runs": self.runs,
+            "seconds": round(self.seconds, 1),
+        }
+
+
+def run_fresh_period(
+    conn: psycopg.Connection,
+    strategy: StrategyFactory,
+    *,
+    protocol: str | None,
+    calendar: TradingCalendar,
+    tick_sizes: TickSizes,
+    risk_engine: RiskEngine = RISK_ENGINE,
+    fill_model: FillModel = FILL_MODEL,
+) -> FreshPeriodResult:
+    """Run the Fresh Period of the version under the frozen Protocol ``protocol`` (its hash,
+    or 12 or more characters of it), whose Holdout run is Not Independent, from where its
+    account stopped to the last day with data; refused for an independent run, before the
+    Holdout has run to its last day, and before the Fresh Period has a day of data."""
+    began = time.monotonic()
+    if not protocol:
+        raise ValueError(
+            "a Fresh Period runs under a frozen Protocol and names none;"
+            " name the version whose Holdout run is Not Independent"
+        )
+    frozen = queries.protocol(conn, protocol)
+    if frozen is None:
+        raise ValueError(
+            f"no Protocol {protocol} is frozen; `tradeline protocol freeze` freezes one"
+        )
+    short, holdout = frozen.hash[:12], frozen.protocol.holdout
+    attempt = holdout_run(conn, frozen.hash)
+    ran = (
+        []
+        if attempt is None
+        else queries.runs(conn, mode="backtest", backtest_id=attempt.backtest_id)
+    )
+    if attempt is None or not ran or ran[-1].as_of < holdout.last:
+        raise ValueError(
+            f"Protocol {short} has not run the Holdout to its last day; run it"
+            f" (`tradeline backtest holdout --protocol {short}`) first"
+        )
+    if attempt.independent:
+        raise ValueError(
+            f"Protocol {short}'s Holdout run is independent: it is scored on the Holdout and"
+            " needs no Fresh Period"
+        )
+    assert attempt.parameters is not None
+    period = standing(conn, frozen.hash, calendar=calendar).fresh_period
+    assert period is not None
+    if period.first is None or period.last is None:
+        raise ValueError(
+            f"Protocol {short}'s Fresh Period has no trading day of data yet"
+            f" (it starts after {holdout.last} and after the version's freeze)"
+        )
+    found = queries.fresh_period_run(conn, frozen.hash)
+    if found is None:
+        with conn.transaction():
+            conn.execute(
+                "INSERT INTO fresh_periods (protocol, backtest_id, first, parameters)"
+                " VALUES (%s, %s, %s, %s)",
+                (
+                    frozen.hash,
+                    uuid.uuid4(),
+                    period.first,
+                    json.dumps(attempt.parameters, sort_keys=True),
+                ),
+            )
+        conn.commit()
+        found = queries.fresh_period_run(conn, frozen.hash)
+        assert found is not None
+    written = queries.runs(conn, mode="backtest", backtest_id=found.backtest_id)
+    days = [
+        d
+        for d in calendar.trading_days(found.first, period.last)
+        if not written or d > written[-1].as_of
+    ]
+    results = []
+    if days:
+        results = backtest_span(
+            conn,
+            strategy({a: Decimal(v) for a, v in found.parameters.items()}),
+            frozen,
+            start=days[0],
+            end=days[-1],
+            calendar=calendar,
+            tick_sizes=tick_sizes,
+            backtest_id=found.backtest_id,
+            cache=SeriesCache(conn, start=days[0], end=days[-1]),
+            risk_engine=risk_engine,
+            fill_model=fill_model,
+            fresh_period=True,
+        )
+    result = FreshPeriodResult(found, period, len(results), time.monotonic() - began)
+    log.info("fresh period finished", extra=result.summary())
+    return result
 
 
 class _Hashes:

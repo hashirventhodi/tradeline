@@ -47,7 +47,7 @@ from tradeline import queries
 from tradeline.dates import IST
 from tradeline.freeze import verify_snapshot
 from tradeline.gate import CurveMetrics, GateOutcome, evaluate
-from tradeline.holdout import holdout_run, rerun_holdout, standing
+from tradeline.holdout import FreshPeriod, holdout_run, rerun_holdout, standing
 from tradeline.metrics import HaltDay
 from tradeline.paper_broker import FILL_MODEL, FillModel
 from tradeline.report import (
@@ -129,6 +129,7 @@ class ProtocolReport:
                 },
                 "checks": [_check_json(c) for c in evaluation.checks],
                 "holdout_trades": evaluation.inputs["holdout"]["trades"],
+                "fresh_period_trades": evaluation.inputs.get("fresh_period", {}).get("trades"),
                 "standing": {
                     name: evaluation.standing[name]
                     for name in (
@@ -344,6 +345,10 @@ def _evaluate(
         "holdout": _metrics(read_account(conn, attempt.backtest_id), terms.risk_free_rate),
     }
     found = standing(conn, frozen.hash, calendar=calendar)
+    period = found.fresh_period
+    fresh = _fresh_period_metrics(conn, frozen, period, calendar) if found.may_pass else None
+    if fresh is not None:
+        curves["fresh_period"] = fresh
     outcome = evaluate(
         terms.gate,
         stitched=curves["stitched_curve"],
@@ -351,8 +356,8 @@ def _evaluate(
         independent=bool(attempt.independent),
         may_pass=found.may_pass,
         standing=found.reason,
+        fresh_period=fresh,
     )
-    period = found.fresh_period
     standing_json = {
         "independent": attempt.independent,
         "consumes": attempt.consumes,
@@ -412,6 +417,24 @@ def _evaluate(
         )
     conn.commit()
     return outcome
+
+
+def _fresh_period_metrics(
+    conn: psycopg.Connection,
+    frozen: queries.FrozenProtocol,
+    period: FreshPeriod | None,
+    calendar: TradingCalendar,
+) -> CurveMetrics | None:
+    """The version's Fresh Period account scored, once it has run its first twelve months;
+    None before (or for an independent run, which has none)."""
+    run = queries.fresh_period_run(conn, frozen.hash)
+    if run is None or period is None or period.twelve_months_to is None:
+        return None
+    due = list(calendar.trading_days(run.first, period.twelve_months_to))
+    runs = queries.runs(conn, mode="backtest", backtest_id=run.backtest_id)
+    if not due or not runs or runs[-1].as_of < due[-1]:
+        return None
+    return _metrics(read_account(conn, run.backtest_id), frozen.protocol.risk_free_rate)
 
 
 def _metrics(account: Account, rate: Decimal) -> CurveMetrics:
@@ -613,6 +636,11 @@ class _Markdown:
             f" {thresholds['profit_factor_above']} on both curves; at least"
             f" {thresholds['min_stitched_trades']} trades on the Stitched Curve. The Holdout's"
             f" {gate['holdout_trades']} trades are reported, not gated."
+            + (
+                ""
+                if gate["fresh_period_trades"] is None
+                else f" The Fresh Period closed {gate['fresh_period_trades']} trades."
+            )
         )
         self._table(
             ["Curve", "Metric", "Value", "Rule", "Holds"],

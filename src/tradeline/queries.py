@@ -2395,6 +2395,29 @@ def holdout_attempts(
 
 
 @dataclass(frozen=True)
+class FreshPeriodRun:
+    """A Not Independent version's Fresh Period account: from ``first``, at the parameters
+    its Holdout ran at, in the account ``backtest_id`` (its Runs are the Ledger's)."""
+
+    protocol: str
+    backtest_id: uuid.UUID
+    first: date
+    parameters: dict[str, str]
+    started_at: datetime
+
+
+def fresh_period_run(conn: psycopg.Connection, protocol: str) -> FreshPeriodRun | None:
+    """The Fresh Period account of the version under the Protocol whose full hash is
+    ``protocol``, if one was started."""
+    row = conn.execute(
+        "SELECT protocol, backtest_id, first, parameters, started_at FROM fresh_periods"
+        " WHERE protocol = %s",
+        (protocol,),
+    ).fetchone()
+    return None if row is None else FreshPeriodRun(*row)
+
+
+@dataclass(frozen=True)
 class LineageVersion:
     """A Strategy version in a lineage: its Protocol, Strategy and code revision, when it was
     frozen, and its Holdout run, if it has one."""
