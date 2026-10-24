@@ -36,3 +36,26 @@ jobs:
       # pytest-socket (configured in pyproject) refuses every socket except
       # loopback, so the suite cannot reach the network even if a test tried.
       - run: uv run pytest
+
+  # A frozen Protocol names its commit and a run under it is refused at any other, so every
+  # tagged Protocol's commit stays an ancestor of main (ADR 0007, #85 amendment). Checked on
+  # pull requests (against the merge result) and on main, not on other branches' pushes.
+  protocol-tags:
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Every protocol/* tag is an ancestor of this commit
+        run: |
+          missing=0
+          for tag in $(git tag --list 'protocol/*'); do
+            if ! git merge-base --is-ancestor "$tag" HEAD; then
+              echo "::error::$tag ($(git rev-parse --short "$tag^{commit}")) is not an ancestor of HEAD"
+              missing=1
+            fi
+          done
+          exit $missing
+
