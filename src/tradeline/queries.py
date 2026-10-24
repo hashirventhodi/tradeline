@@ -8,13 +8,17 @@ candles, Universe membership, sectors, announcements.
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
+import json
 import uuid
-from collections.abc import Iterable
+from bisect import bisect_left, bisect_right
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from fractions import Fraction
-from typing import Any, Literal, cast
+from typing import Any, Literal, TypedDict, cast
 
 import psycopg
 
@@ -28,9 +32,13 @@ from tradeline.adjust import (
     adjust,
     superseded,
 )
-from tradeline.dates import IST
+from tradeline.costs import Charges
+from tradeline.dates import IST, month_end
 from tradeline.instruments import Anomaly, Interval, KeyFrom, Link, LinkCandidate
+from tradeline.paper_broker import ExitReason, OrderPurpose
+from tradeline.protocol import Protocol
 from tradeline.sources.nse import Delisting, SymbolChange
+from tradeline.trading_calendar import TradingCalendar
 
 
 @dataclass(frozen=True)
@@ -404,6 +412,77 @@ def adjusted_daily_candles(
     return adjust(bars, _corporate_actions(conn, owned, start=None, end=None), as_of=as_of)
 
 
+class AdjustedSeriesSpan:
+    """An Instrument's Raw Series from ``start`` to ``end``, loaded once, read as the Adjusted
+    Series as it stood on any day in the span (``adjusted_series_span``).
+
+    A read is what ``adjusted_daily_candles`` returns for the same range and As-Of
+    Date, and is refused the same way when the range ends after the As-Of Date: the
+    rows past it are held, never returned. The Adjusted Series changes only on an
+    Ex-Date, so it is adjusted once for each set of actions known, not on every read.
+    """
+
+    def __init__(
+        self,
+        instrument: str,
+        *,
+        start: date,
+        end: date,
+        bars: Sequence[RawBar],
+        actions: Sequence[CorporateAction],
+    ) -> None:
+        self.instrument = instrument
+        self.start, self.end = start, end
+        self._raw = list(bars)
+        self._actions = sorted(actions, key=lambda a: a.ex_date)
+        self._ex_dates = [a.ex_date for a in self._actions]
+        self._known = -1
+        self._adjusted: list[AdjustedBar] = []
+        self._dates: list[date] = []
+
+    def bars(self, *, start: date, end: date, as_of: date) -> list[AdjustedBar]:
+        if end > as_of:
+            raise ValueError(
+                f"range end {end} is after the as-of date {as_of}: bars after the as-of date"
+                " are not known on it"
+            )
+        if start < self.start or as_of > self.end:
+            raise ValueError(
+                f"{start} to {end} as of {as_of} is outside {self.instrument}'s span"
+                f" {self.start} to {self.end}"
+            )
+        known = bisect_right(self._ex_dates, as_of)
+        if known != self._known:
+            self._adjusted = adjust(self._raw, self._actions, as_of=as_of)
+            self._dates = [b.trade_date for b in self._adjusted]
+            self._known = known
+        return self._adjusted[bisect_left(self._dates, start) : bisect_right(self._dates, end)]
+
+
+def adjusted_series_span(
+    conn: psycopg.Connection, owner: str, *, start: date, end: date
+) -> AdjustedSeriesSpan:
+    """The Raw Series from ``start`` to ``end``, and every action filed under its Symbols, of
+    what ``instrument_key`` reads an Instrument as on a day: an Instrument key, or a Symbol no
+    Instrument has had. For reading as of many days (a backtest's); a Symbol that names an
+    Instrument does so only as of a day, so it is refused."""
+    if "@" in owner:
+        owned = _owned(conn, owner, as_of=end)
+    elif conn.execute(
+        "SELECT 1 FROM instrument_intervals WHERE symbol = %s LIMIT 1", (owner,)
+    ).fetchone():
+        raise ValueError(f"{owner} names an Instrument; read it by its key (instrument_key)")
+    else:
+        owned = _Owned(None, owner)
+    rows = _end_of_day(conn, owned, start=start, end=end, series=None)
+    bars = [
+        RawBar(r.symbol, r.series, r.trade_date, r.open, r.high, r.low, r.close, r.traded_qty)
+        for r in rows
+    ]
+    actions = _corporate_actions(conn, owned, start=None, end=None)
+    return AdjustedSeriesSpan(owner, start=start, end=end, bars=bars, actions=actions)
+
+
 @dataclass(frozen=True)
 class _Owned:
     """Whose rows an Instrument read returns: an Instrument's, or one Symbol's alone."""
@@ -629,6 +708,232 @@ def universe_rule_versions(conn: psycopg.Connection) -> list[UniverseRuleVersion
         " ORDER BY recorded_at, version"
     ).fetchall()
     return [UniverseRuleVersion(*row) for row in rows]
+
+
+@dataclass(frozen=True)
+class RuleValidity:
+    """The Operator's declaration that a rule version is the rule in force from a date."""
+
+    rule_version: str
+    in_force_from: date
+    declared_at: datetime
+
+
+def universe_rule_validity(conn: psycopg.Connection) -> list[RuleValidity]:
+    """Every Rule Validity declaration, in the order declared."""
+    rows = conn.execute(
+        "SELECT rule_version, in_force_from, declared_at FROM universe_rule_validity"
+        " ORDER BY declared_at, in_force_from, rule_version"
+    ).fetchall()
+    return [RuleValidity(*row) for row in rows]
+
+
+UniverseMode = Literal["recorded", "reconstructed"]
+
+
+def universe_month_mode(
+    conn: psycopg.Connection, month: date, *, rule_version: str, calendar: TradingCalendar
+) -> UniverseMode:
+    """Whether the month's Universe under ``rule_version`` is a Recorded or a Reconstructed one.
+
+    Recorded when, by what was declared before the month's first trading day
+    (on ``calendar``) began in India, the version was the one in force on that
+    day (the declaration with the latest ``in_force_from`` on or before it), and
+    the version was recorded before then too; reconstructed otherwise.
+    """
+    if month.day != 1:
+        raise ValueError(f"a Universe month is given by its first day, not {month}")
+    first = next(iter(calendar.trading_days(month, month_end(month))), None)
+    if first is None:
+        raise ValueError(f"the Trading Calendar has no trading day in {month:%Y-%m}")
+    began = datetime.combine(first, time(), IST)
+    row = conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM universe_rule_versions"
+        "  WHERE version = %(version)s AND recorded_at < %(began)s)"
+        " AND %(version)s IS NOT DISTINCT FROM (SELECT rule_version FROM universe_rule_validity"
+        "  WHERE declared_at < %(began)s AND in_force_from <= %(first)s"
+        "  ORDER BY in_force_from DESC, declared_at DESC LIMIT 1)",
+        {"version": rule_version, "began": began, "first": first},
+    ).fetchone()
+    return "recorded" if row is not None and row[0] else "reconstructed"
+
+
+@dataclass(frozen=True)
+class UniverseMonthBuild:
+    """What one month's Universe under one rule version was built from (ADR 0005)."""
+
+    month: date
+    rule_version: str
+    window_start: date
+    # The Data Cutoff: the last end-of-day date in the window.
+    data_cutoff: date
+    # The nse_eod ingest runs that wrote rows in the window, oldest first.
+    eod_run_ids: tuple[uuid.UUID, ...]
+    # The last Instruments rebuild before the build; None if none had run.
+    instruments_run_id: uuid.UUID | None
+    eod_hash: str
+    links_hash: str
+    # True when no recorded ingest run covers the window, so a backfill read the
+    # cutoff from the rows there at the time.
+    cutoff_inferred: bool
+    built_at: datetime
+
+
+def universe_month_builds(
+    conn: psycopg.Connection, *, month: date | None = None, rule_version: str | None = None
+) -> list[UniverseMonthBuild]:
+    """Every recorded month build, or one month's, or one version's, by month then version."""
+    rows = conn.execute(
+        "SELECT month, rule_version, window_start, data_cutoff, eod_run_ids,"
+        " instruments_run_id, eod_hash, links_hash, cutoff_inferred, built_at"
+        " FROM universe_month_builds"
+        " WHERE (%(month)s::date IS NULL OR month = %(month)s)"
+        " AND (%(version)s::text IS NULL OR rule_version = %(version)s)"
+        " ORDER BY month, rule_version",
+        {"month": month, "version": rule_version},
+    ).fetchall()
+    return [
+        UniverseMonthBuild(
+            month=row[0],
+            rule_version=row[1],
+            window_start=row[2],
+            data_cutoff=row[3],
+            eod_run_ids=tuple(row[4]),
+            instruments_run_id=row[5],
+            eod_hash=row[6],
+            links_hash=row[7],
+            cutoff_inferred=row[8],
+            built_at=row[9],
+        )
+        for row in rows
+    ]
+
+
+@dataclass(frozen=True)
+class UniverseMonthHash:
+    """A month window's hashes over the rows there now, and whether its build recorded them."""
+
+    eod_hash: str
+    links_hash: str
+    matches: bool
+
+
+def universe_month_hash(conn: psycopg.Connection, build: UniverseMonthBuild) -> UniverseMonthHash:
+    """Recompute the hashes of ``build``'s window from the rows stored now.
+
+    A mismatch means an input changed after the build: an end-of-day row in
+    the window, or an Instrument interval holding one of its days.
+    """
+    eod, links = universe_window_hashes(conn, start=build.window_start, cutoff=build.data_cutoff)
+    return UniverseMonthHash(
+        eod_hash=eod,
+        links_hash=links,
+        matches=(eod, links) == (build.eod_hash, build.links_hash),
+    )
+
+
+def _row_text(columns: Sequence[str]) -> str:
+    """SQL for one row as text in a hash: every column, NULL as ``\\N``, ``|`` between."""
+    return "concat_ws('|', " + ", ".join(f"coalesce(({c})::text, '\\N')" for c in columns) + ")"
+
+
+def _sha256_of(row_text: str, order: str) -> str:
+    return (
+        "encode(sha256(convert_to(coalesce("
+        f"string_agg({row_text}, E'\\n' ORDER BY {order}), ''), 'UTF8')), 'hex')"
+    )
+
+
+_EOD_HASH = _sha256_of(
+    _row_text(
+        (
+            "trade_date",
+            "symbol",
+            "series",
+            "isin",
+            "open",
+            "high",
+            "low",
+            "close",
+            "last",
+            "prev_close",
+            "traded_qty",
+            "traded_value",
+            "trades",
+        )
+    ),
+    'trade_date, symbol COLLATE "C", series COLLATE "C"',
+)
+_LINKS_HASH = _sha256_of(
+    _row_text(
+        (
+            "i.instrument_key",
+            "i.symbol",
+            "i.series",
+            "i.isin",
+            "i.first_day",
+            "i.last_day",
+            "n.listed_on",
+            "n.key_from",
+        )
+    ),
+    'i.symbol COLLATE "C", i.series COLLATE "C", i.first_day',
+)
+
+
+def universe_window_hashes(
+    conn: psycopg.Connection, *, start: date, cutoff: date
+) -> tuple[str, str]:
+    """SHA-256 of the end-of-day rows dated ``start`` to ``cutoff``, and of the Instrument
+    intervals overlapping those days with their Instruments' listing dates.
+
+    Each is over every column of the rows as text, in byte order, so two
+    databases holding the same rows give the same hashes.
+    """
+    row = conn.execute(
+        f"SELECT (SELECT {_EOD_HASH} FROM eod_bhavcopy"
+        "  WHERE trade_date BETWEEN %(start)s AND %(cutoff)s),"
+        f" (SELECT {_LINKS_HASH} FROM instrument_intervals i"
+        "  JOIN instruments n ON n.key = i.instrument_key"
+        "  WHERE i.first_day <= %(cutoff)s AND i.last_day >= %(start)s)",
+        {"start": start, "cutoff": cutoff},
+    ).fetchone()
+    if row is None:
+        raise AssertionError("an aggregate query returns a row")
+    return row[0], row[1]
+
+
+def adjusted_series_hash(
+    conn: psycopg.Connection, instrument: str, *, start: date, end: date
+) -> str:
+    """SHA-256 of an Instrument's Adjusted Series from ``start`` to ``end`` as it stood on
+    ``end``: each bar's day, Symbol, series, prices, volume, cumulative factor and later
+    Flagged Actions, oldest first.
+
+    Every Run as of a day in the range reads bars derived from these raw rows
+    and a subset of these actions, so an end-of-day row or a split or bonus
+    that changes in the range changes the hash.
+    """
+    digest = hashlib.sha256()
+    for bar in adjusted_daily_candles(conn, instrument, start=start, end=end, as_of=end):
+        flagged = ",".join(f"{a.ex_date}:{a.kind}" for a in bar.unadjusted)
+        line = "|".join(
+            str(value)
+            for value in (
+                bar.trade_date,
+                bar.symbol,
+                bar.series,
+                bar.open,
+                bar.high,
+                bar.low,
+                bar.close,
+                bar.volume,
+                bar.factor,
+                flagged,
+            )
+        )
+        digest.update(line.encode() + b"\n")
+    return digest.hexdigest()
 
 
 @dataclass(frozen=True)
@@ -1330,26 +1635,911 @@ def sector(conn: psycopg.Connection, symbol: str, *, as_of: date) -> Sector | No
 
 
 def sectors(
-    conn: psycopg.Connection, *, as_of: date, symbols: list[str] | None = None
+    conn: psycopg.Connection,
+    *,
+    as_of: date,
+    symbols: list[str] | None = None,
+    classified_on: date | None = None,
 ) -> list[Sector]:
     """The sector in force on ``as_of`` for each Symbol named that has one, found through its
-    Instrument as for ``sector``; with none named, for every Symbol a sector is recorded under."""
+    Instrument as for ``sector``; with none named, for every Symbol a sector is recorded under.
+
+    ``classified_on`` reads the classification in force on that day instead, the Symbols
+    still resolved to their Instruments on ``as_of``: the Risk Engine reads the first load
+    for a day before it (``sectors_for_run``)."""
     rows = conn.execute(
         "WITH asked AS ("
         "  SELECT DISTINCT unnest(coalesce(%(symbols)s::text[], ARRAY("
-        "    SELECT symbol FROM sectors WHERE effective_from <= %(as_of)s))) AS symbol"
+        "    SELECT symbol FROM sectors WHERE effective_from <= %(classified_on)s))) AS symbol"
         "), target AS ("
         f"  SELECT a.symbol, ({_named_by('a.symbol', '%(as_of)s')}) AS instrument_key"
         "  FROM asked a"
         "), recorded AS ("
         "  SELECT s.symbol, s.sector, s.effective_from,"
         f"  ({_named_by('s.symbol', 's.effective_from')}) AS instrument_key"
-        "  FROM sectors s WHERE s.effective_from <= %(as_of)s"
+        "  FROM sectors s WHERE s.effective_from <= %(classified_on)s"
+        # Only rows that can match: under an asked Symbol, or a Symbol of an asked Instrument.
+        "  AND (s.symbol IN (SELECT symbol FROM asked) OR s.symbol IN ("
+        "   SELECT i.symbol FROM instrument_intervals i"
+        "   WHERE i.instrument_key IN (SELECT instrument_key FROM target)))"
         ")"
         " SELECT DISTINCT ON (t.symbol) t.symbol, r.sector, r.effective_from, r.symbol"
         " FROM target t JOIN recorded r ON r.instrument_key = t.instrument_key"
         "  OR (r.symbol = t.symbol AND (t.instrument_key IS NULL OR r.instrument_key IS NULL))"
         " ORDER BY t.symbol, r.effective_from DESC, r.symbol <> t.symbol, r.symbol",
-        {"as_of": as_of, "symbols": symbols},
+        {
+            "as_of": as_of,
+            "symbols": symbols,
+            "classified_on": as_of if classified_on is None else classified_on,
+        },
     ).fetchall()
     return [Sector(*row) for row in rows]
+
+
+def sectors_for_run(conn: psycopg.Connection, symbols: list[str], *, as_of: date) -> list[Sector]:
+    """The sector the Risk Engine reads for each Symbol named, in a Run as of ``as_of``.
+
+    NSE publishes only its current classification, so a Run on a day before the
+    first load reads the earliest load (#72; a backtest borrows it, and the report
+    says so); on or after it, the load in force on ``as_of``, as ``sectors``. A Symbol
+    without one is Unclassified, which the caller decides."""
+    row = conn.execute("SELECT min(effective_from) FROM sectors").fetchone()
+    first: date | None = None if row is None else row[0]
+    classified_on = as_of if first is None or first <= as_of else first
+    return sectors(conn, as_of=as_of, symbols=symbols, classified_on=classified_on)
+
+
+# --- The Ledger (ADR 0019) --------------------------------------------------
+
+EngineMode = Literal["backtest", "paper", "live"]
+
+
+@dataclass(frozen=True)
+class LedgerStrategy:
+    """A Strategy version as the Ledger records it for one mode (and backtest)."""
+
+    id: uuid.UUID
+    mode: EngineMode
+    backtest_id: uuid.UUID | None
+    family: str
+    name: str
+    code_revision: str
+    # The hash of the Protocol it ran under (every backtest has one); None for a Run
+    # outside one, such as a paper Run.
+    protocol: str | None
+    ranking: str
+
+
+@dataclass(frozen=True)
+class LedgerRun:
+    id: uuid.UUID
+    mode: EngineMode
+    backtest_id: uuid.UUID | None
+    strategy: LedgerStrategy
+    as_of: date
+    universe_month: date
+    universe_rule_version: str
+    universe_size: int
+    parameters: dict[str, str]
+    recorded_at: datetime
+    # The account after the day's session: cash, and Equity (cash plus the open Positions
+    # at the day's adjusted close), what the Run sized against. None before #78.
+    cash: Decimal | None = None
+    equity: Decimal | None = None
+    # A paper dry-run's Run (#80), which the Paper Gate never counts.
+    dry_run: bool = False
+    # The Slippage impact c it was priced with in place of its Protocol's (a report's c
+    # sensitivity, #79); None for the Protocol's own.
+    impact: Decimal | None = None
+
+
+@dataclass(frozen=True)
+class LedgerCandidate:
+    run_id: uuid.UUID
+    rank: int
+    instrument: str
+    symbol: str
+    # What the Strategy ranked by (its ``ranking`` says how).
+    score: Decimal
+    facts: dict[str, Decimal]
+
+
+@dataclass(frozen=True)
+class LedgerPlan:
+    run_id: uuid.UUID
+    rank: int
+    instrument: str
+    symbol: str
+    entry: Decimal
+    stop: Decimal
+    target: Decimal
+    time_stop_days: int
+    facts: dict[str, Decimal]
+
+
+def runs(
+    conn: psycopg.Connection,
+    *,
+    mode: EngineMode | None = None,
+    backtest_id: uuid.UUID | None = None,
+    as_of: date | None = None,
+    dry_run: bool | None = None,
+) -> list[LedgerRun]:
+    """Runs in the Ledger, filtered by whichever of mode, backtest, day and dry-run marker
+    are given; in day order, then in the order they were recorded."""
+    rows = conn.execute(
+        "SELECT r.id, r.mode, r.backtest_id, s.id, s.mode, s.backtest_id, s.family, s.name,"
+        " s.code_revision, s.protocol, s.ranking, r.as_of, r.universe_month,"
+        " r.universe_rule_version, r.universe_size, r.parameters, r.recorded_at, r.cash,"
+        " r.equity, r.dry_run, r.impact"
+        " FROM runs r JOIN strategies s ON (s.mode, s.id) = (r.mode, r.strategy_id)"
+        " WHERE (%(mode)s::text IS NULL OR r.mode = %(mode)s)"
+        " AND (%(backtest_id)s::uuid IS NULL OR r.backtest_id = %(backtest_id)s)"
+        " AND (%(as_of)s::date IS NULL OR r.as_of = %(as_of)s)"
+        " AND (%(dry_run)s::boolean IS NULL OR r.dry_run = %(dry_run)s)"
+        " ORDER BY r.as_of, r.recorded_at, r.id",
+        {"mode": mode, "backtest_id": backtest_id, "as_of": as_of, "dry_run": dry_run},
+    ).fetchall()
+    return [
+        LedgerRun(
+            id=row[0],
+            mode=row[1],
+            backtest_id=row[2],
+            strategy=LedgerStrategy(*row[3:11]),
+            as_of=row[11],
+            universe_month=row[12],
+            universe_rule_version=row[13],
+            universe_size=row[14],
+            parameters=row[15],
+            recorded_at=row[16],
+            cash=row[17],
+            equity=row[18],
+            dry_run=row[19],
+            impact=row[20],
+        )
+        for row in rows
+    ]
+
+
+def _decimals(facts: dict[str, str]) -> dict[str, Decimal]:
+    return {name: Decimal(value) for name, value in facts.items()}
+
+
+def candidates(conn: psycopg.Connection, run_id: uuid.UUID) -> list[LedgerCandidate]:
+    """A Run's Candidates, best rank first."""
+    rows = conn.execute(
+        "SELECT run_id, rank, instrument, symbol, score, facts FROM candidates"
+        " WHERE run_id = %s ORDER BY rank",
+        (run_id,),
+    ).fetchall()
+    return [
+        LedgerCandidate(run, rank, instrument, symbol, score, _decimals(facts))
+        for run, rank, instrument, symbol, score, facts in rows
+    ]
+
+
+def plans(conn: psycopg.Connection, run_id: uuid.UUID) -> list[LedgerPlan]:
+    """A Run's Plans, in its Candidates' rank order."""
+    rows = conn.execute(
+        "SELECT run_id, rank, instrument, symbol, entry, stop, target, time_stop_days, facts"
+        " FROM plans WHERE run_id = %s ORDER BY rank",
+        (run_id,),
+    ).fetchall()
+    return [
+        LedgerPlan(run, rank, instrument, symbol, entry, stop, target, days, _decimals(facts))
+        for run, rank, instrument, symbol, entry, stop, target, days, facts in rows
+    ]
+
+
+@dataclass(frozen=True)
+class LedgerPass:
+    """The Risk Engine's Pass for one Plan: the Plan priced on the tick and sized, and the
+    hash of that Plan the Pass is bound to (``tradeline.risk``)."""
+
+    run_id: uuid.UUID
+    rank: int
+    instrument: str
+    symbol: str
+    plan_hash: str
+    entry: Decimal
+    stop: Decimal
+    target: Decimal
+    time_stop_days: int
+    shares: int
+    # The sector the sector Limit read; ``unclassified`` when none was recorded.
+    sector: str
+    # Equity, the tick, the 20-day average traded value, and the shares each sizing
+    # Limit allowed.
+    facts: dict[str, Decimal]
+
+
+@dataclass(frozen=True)
+class LedgerBlock:
+    """The Risk Engine's Block of one Plan, naming the Limit, with the Plan as far as it
+    was priced and sized."""
+
+    run_id: uuid.UUID
+    rank: int
+    instrument: str
+    symbol: str
+    limit: str
+    entry: Decimal
+    stop: Decimal
+    target: Decimal
+    time_stop_days: int
+    shares: int
+    sector: str
+    facts: dict[str, Decimal]
+
+
+@dataclass(frozen=True)
+class LedgerVerdict:
+    run_id: uuid.UUID
+    rank: int
+    instrument: str
+    symbol: str
+    # BUY or SKIP (WAIT and EXIT are later phases').
+    verdict: str
+    # ``pass``, or the Limit that Blocked the Plan.
+    reason: str
+
+
+def passes(conn: psycopg.Connection, run_id: uuid.UUID) -> list[LedgerPass]:
+    """A Run's Passes, in Plan order."""
+    rows = conn.execute(
+        "SELECT x.run_id, x.rank, p.instrument, p.symbol, x.plan_hash, x.entry, x.stop,"
+        " x.target, x.time_stop_days, x.shares, x.sector, x.facts"
+        " FROM passes x JOIN plans p USING (mode, run_id, rank)"
+        " WHERE x.run_id = %s ORDER BY x.rank",
+        (run_id,),
+    ).fetchall()
+    return [LedgerPass(*_with_facts(row)) for row in rows]
+
+
+def blocks(conn: psycopg.Connection, run_id: uuid.UUID) -> list[LedgerBlock]:
+    """A Run's Blocks, in Plan order."""
+    rows = conn.execute(
+        "SELECT x.run_id, x.rank, p.instrument, p.symbol, x.limit_name, x.entry, x.stop,"
+        " x.target, x.time_stop_days, x.shares, x.sector, x.facts"
+        " FROM blocks x JOIN plans p USING (mode, run_id, rank)"
+        " WHERE x.run_id = %s ORDER BY x.rank",
+        (run_id,),
+    ).fetchall()
+    return [LedgerBlock(*_with_facts(row)) for row in rows]
+
+
+def _with_facts(row: tuple[Any, ...]) -> list[Any]:
+    """A row whose last column is a jsonb of Decimal strings, read as Decimals."""
+    return [*row[:-1], _decimals(row[-1])]
+
+
+def verdicts(conn: psycopg.Connection, run_id: uuid.UUID) -> list[LedgerVerdict]:
+    """A Run's Verdicts, one per Candidate, best rank first."""
+    rows = conn.execute(
+        "SELECT v.run_id, v.rank, c.instrument, c.symbol, v.verdict, v.reason"
+        " FROM verdicts v JOIN candidates c USING (mode, run_id, rank)"
+        " WHERE v.run_id = %s ORDER BY v.rank",
+        (run_id,),
+    ).fetchall()
+    return [LedgerVerdict(*row) for row in rows]
+
+
+# An account is one mode's Orders, Fills and Positions: a backtest's (mode backtest and its
+# id), the paper or the live account (no backtest id), or the paper dry-run's (paper, marked
+# ``dry_run``, #80). ``day`` and ``seq`` order every event of an account across the three
+# tables.
+
+
+class Account(TypedDict):
+    """What names an account, as the account reads take it."""
+
+    mode: EngineMode
+    backtest_id: uuid.UUID | None
+    dry_run: bool
+
+
+@dataclass(frozen=True)
+class LedgerOrder:
+    """One Order: its terms, when it was placed, and how it ended: a Fill, a cancellation,
+    or neither yet (open)."""
+
+    id: uuid.UUID
+    run_id: uuid.UUID
+    # The Pass's rank, for an entry.
+    rank: int | None
+    position_id: uuid.UUID
+    instrument: str
+    symbol: str
+    side: str
+    # ``entry``, ``target``, ``stop``, ``time`` or ``boundary``.
+    purpose: OrderPurpose
+    limit_price: Decimal
+    shares: int
+    # The trading day it can fill on.
+    session: date
+    placed: tuple[date, int]
+    cancelled: tuple[date, int] | None
+    cancel_reason: str | None
+    filled: tuple[date, int] | None
+    fill_price: Decimal | None
+
+    @property
+    def status(self) -> str:
+        if self.filled is not None:
+            return "filled"
+        return "open" if self.cancelled is None else "cancelled"
+
+
+@dataclass(frozen=True)
+class LedgerFill:
+    order_id: uuid.UUID
+    day: date
+    seq: int
+    position_id: uuid.UUID
+    instrument: str
+    symbol: str
+    side: str
+    price: Decimal
+    shares: int
+    # Its costs beyond the price, itemised; None for a Fill written before #78.
+    charges: Charges | None = None
+
+    @property
+    def cash_flow(self) -> Decimal:
+        """What the Fill moved into the account's cash: the sale's value less its charges,
+        or less the purchase's value and its charges."""
+        value = self.price * self.shares
+        costs = Decimal(0) if self.charges is None else self.charges.total
+        return value - costs if self.side == "sell" else -value - costs
+
+
+@dataclass(frozen=True)
+class LedgerPosition:
+    """A Position as it stands: open, or closed with its exit's price and reason."""
+
+    id: uuid.UUID
+    run_id: uuid.UUID
+    rank: int
+    instrument: str
+    symbol: str
+    opened_on: date
+    shares: int
+    entry: Decimal
+    stop: Decimal
+    target: Decimal
+    time_stop_days: int
+    # The day of its latest event: the day it closed, once closed.
+    as_of: date
+    # ``stop``, ``target``, ``time`` or ``boundary``; None while open.
+    exit_reason: ExitReason | None
+    exit_price: Decimal | None
+
+    @property
+    def closed_on(self) -> date | None:
+        return None if self.exit_reason is None else self.as_of
+
+
+def orders(
+    conn: psycopg.Connection,
+    *,
+    mode: EngineMode,
+    backtest_id: uuid.UUID | None,
+    dry_run: bool = False,
+    open_only: bool = False,
+) -> list[LedgerOrder]:
+    """An account's Orders in the order they were placed; only those neither filled nor
+    cancelled when ``open_only``."""
+    rows = conn.execute(
+        "SELECT p.id, p.run_id, p.rank, p.position_id, p.instrument, p.symbol, p.side,"
+        " p.purpose, p.limit_price, p.shares, p.session, p.day, p.seq, c.day, c.seq, c.reason,"
+        " f.day, f.seq, f.price"
+        " FROM orders p"
+        " LEFT JOIN orders c ON (c.mode, c.id, c.event) = (p.mode, p.id, 'cancelled')"
+        " LEFT JOIN fills f ON (f.mode, f.order_id) = (p.mode, p.id)"
+        " WHERE p.event = 'placed' AND p.mode = %(mode)s"
+        " AND p.backtest_id IS NOT DISTINCT FROM %(backtest_id)s AND p.dry_run = %(dry_run)s"
+        " AND (NOT %(open_only)s OR (c.id IS NULL AND f.order_id IS NULL))"
+        " ORDER BY p.day, p.seq",
+        {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run, "open_only": open_only},
+    ).fetchall()
+    return [
+        LedgerOrder(
+            id=row[0],
+            run_id=row[1],
+            rank=row[2],
+            position_id=row[3],
+            instrument=row[4],
+            symbol=row[5],
+            side=row[6],
+            purpose=row[7],
+            limit_price=row[8],
+            shares=row[9],
+            session=row[10],
+            placed=(row[11], row[12]),
+            cancelled=None if row[13] is None else (row[13], row[14]),
+            cancel_reason=row[15],
+            filled=None if row[16] is None else (row[16], row[17]),
+            fill_price=row[18],
+        )
+        for row in rows
+    ]
+
+
+def fills(
+    conn: psycopg.Connection,
+    *,
+    mode: EngineMode,
+    backtest_id: uuid.UUID | None,
+    dry_run: bool = False,
+) -> list[LedgerFill]:
+    """An account's Fills in the order they happened."""
+    rows = conn.execute(
+        "SELECT order_id, day, seq, position_id, instrument, symbol, side, price, shares, "
+        + ", ".join(_CHARGE_COLUMNS)
+        + " FROM fills WHERE mode = %(mode)s"
+        " AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s AND dry_run = %(dry_run)s"
+        " ORDER BY day, seq",
+        {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
+    ).fetchall()
+    return [_ledger_fill(row) for row in rows]
+
+
+def _ledger_fill(row: tuple[Any, ...]) -> LedgerFill:
+    order_id, day, seq, position_id, instrument, symbol, side, price, shares = row[:9]
+    charges = None if row[9] is None else Charges(*row[9:])
+    return LedgerFill(
+        order_id, day, seq, position_id, instrument, symbol, side, price, shares, charges
+    )
+
+
+_CHARGE_COLUMNS = tuple(f.name for f in dataclasses.fields(Charges))
+
+
+def positions(
+    conn: psycopg.Connection,
+    *,
+    mode: EngineMode,
+    backtest_id: uuid.UUID | None,
+    dry_run: bool = False,
+    open_only: bool = False,
+) -> list[LedgerPosition]:
+    """An account's Positions as they stand (the ``current_positions`` view), in the order
+    they opened; only the open ones when ``open_only``."""
+    # The ``current_positions`` view, read for the one account: filtered before DISTINCT ON,
+    # so a query reads that account's events and not every account's.
+    rows = conn.execute(
+        "SELECT position_id, run_id, rank, instrument, symbol, opened_on, shares, entry, stop,"
+        " target, time_stop_days, day, exit_reason, exit_price FROM ("
+        "  SELECT DISTINCT ON (position_id) * FROM positions"
+        "  WHERE mode = %(mode)s AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s"
+        "  AND dry_run = %(dry_run)s"
+        "  ORDER BY position_id, day DESC, seq DESC) p"
+        " WHERE NOT %(open_only)s OR event <> 'closed'"
+        " ORDER BY opened_on, symbol, position_id",
+        {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run, "open_only": open_only},
+    ).fetchall()
+    return [LedgerPosition(*row) for row in rows]
+
+
+@dataclass(frozen=True)
+class LedgerPositionEvent:
+    """One event of a Position, with its state after it: ``opened``, ``restated`` on a split
+    or bonus Ex-Date, or ``closed``."""
+
+    position_id: uuid.UUID
+    event: str
+    day: date
+    seq: int
+    instrument: str
+    symbol: str
+    shares: int
+    entry: Decimal
+    stop: Decimal
+    target: Decimal
+    # A restatement's Adjustment Factor and the cash paid for a fractional share.
+    factor: Fraction | None
+    cash_in_lieu: Decimal | None
+    exit_price: Decimal | None
+    exit_reason: ExitReason | None
+
+
+def position_events(
+    conn: psycopg.Connection,
+    *,
+    mode: EngineMode,
+    backtest_id: uuid.UUID | None,
+    dry_run: bool = False,
+) -> list[LedgerPositionEvent]:
+    """Every event of an account's Positions, in the order they happened."""
+    rows = conn.execute(
+        "SELECT position_id, event, day, seq, instrument, symbol, shares, entry, stop, target,"
+        " factor, cash_in_lieu, exit_price, exit_reason FROM positions"
+        " WHERE mode = %(mode)s AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s"
+        " AND dry_run = %(dry_run)s ORDER BY day, seq",
+        {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
+    ).fetchall()
+    return [
+        LedgerPositionEvent(
+            position_id=row[0],
+            event=row[1],
+            day=row[2],
+            seq=row[3],
+            instrument=row[4],
+            symbol=row[5],
+            shares=row[6],
+            entry=row[7],
+            stop=row[8],
+            target=row[9],
+            factor=None if row[10] is None else Fraction(row[10]),
+            cash_in_lieu=row[11],
+            exit_price=row[12],
+            exit_reason=row[13],
+        )
+        for row in rows
+    ]
+
+
+def account_cash_flows(
+    conn: psycopg.Connection,
+    *,
+    mode: EngineMode,
+    backtest_id: uuid.UUID | None,
+    dry_run: bool = False,
+) -> Decimal:
+    """The net cash an account's Fills and restatements moved: every sale's value less its
+    charges, every purchase's value and its charges taken away, plus cash paid in lieu of
+    fractional shares. An account's cash is its starting Equity plus this."""
+    charges = " + ".join(f"coalesce({c}, 0)" for c in _CHARGE_COLUMNS)
+    row = conn.execute(
+        "SELECT coalesce((SELECT sum(CASE side WHEN 'sell' THEN price * shares"
+        " ELSE -price * shares END - (" + charges + ")) FROM fills"
+        " WHERE mode = %(mode)s AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s"
+        " AND dry_run = %(dry_run)s), 0)"
+        " + coalesce((SELECT sum(cash_in_lieu) FROM positions"
+        " WHERE mode = %(mode)s AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s"
+        " AND dry_run = %(dry_run)s), 0)",
+        {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
+    ).fetchone()
+    assert row is not None
+    found: Decimal = row[0]
+    return found
+
+
+def paper_gate_trades(conn: psycopg.Connection) -> list[LedgerPosition]:
+    """The paper trades the Paper Gate counts (ADR 0015): the paper account's closed
+    Positions, in the order they opened. A paper dry-run's (#80) are never among them."""
+    return [
+        p
+        for p in positions(conn, mode="paper", backtest_id=None, dry_run=False)
+        if p.closed_on is not None
+    ]
+
+
+@dataclass(frozen=True)
+class FrozenProtocol:
+    """A Protocol in the Ledger: its key, when it was frozen, and what it states."""
+
+    hash: str
+    frozen_at: datetime
+    protocol: Protocol
+
+
+# The shortest prefix of a Protocol's hash that names it.
+PROTOCOL_PREFIX = 12
+
+
+def protocols(conn: psycopg.Connection) -> list[FrozenProtocol]:
+    """Every frozen Protocol, in the order frozen."""
+    rows = conn.execute(
+        "SELECT hash, frozen_at, content FROM protocols ORDER BY frozen_at, hash"
+    ).fetchall()
+    return [FrozenProtocol(h, at, Protocol.from_content(json.loads(c))) for h, at, c in rows]
+
+
+def protocol(conn: psycopg.Connection, name: str) -> FrozenProtocol | None:
+    """The frozen Protocol whose hash is ``name``, or starts with it (at least 12 hex
+    characters); None if no Protocol has it. A prefix two Protocols share is refused."""
+    if len(name) < PROTOCOL_PREFIX:
+        raise ValueError(
+            f"a Protocol is named by at least {PROTOCOL_PREFIX} characters of its hash,"
+            f" not {name!r}"
+        )
+    rows = conn.execute(
+        "SELECT hash, frozen_at, content FROM protocols WHERE starts_with(hash, %s)"
+        " ORDER BY hash LIMIT 2",
+        (name.lower(),),
+    ).fetchall()
+    if len(rows) > 1:
+        raise ValueError(f"{name} names more than one Protocol; give more of its hash")
+    if not rows:
+        return None
+    ((found, frozen_at, content),) = rows
+    return FrozenProtocol(found, frozen_at, Protocol.from_content(json.loads(content)))
+
+
+# --- Walk-Forward (#82) -------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class WalkForward:
+    """A Protocol's Walk-Forward: the backtest id its Stitched Curve is written under."""
+
+    protocol: str
+    backtest_id: uuid.UUID
+    started_at: datetime
+
+
+@dataclass(frozen=True)
+class WalkForwardCell:
+    """One grid cell's In-Sample run in a Window, kept as a summary only."""
+
+    protocol: str
+    window: int
+    parameters: dict[str, str]
+    runs: int
+    trades: int
+    sharpe: Decimal | None
+    max_drawdown: Decimal
+    ending_equity: Decimal
+
+
+@dataclass(frozen=True)
+class WalkForwardWindow:
+    """One Window's selection and its out-of-sample result on the Stitched Curve.
+    ``parameters`` and the in-sample figures are None when no cell was eligible."""
+
+    protocol: str
+    window: int
+    cells: int
+    eligible_cells: int
+    parameters: dict[str, str] | None
+    objective: Decimal | None
+    in_sample_sharpe: Decimal | None
+    in_sample_trades: int | None
+    out_of_sample_runs: int
+    out_of_sample_trades: int
+    start_equity: Decimal | None
+    end_equity: Decimal | None
+    # When the Window was recorded: the end of its Out-of-Sample stretch's writing.
+    recorded_at: datetime | None = None
+
+
+def walk_forward(conn: psycopg.Connection, protocol: str) -> WalkForward | None:
+    """The Walk-Forward under the Protocol whose full hash is ``protocol``, if one started."""
+    row = conn.execute(
+        "SELECT protocol, backtest_id, started_at FROM walk_forwards WHERE protocol = %s",
+        (protocol,),
+    ).fetchone()
+    return None if row is None else WalkForward(*row)
+
+
+def walk_forward_cells(
+    conn: psycopg.Connection, protocol: str, *, window: int | None = None
+) -> list[WalkForwardCell]:
+    """The grid cells run under the Protocol, in a Window if one is named, in the order
+    recorded."""
+    rows = conn.execute(
+        "SELECT protocol, window_number, parameters, runs, trades, sharpe, max_drawdown,"
+        " ending_equity FROM walk_forward_cells WHERE protocol = %s"
+        " AND (%s::integer IS NULL OR window_number = %s)"
+        " ORDER BY window_number, recorded_at, parameters",
+        (protocol, window, window),
+    ).fetchall()
+    return [WalkForwardCell(*row) for row in rows]
+
+
+def walk_forward_windows(conn: psycopg.Connection, protocol: str) -> list[WalkForwardWindow]:
+    """The Windows the Walk-Forward under the Protocol has finished, in order."""
+    rows = conn.execute(
+        "SELECT protocol, window_number, cells, eligible_cells, parameters, objective,"
+        " in_sample_sharpe, in_sample_trades, out_of_sample_runs, out_of_sample_trades,"
+        " start_equity, end_equity, recorded_at FROM walk_forward_windows WHERE protocol = %s"
+        " ORDER BY window_number",
+        (protocol,),
+    ).fetchall()
+    return [WalkForwardWindow(*row) for row in rows]
+
+
+# --- The Holdout (#83) --------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class HoldoutAttempt:
+    """One request by a Strategy version (its Protocol) to run the Holdout: ``ran``, with
+    the account it ran in, its parameters, whether it consumed the family's Holdout and the
+    earlier runs whose data has been corrected since; or ``refused``, with the reason.
+    ``consumes`` and ``independent`` are None for a refusal."""
+
+    id: uuid.UUID
+    protocol: str
+    family: str
+    attempted_at: datetime
+    outcome: str
+    backtest_id: uuid.UUID | None
+    parameters: dict[str, str] | None
+    consumes: bool | None
+    corrected_since: tuple[uuid.UUID, ...]
+    independent: bool | None
+    reason: str | None
+
+
+def holdout_attempts(
+    conn: psycopg.Connection, *, protocol: str | None = None, family: str | None = None
+) -> list[HoldoutAttempt]:
+    """Holdout attempts, under the Protocol whose full hash is ``protocol`` or in the Strategy
+    Family ``family`` when named, in the order made."""
+    rows = conn.execute(
+        "SELECT id, protocol, family, attempted_at, outcome, backtest_id, parameters, consumes,"
+        " corrected_since, independent, reason FROM holdout_attempts"
+        " WHERE (%(protocol)s::text IS NULL OR protocol = %(protocol)s)"
+        " AND (%(family)s::text IS NULL OR family = %(family)s)"
+        " ORDER BY attempted_at, id",
+        {"protocol": protocol, "family": family},
+    ).fetchall()
+    return [
+        HoldoutAttempt(
+            id=row[0],
+            protocol=row[1],
+            family=row[2],
+            attempted_at=row[3],
+            outcome=row[4],
+            backtest_id=row[5],
+            parameters=row[6],
+            consumes=row[7],
+            corrected_since=tuple(row[8] or ()),
+            independent=row[9],
+            reason=row[10],
+        )
+        for row in rows
+    ]
+
+
+@dataclass(frozen=True)
+class FreshPeriodRun:
+    """A Not Independent version's Fresh Period account: from ``first``, at the parameters
+    its Holdout ran at, in the account ``backtest_id`` (its Runs are the Ledger's)."""
+
+    protocol: str
+    backtest_id: uuid.UUID
+    first: date
+    parameters: dict[str, str]
+    started_at: datetime
+
+
+def fresh_period_run(conn: psycopg.Connection, protocol: str) -> FreshPeriodRun | None:
+    """The Fresh Period account of the version under the Protocol whose full hash is
+    ``protocol``, if one was started."""
+    row = conn.execute(
+        "SELECT protocol, backtest_id, first, parameters, started_at FROM fresh_periods"
+        " WHERE protocol = %s",
+        (protocol,),
+    ).fetchone()
+    return None if row is None else FreshPeriodRun(*row)
+
+
+@dataclass(frozen=True)
+class LineageVersion:
+    """A Strategy version in a lineage: its Protocol, Strategy and code revision, when it was
+    frozen, and its Holdout run, if it has one."""
+
+    protocol: str
+    name: str
+    code_revision: str
+    frozen_at: datetime
+    holdout: HoldoutAttempt | None
+
+
+@dataclass(frozen=True)
+class FamilyLineage:
+    """A Strategy Family's versions, in the order frozen, and the Protocol whose Holdout run
+    consumed the family's Holdout (None while none has run)."""
+
+    family: str
+    versions: tuple[LineageVersion, ...]
+    consumed_by: str | None
+
+
+@dataclass(frozen=True)
+class Lineage:
+    """A version's lineage (ADR 0007): its own family's versions, and every other family with
+    a version frozen before it, the ones it was frozen beside, each with those versions. The
+    family is the one its Protocol states, recorded when it was frozen, so a version
+    relabelled as a new family shows the family it was frozen beside."""
+
+    protocol: str
+    frozen_at: datetime
+    family: FamilyLineage
+    beside: tuple[FamilyLineage, ...]
+
+
+def lineage(conn: psycopg.Connection, protocol: str) -> Lineage:
+    """The lineage of the version under the Protocol whose full hash is ``protocol``."""
+    frozen = protocols(conn)
+    own = next((p for p in frozen if p.hash == protocol), None)
+    if own is None:
+        raise ValueError(f"no Protocol {protocol} is frozen")
+    attempts = [a for a in holdout_attempts(conn) if a.outcome == "ran"]
+    ran = {a.protocol: a for a in attempts}
+
+    def family(name: str, versions: list[FrozenProtocol]) -> FamilyLineage:
+        consumer = [a.protocol for a in attempts if a.family == name and a.consumes]
+        return FamilyLineage(
+            name,
+            tuple(
+                LineageVersion(
+                    v.hash, v.protocol.name, v.protocol.code_revision, v.frozen_at, ran.get(v.hash)
+                )
+                for v in versions
+            ),
+            consumer[0] if consumer else None,
+        )
+
+    name = own.protocol.family
+    earlier = [p for p in frozen if (p.frozen_at, p.hash) < (own.frozen_at, own.hash)]
+    beside = sorted({p.protocol.family for p in earlier} - {name})
+    return Lineage(
+        protocol,
+        own.frozen_at,
+        family(name, [p for p in frozen if p.protocol.family == name]),
+        tuple(family(f, [p for p in earlier if p.protocol.family == f]) for f in beside),
+    )
+
+
+# --- The Backtest Gate (#84) --------------------------------------------------
+
+
+@dataclass(frozen=True)
+class GateEvaluation:
+    """One evaluation of the Backtest Gate on a Protocol's Stitched Curve and Holdout run,
+    with what it read: the Protocol's thresholds, each curve's metrics (exact decimal
+    strings, None where the curve gives none), the Holdout run's standing, every check, and
+    how many real contract notes the cost model was checked against."""
+
+    id: uuid.UUID
+    gate: str
+    protocol: str
+    evaluated_at: datetime
+    stitched_backtest_id: uuid.UUID
+    holdout_attempt: uuid.UUID
+    thresholds: dict[str, Any]
+    inputs: dict[str, Any]
+    standing: dict[str, Any]
+    checks: list[dict[str, Any]]
+    contract_notes: int
+    outcome: str
+    reason: str
+
+
+def gate_evaluations(conn: psycopg.Connection, *, protocol: str) -> list[GateEvaluation]:
+    """The Backtest Gate's evaluations under the Protocol whose full hash is ``protocol``, in
+    the order made."""
+    rows = conn.execute(
+        "SELECT id, gate, protocol, evaluated_at, stitched_backtest_id, holdout_attempt,"
+        " thresholds, inputs, standing, checks, contract_notes, outcome, reason"
+        " FROM gate_evaluations WHERE protocol = %s ORDER BY evaluated_at, id",
+        (protocol,),
+    ).fetchall()
+    return [GateEvaluation(*row) for row in rows]
+
+
+@dataclass(frozen=True)
+class CostSensitivity:
+    """A Protocol's Stitched Curve or Holdout run again with the Slippage impact c at
+    ``impact``, in the account ``backtest_id``: information, never a Protocol result."""
+
+    protocol: str
+    curve: str
+    impact: Decimal
+    backtest_id: uuid.UUID
+    started_at: datetime
+
+
+def cost_sensitivities(conn: psycopg.Connection, protocol: str) -> list[CostSensitivity]:
+    """The c sensitivity accounts under the Protocol whose full hash is ``protocol``, by
+    impact, the Stitched Curve before the Holdout."""
+    rows = conn.execute(
+        "SELECT protocol, curve, impact, backtest_id, started_at FROM cost_sensitivities"
+        " WHERE protocol = %s ORDER BY impact, curve DESC",
+        (protocol,),
+    ).fetchall()
+    return [CostSensitivity(*row) for row in rows]

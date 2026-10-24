@@ -10,20 +10,30 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
+from tradeline import revision
+from tradeline import universe as universe_service
 from tradeline.cited_actions import load_cited_actions
 from tradeline.collect import collect_daily as collect_daily_service
 from tradeline.compare_adjusted import compare_adjusted as compare_adjusted_service
 from tradeline.config import Config, default_config_path, load_config
 from tradeline.conformance import check_conformance
+from tradeline.costs import CostModel, load_contract_notes, load_cost_schedule
 from tradeline.dates import IST, month_end, month_of, next_month, parse_month
 from tradeline.db import NotAppRoleMember, app_connection, connect
+from tradeline.engine import WallClock
+from tradeline.engine import backtest as backtest_service
+from tradeline.engine import paper as paper_service
 from tradeline.environment import Environment
+from tradeline.freeze import freeze_protocol
+from tradeline.holdout import run_fresh_period, run_holdout
 from tradeline.ingest.announcements import ingest_announcements
 from tradeline.ingest.candles import CurrentUniverse, ingest_candles
 from tradeline.ingest.cited_actions import ingest_cited_actions
@@ -39,7 +49,10 @@ from tradeline.login import login as login_service
 from tradeline.manual_links import load_manual_links
 from tradeline.migrations import PendingMigrations, UnreadableMigrations, apply_migrations
 from tradeline.parity import parity as parity_service
+from tradeline.protocol import window_boundaries, windows_text
+from tradeline.protocol_report import report_protocol
 from tradeline.rebuild_instruments import rebuild_instruments as rebuild_instruments_service
+from tradeline.report import report_backtest
 from tradeline.secrets import (
     DATABASE_URL,
     KITE_ACCESS_TOKEN,
@@ -56,14 +69,17 @@ from tradeline.sources.kite import (
     KiteSession,
     login_url,
 )
+from tradeline.strategy.pullback import PullbackV1
+from tradeline.tick_sizes import load_tick_sizes
+from tradeline.trading_calendar import load_trading_calendar
 from tradeline.transport import (
     PlaybackTransport,
     RecordingTransport,
     Transport,
     transport_for,
 )
-from tradeline.universe import compute_universe
 from tradeline.verify_universe import verify_universe as verify_universe_service
+from tradeline.walk_forward import walk_forward as walk_forward_service
 
 log = logging.getLogger(__name__)
 
@@ -356,8 +372,31 @@ def universe(ctx: Context, args: argparse.Namespace) -> int:
     ):
         month = args.month
         while month <= end:
-            compute_universe(conn, ctx.config.universe, month=month)
+            universe_service.compute_universe(conn, ctx.config.universe, month=month)
             month = next_month(month)
+    return 0
+
+
+def declare_rule_validity(ctx: Context, args: argparse.Namespace) -> int:
+    """Declare a Universe Rule version, the configured one by default, in force from a date."""
+    version = ctx.config.universe.version if args.rule_version is None else args.rule_version
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        universe_service.declare_rule_validity(
+            conn,
+            version,
+            in_force_from=args.in_force_from,
+            declared_at=datetime.now(IST),
+            rule=ctx.config.universe,
+        )
+    return 0
+
+
+def backfill_universe_builds(ctx: Context, args: argparse.Namespace) -> int:
+    """Give every stored Universe month without a build one, and list where each cutoff came
+    from."""
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = universe_service.backfill_universe_builds(conn)
+    log.info("backfill-universe-builds finished", extra=result.summary())
     return 0
 
 
@@ -457,13 +496,254 @@ def integrity(ctx: Context, args: argparse.Namespace) -> int:
     return 0 if report.passed else 1
 
 
+def protocol(ctx: Context, args: argparse.Namespace) -> int:
+    """``protocol freeze`` freezes the configured Protocol for ``pullback_v1`` with the data
+    snapshot read now, at this commit, and prints its Window boundaries; ``protocol
+    windows`` prints the boundaries the configuration gives, writing nothing, for the
+    Operator to check before freezing.
+
+    The boundaries go to stderr; the summary is the last JSON line on stdout.
+    """
+    calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
+    terms = ctx.config.protocol.terms()
+    if args.action == "windows":
+        windows, holdout = window_boundaries(terms.layout, calendar)
+        sys.stderr.write(windows_text(windows, holdout))
+        return 0
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = freeze_protocol(
+            conn,
+            terms,
+            strategy=PullbackV1(),
+            rule_version=ctx.config.universe.version,
+            limits=ctx.config.risk.limits(),
+            halts=ctx.config.risk.halts(),
+            schedule=load_cost_schedule(Path(ctx.config.costs.schedule)),
+            slippage=ctx.config.costs.slippage(),
+            calendar=calendar,
+            commit=revision.running_commit(),
+        )
+    sys.stderr.write(result.text())
+    log.info("protocol freeze finished", extra=result.summary())
+    return 0
+
+
+def run(ctx: Context, args: argparse.Namespace) -> int:
+    """One Run of ``pullback_v1``, written to the Ledger with a Verdict on each Candidate. In
+    backtest mode it is a backtest of the day ``--date`` under the Protocol ``--protocol``
+    names. In paper mode it is the paper dry-run's day on the wall clock (today in IST, or
+    ``--date``) over what ``collect-daily`` loaded, under the configured Universe Rule and
+    Limits: the Orders the dry run placed the day before fill against the day's end-of-day
+    bar first, and each Fill is priced on its own day's rates unless ``--costs-as-of`` names
+    a date."""
+    calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
+    tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
+    if args.mode == "backtest" and args.day is None:
+        raise ValueError("run --mode backtest needs --date")
+    clock = WallClock(day=args.day)
+    (day,) = clock.days()
+    with _scope(day, day), app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        if args.mode == "paper":
+            # The same starting Equity and band a Protocol freezes from the configuration.
+            terms = ctx.config.protocol.terms()
+            costs = CostModel(
+                load_cost_schedule(Path(ctx.config.costs.schedule)),
+                ctx.config.costs.slippage(),
+                rates_as_of=args.costs_as_of,
+            )
+            result = paper_service(
+                conn,
+                PullbackV1(),
+                clock=clock,
+                calendar=calendar,
+                rule_version=ctx.config.universe.version,
+                limits=ctx.config.risk.limits(),
+                tick_sizes=tick_sizes,
+                costs=costs,
+                starting_equity=terms.starting_equity,
+                band=terms.band,
+            )
+        else:
+            (result,) = backtest_service(
+                conn,
+                PullbackV1(),
+                protocol=args.protocol,
+                start=day,
+                end=day,
+                calendar=calendar,
+                tick_sizes=tick_sizes,
+            )
+    log.info("run finished", extra=result.summary())
+    return 0
+
+
+def backtest(ctx: Context, args: argparse.Namespace) -> int:
+    """A backtest of ``pullback_v1`` at fixed parameters from ``--from`` to ``--to``: one Run a
+    trading day under the Protocol ``--protocol`` names (its Universe Rule, Limits and
+    costs), the Paper Broker filling each day's Orders against the next day's bar.
+    Without ``--from``, the whole Protocol: Walk-Forward over its Windows, resumed where
+    an interrupted run stopped, its report's JSON written to ``--out`` if given.
+    ``backtest report`` reports the Protocol (or one cell)."""
+    if args.backtest_command == "report":
+        return backtest_report(ctx, args)
+    if args.backtest_command == "holdout":
+        return holdout(ctx, args)
+    if args.backtest_command == "fresh":
+        return fresh_period(ctx, args)
+    if args.start is None:
+        return walk_forward(ctx, args)
+    end = args.end or args.start
+    calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
+    tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
+    strategy = PullbackV1(k=Decimal(args.k), r=Decimal(args.r), n=args.n)
+    with _scope(args.start, end), app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        results = backtest_service(
+            conn,
+            strategy,
+            protocol=args.protocol,
+            start=args.start,
+            end=end,
+            calendar=calendar,
+            tick_sizes=tick_sizes,
+        )
+    log.info(
+        "backtest finished",
+        extra={
+            "backtest_id": str(results[0].backtest_id),
+            "protocol": args.protocol,
+            "parameters": dict(strategy.parameters()),
+            "runs": len(results),
+            "passes": sum(r.passes for r in results),
+            "fills": sum(r.fills for r in results),
+            "open_positions": results[-1].open_positions,
+            "equity": str(results[-1].equity),
+        },
+    )
+    return 0
+
+
+def walk_forward(ctx: Context, args: argparse.Namespace) -> int:
+    """Walk-Forward over the Protocol ``--protocol`` names, for ``pullback_v1``."""
+    if args.end is not None:
+        raise ValueError("--to needs --from; without either, backtest runs the whole Protocol")
+    calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
+    tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = walk_forward_service(
+            conn, _pullback, protocol=args.protocol, calendar=calendar, tick_sizes=tick_sizes
+        )
+    if args.out is not None:
+        args.out.write_text(result.report.text())
+    log.info("walk-forward finished", extra=result.summary())
+    return 0
+
+
+def holdout(ctx: Context, args: argparse.Namespace) -> int:
+    """The Holdout of the Protocol ``--protocol`` names, once its Walk-Forward has finished:
+    run once per version, a second run refused and recorded (ADR 0007)."""
+    calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
+    tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = run_holdout(
+            conn, _pullback, protocol=args.protocol, calendar=calendar, tick_sizes=tick_sizes
+        )
+    log.info("holdout finished", extra=result.summary())
+    return 0
+
+
+def fresh_period(ctx: Context, args: argparse.Namespace) -> int:
+    """The Fresh Period of the version the Protocol ``--protocol`` names, whose Holdout run
+    is Not Independent: its Holdout's parameters in a fresh account over the trading days
+    after the Holdout and the freeze, to the last day with data (ADR 0007)."""
+    calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
+    tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = run_fresh_period(
+            conn, _pullback, protocol=args.protocol, calendar=calendar, tick_sizes=tick_sizes
+        )
+    log.info("fresh period finished", extra=result.summary())
+    return 0
+
+
+def _pullback(parameters: Mapping[str, Decimal]) -> PullbackV1:
+    """``pullback_v1`` at a cell's parameters."""
+    return PullbackV1(k=parameters["k"], r=parameters["r"], n=int(parameters["n"]))
+
+
+def backtest_report(ctx: Context, args: argparse.Namespace) -> int:
+    """The single-run report: the cell backtested from ``--from`` to ``--to`` under the
+    Protocol ``--protocol`` names, and again with its Slippage impact at zero and at twice
+    its value, scored and written as JSON to ``--out``. Without ``--from``, the full report
+    on the Protocol (``protocol_report``)."""
+    if args.start is None:
+        return protocol_report(ctx, args)
+    if args.markdown is not None:
+        raise ValueError("--markdown is the full report's; leave out --from to write it")
+    end = args.end or args.start
+    calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
+    tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
+    strategy = PullbackV1(k=Decimal(args.k), r=Decimal(args.r), n=args.n)
+    notes = load_contract_notes(Path(ctx.config.costs.contract_notes))
+    with _scope(args.start, end), app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = report_backtest(
+            conn,
+            strategy,
+            protocol=args.protocol,
+            start=args.start,
+            end=end,
+            calendar=calendar,
+            tick_sizes=tick_sizes,
+            contract_notes=len(notes),
+        )
+    args.out.write_text(result.report.text())
+    log.info("backtest report finished", extra={**result.summary(), "out": str(args.out)})
+    return 0
+
+
+def protocol_report(ctx: Context, args: argparse.Namespace) -> int:
+    """The full report on the Protocol ``--protocol`` names, once its Walk-Forward and Holdout
+    have run: the c sensitivity written if missing, the Backtest Gate evaluated and recorded,
+    the report's JSON written to ``--out`` and its Markdown to ``--markdown`` if given."""
+    if args.end is not None:
+        raise ValueError("--to needs --from; without either, the report is the whole Protocol's")
+    calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
+    tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
+    notes = load_contract_notes(Path(ctx.config.costs.contract_notes))
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = report_protocol(
+            conn,
+            _pullback,
+            protocol=args.protocol,
+            calendar=calendar,
+            tick_sizes=tick_sizes,
+            contract_notes=len(notes),
+        )
+    args.out.write_text(result.report.text())
+    if args.markdown is not None:
+        args.markdown.write_text(result.report.markdown())
+    log.info("backtest report finished", extra={**result.summary(), "out": str(args.out)})
+    return 0
+
+
 Command = Callable[[Context, argparse.Namespace], int]
+
+# The frozen Protocol a backtest runs under.
+PROTOCOL: tuple[tuple[str, ...], dict[str, Any]] = (
+    ("--protocol",),
+    {
+        "metavar": "HASH",
+        "default": None,
+        "help": "the frozen Protocol to run under: its hash, or 12 or more characters of it",
+    },
+)
 
 COMMANDS: dict[str, Command] = {
     "migrate": migrate,
     "login": login,
     "ingest": ingest,
     "universe": universe,
+    "declare-rule-validity": declare_rule_validity,
+    "backfill-universe-builds": backfill_universe_builds,
     "parity": parity,
     "compare-adjusted": compare_adjusted,
     "sectors": sectors,
@@ -473,6 +753,9 @@ COMMANDS: dict[str, Command] = {
     "check-universe": check_universe,
     "collect-daily": collect_daily,
     "integrity": integrity,
+    "protocol": protocol,
+    "run": run,
+    "backtest": backtest,
 }
 
 
@@ -615,6 +898,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="the last month; defaults to --month",
     )
 
+    validity_parser = subparsers.add_parser(
+        "declare-rule-validity",
+        help="declare a Universe Rule version the rule in force from a date (Rule Validity);"
+        " append-only, a later declaration supersedes from its own date",
+    )
+    validity_parser.add_argument(
+        "--in-force-from", metavar="DATE", type=date.fromisoformat, required=True
+    )
+    validity_parser.add_argument(
+        "--rule-version",
+        metavar="VERSION",
+        help="a recorded version or a unique prefix of one; defaults to the configured rule's",
+    )
+    subparsers.add_parser(
+        "backfill-universe-builds",
+        help="record a build for every stored Universe month without one, from the ingest run"
+        " history, or marked cutoff-inferred where the history does not cover its window",
+    )
+
     subparsers.add_parser(
         "sectors",
         parents=[fixtures],
@@ -713,6 +1015,110 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[date_range],
         help="check NSE's end-of-day files against the Trading Calendar, never a broker;"
         " exit 1 unless every check passes",
+    )
+    run_parser = subparsers.add_parser(
+        "run",
+        help="one Run of the Strategy as of a day over stored data, written to the Ledger",
+    )
+    run_parser.add_argument("--mode", choices=["backtest", "paper"], required=True)
+    run_parser.add_argument(
+        "--date",
+        dest="day",
+        metavar="DATE",
+        type=date.fromisoformat,
+        default=None,
+        help="the Run's day: required in backtest mode; in paper mode today in IST by default",
+    )
+    run_parser.add_argument(*PROTOCOL[0], **PROTOCOL[1])
+    run_parser.add_argument(
+        "--costs-as-of",
+        metavar="DATE",
+        type=date.fromisoformat,
+        default=None,
+        help="paper mode: price every Fill on the cost schedule in force on DATE (default each"
+        " Fill's own day); a backtest's date is its Protocol's",
+    )
+    # One cell: the Strategy at fixed parameters, under a frozen Protocol.
+    cell = argparse.ArgumentParser(add_help=False)
+    defaults = PullbackV1()
+    cell.add_argument(
+        "--k", default=str(defaults.k), help="stop distance in ATRs (default %(default)s)"
+    )
+    cell.add_argument(
+        "--r", default=str(defaults.r), help="target in multiples of the risk (default %(default)s)"
+    )
+    cell.add_argument(
+        "--n", type=int, default=defaults.n, help="time stop in trading days (default %(default)s)"
+    )
+    cell.add_argument(*PROTOCOL[0], **PROTOCOL[1])
+    backtest_parser = subparsers.add_parser(
+        "backtest",
+        parents=[cell],
+        help="backtest the Strategy at fixed parameters over stored data, one Run a trading"
+        " day, written to the Ledger with its Orders, Fills and Positions",
+    )
+    # Not required here, so ``backtest report --from`` parses; ``backtest`` refuses its absence.
+    backtest_parser.add_argument("--from", dest="start", metavar="DATE", type=date.fromisoformat)
+    backtest_parser.add_argument(
+        "--to", dest="end", metavar="DATE", type=date.fromisoformat, help="inclusive"
+    )
+    backtest_parser.add_argument(
+        "--out",
+        metavar="FILE",
+        type=Path,
+        help="without --from (the whole Protocol): where the Walk-Forward report's JSON is written",
+    )
+    reports = backtest_parser.add_subparsers(dest="backtest_command")
+    report_parser = reports.add_parser(
+        "report",
+        parents=[cell],
+        help="the full report: evaluate and record the Backtest Gate on the Protocol's"
+        " Stitched Curve and Holdout, with the c sensitivity, and write its JSON and Markdown;"
+        " with --from, backtest one cell and again with c at zero and at twice its value",
+    )
+    report_parser.add_argument(
+        "--from",
+        dest="start",
+        metavar="DATE",
+        type=date.fromisoformat,
+        help="report one cell from DATE instead of the whole Protocol",
+    )
+    report_parser.add_argument(
+        "--to", dest="end", metavar="DATE", type=date.fromisoformat, help="inclusive"
+    )
+    report_parser.add_argument(
+        "--out", metavar="FILE", type=Path, required=True, help="where the JSON is written"
+    )
+    report_parser.add_argument(
+        "--markdown",
+        metavar="FILE",
+        type=Path,
+        help="the full report: where its Markdown is written",
+    )
+    holdout_parser = reports.add_parser(
+        "holdout",
+        help="run the Protocol's Holdout once, after its Walk-Forward, under the last Window's"
+        " parameters; a second run by the same version is refused and recorded",
+    )
+    holdout_parser.add_argument(*PROTOCOL[0], **PROTOCOL[1])
+    fresh_parser = reports.add_parser(
+        "fresh",
+        help="run a Not Independent version's Fresh Period under its Holdout's parameters,"
+        " from a fresh account to the last day with data, for the Backtest Gate to score",
+    )
+    fresh_parser.add_argument(*PROTOCOL[0], **PROTOCOL[1])
+    protocol_parser = subparsers.add_parser(
+        "protocol", help="the Protocol a Strategy version is validated under (ADR 0007)"
+    )
+    protocol_actions = protocol_parser.add_subparsers(dest="action", required=True)
+    protocol_actions.add_parser(
+        "freeze",
+        help="freeze the configured Protocol with the data snapshot and the cost schedule as of"
+        " now, at this commit, and print its Window boundaries as trading days",
+    )
+    protocol_actions.add_parser(
+        "windows",
+        help="print the configured Window boundaries as trading days, writing nothing",
     )
     return parser
 

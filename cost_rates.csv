@@ -1,0 +1,43 @@
+# The cost of an equity delivery trade at Zerodha on NSE, dated (#72, #78).
+#
+# Every row is reviewed like code and cites where the rate is published.
+# `tradeline.costs` reads this file; its location is `costs.schedule` in
+# tradeline.toml. A rate is in force from `in_force_from` (a trade date) until
+# the charge's next row. `charge` is one of:
+#
+#   stt          Securities Transaction Tax, a fraction of value, buy and sell
+#   stamp_duty   a fraction of value, buy only
+#   exchange     NSE's transaction charge, a fraction of value, buy and sell
+#   sebi         SEBI's turnover fee, a fraction of value (Rs 10 a crore = 0.000001)
+#   gst          a fraction of the exchange and SEBI charges and of the DP charge
+#   dp_charge    rupees per scrip per sell day, before GST (CDSL's fee and Zerodha's)
+#
+# Brokerage on delivery is zero throughout and has no row.
+#
+# The file starts on 2023-04-01, the first date every rate below can be cited
+# for. A trade before it is refused rather than priced on a rate nobody checked;
+# add the earlier rates with their citations to price one.
+#
+# Zerodha's bulletins are at https://zerodha.com/marketintel/bulletin/<id>/, its
+# charges page at https://zerodha.com/charges/ (read 2026-10-24: STT 0.1% on buy
+# and sell, NSE 0.00307%, GST 18% on brokerage, SEBI and transaction charges,
+# SEBI Rs 10 / crore, stamp 0.015% on the buy side, DP Rs 15.34 = Rs 3.5 CDSL +
+# Rs 9.5 Zerodha + Rs 2.34 GST, per scrip on sell).
+in_force_from,charge,rate,citation
+# Finance Act 2013: STT on delivery 0.1% each side from 2013-06-01; unchanged since (Zerodha charges page).
+2023-04-01,stt,0.001,Finance Act 2013; zerodha.com/charges
+# Indian Stamp Act as amended by Finance Act 2019, from 2020-07-01: 0.015% on the buy side.
+2023-04-01,stamp_duty,0.00015,Indian Stamp Act 1899 as amended by Finance Act 2019; zerodha.com/charges
+# NSE cut the cash market charge by Rs 20 a crore, 0.00345% to 0.00325%, from 2023-04-01.
+2023-04-01,exchange,0.0000325,NSE/FA/56129; Zerodha bulletin 347967
+2023-04-01,sebi,0.000001,zerodha.com/charges (SEBI turnover fee Rs 10 / crore)
+2023-04-01,gst,0.18,CGST Act 2017 (18% on financial services); zerodha.com/charges
+# Rs 13.5 + GST (Rs 5.5 CDSL + Rs 8 Zerodha), reduced to Rs 13 from 2024-06-01.
+2023-04-01,dp_charge,13.5,tradingqna.com/t/165314 (Zerodha reply of 2024-05-13)
+2024-04-01,exchange,0.0000322,NSE's 1% cut from 2024-04-01; Zerodha bulletin 373933
+2024-06-01,dp_charge,13,tradingqna.com/t/165314 (Zerodha reply of 2024-05-13)
+# SEBI's uniform charges for market infrastructure institutions (true to label).
+2024-10-01,exchange,0.0000297,Zerodha bulletin 391488
+# NSE rolled back its 2023 IPFT contribution and revised transaction charges from
+# 2026-03-01; Zerodha's charges page lists 0.00307% (its calculator: 0.00297% + 0.0001% IPFT).
+2026-03-01,exchange,0.0000307,NSE/FA/73061; zerodha.com/charges

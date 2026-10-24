@@ -487,6 +487,37 @@ def test_universe_computes_each_month_under_the_configured_rule_and_logs_it(
     assert len(str(computed[0]["rule_version"])) == 64
 
 
+def test_the_operator_declares_the_configured_rule_in_force_and_backfills_month_builds(
+    fresh_database_url: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = tmp_path / "tradeline.toml"
+    config.write_text(
+        "[universe]\ntop_n = 3\nlookback_trading_days = 20\nmin_listing_trading_days = 21\n"
+    )
+    monkeypatch.setenv("TRADELINE_CONFIG", str(config))
+    monkeypatch.setenv("DATABASE_URL", fresh_database_url)
+
+    assert main(["declare-rule-validity", "--in-force-from", "2026-11-01"]) == 0
+    (declared,) = [
+        line
+        for line in json_lines(capsys.readouterr().out)
+        if line["msg"] == "rule validity declared"
+    ]
+    assert declared["in_force_from"] == "2026-11-01"
+    assert len(str(declared["rule_version"])) == 64
+
+    assert main(["declare-rule-validity", "--in-force-from", "2026-11-01", "--rule-version", "zz"])
+    assert "not recorded" in str(json_lines(capsys.readouterr().out)[-1]["msg"])
+
+    assert main(["backfill-universe-builds"]) == 0
+    finished = json_lines(capsys.readouterr().out)[-1]
+    assert finished["msg"] == "backfill-universe-builds finished"
+    assert (finished["from_history"], finished["cutoff_inferred"]) == ([], [])
+
+
 def test_check_universe_prints_the_conformance_check_and_fails_on_a_failing_month(
     database_url: str,
     tmp_path: Path,

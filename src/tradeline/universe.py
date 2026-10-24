@@ -46,6 +46,16 @@ Instrument's key. The Instruments must be rebuilt over the whole window first:
 a month whose window has a row in an equity listing series that no Instrument
 holds is refused, never ranked without it. Rows stored under a rule that
 ranks Symbols are left as they are; that rule's version is unchanged.
+
+Each month stored is recorded with its build (ADR 0005, 2026-10-24
+amendment): the window's first day and Data Cutoff, the end-of-day ingest runs
+and Instruments rebuild it read, and SHA-256 hashes of the window's rows and
+Instrument intervals, so a later re-ingest that changed an input is detected.
+A rerun compares the inputs it reads now with the build and reports those that
+differ, keeping the build as it keeps the membership. Months stored before
+builds were recorded get theirs from ``backfill_universe_builds``. Whether a
+month is a Recorded or a Reconstructed Universe follows from the Operator's
+Rule Validity declarations (``declare_rule_validity``).
 """
 
 from __future__ import annotations
@@ -53,16 +63,18 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 
 import psycopg
 from psycopg.types.json import Jsonb
 
 from tradeline import queries
 from tradeline.config import UniverseRule
+from tradeline.ingest.eod import SOURCE_EOD
 from tradeline.instruments import LISTING_SERIES
+from tradeline.rebuild_instruments import SOURCE as SOURCE_INSTRUMENTS
 
 log = logging.getLogger(__name__)
 
@@ -85,6 +97,13 @@ class UniverseResult:
     # Stored members whose Instrument key a later rebuild retired; not a difference
     # when the key now current is the recomputed member's.
     obsolete: tuple[queries.ObsoleteUniverseKey, ...] = ()
+    # What the stored membership was built from (ADR 0005); None for a month
+    # stored before builds were recorded and not yet backfilled.
+    build: queries.UniverseMonthBuild | None = None
+    # True when this run stored the membership and so recorded its build.
+    build_written: bool = False
+    # The inputs (``_BUILD_INPUTS``) read now that differ from the recorded build's.
+    build_differences: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -182,6 +201,14 @@ def compute_universe(
                     "obsolete_keys": {o.stored_key: o.current_key for o in obsolete},
                 },
             )
+    build, build_written, build_differences = _record_build(
+        conn,
+        month=month,
+        rule_version=rule.version,
+        window_start=window_start,
+        data_cutoff=window_end,
+        fresh=not stored,
+    )
     conn.commit()
     log.info(
         "universe computed",
@@ -193,6 +220,8 @@ def compute_universe(
             "eligible": len(eligible),
             "members": len(members),
             "rows_written": rows_written,
+            "build_written": build_written,
+            "build_differences": list(build_differences),
         },
     )
     return UniverseResult(
@@ -204,6 +233,9 @@ def compute_universe(
         rows_written=rows_written,
         anomaly=anomaly,
         obsolete=obsolete,
+        build=build,
+        build_written=build_written,
+        build_differences=build_differences,
     )
 
 
@@ -268,7 +300,7 @@ def eligibility(
     theirs and not the whole window's. A key with no row in the rule's series
     in the window is left out.
     """
-    window = _window(conn, rule, month)
+    window = _window(conn, rule.lookback_trading_days, month)
     if rule.rank_by == "instrument":
         candidates = _instrument_candidates(conn, rule, month, window[0], only=keys)
     else:
@@ -279,7 +311,7 @@ def eligibility(
 def _rank(
     conn: psycopg.Connection, rule: UniverseRule, month: date
 ) -> tuple[date, date, list[Standing]]:
-    window = _window(conn, rule, month)
+    window = _window(conn, rule.lookback_trading_days, month)
     if rule.rank_by == "instrument":
         candidates = _instrument_candidates(conn, rule, month, window[0])
     else:
@@ -300,18 +332,18 @@ def _rank(
     return window[0], window[-1], ranked
 
 
-def _window(conn: psycopg.Connection, rule: UniverseRule, month: date) -> list[date]:
+def _window(conn: psycopg.Connection, lookback_trading_days: int, month: date) -> list[date]:
     days = [
         day
         for (day,) in conn.execute(
             "SELECT DISTINCT trade_date FROM eod_bhavcopy WHERE trade_date < %s"
             " ORDER BY trade_date DESC LIMIT %s",
-            (month, rule.lookback_trading_days),
+            (month, lookback_trading_days),
         ).fetchall()
     ]
-    if len(days) < rule.lookback_trading_days:
+    if len(days) < lookback_trading_days:
         raise ValueError(
-            f"the Universe for {month:%Y-%m} needs {rule.lookback_trading_days} trading days of"
+            f"the Universe for {month:%Y-%m} needs {lookback_trading_days} trading days of"
             f" end-of-day files before it and {len(days)} are loaded"
         )
     if month - days[0] > _MAX_GAP_BEFORE_MONTH:
@@ -460,12 +492,248 @@ def _excluded(rule: UniverseRule, candidate: _Candidate) -> Exclusion | None:
     return None
 
 
-def _record_rule_version(conn: psycopg.Connection, rule: UniverseRule) -> None:
+def _record_rule_version(
+    conn: psycopg.Connection, rule: UniverseRule, *, recorded_at: datetime | None = None
+) -> None:
     conn.execute(
         "INSERT INTO universe_rule_versions (version, parameters, recorded_at)"
-        " VALUES (%s, %s, now()) ON CONFLICT (version) DO NOTHING",
-        (rule.version, Jsonb(rule.parameters)),
+        " VALUES (%s, %s, coalesce(%s, now())) ON CONFLICT (version) DO NOTHING",
+        (rule.version, Jsonb(rule.parameters), recorded_at),
     )
+
+
+def declare_rule_validity(
+    conn: psycopg.Connection,
+    rule_version: str,
+    *,
+    in_force_from: date,
+    declared_at: datetime,
+    rule: UniverseRule | None = None,
+) -> queries.RuleValidity:
+    """Declare ``rule_version`` (or a unique prefix of it) the Universe Rule in force from
+    ``in_force_from``, as of ``declared_at`` (ADR 0005's Rule Validity).
+
+    A version must be recorded to be declared. ``rule``, the configured one, is
+    recorded first, at ``declared_at``, when it is the version named, so a rule
+    can be declared in force before any month is computed under it.
+    """
+    if declared_at.tzinfo is None:
+        raise ValueError(f"declared_at must carry a time zone, not {declared_at}")
+    if rule is not None and rule.version == rule_version:
+        _record_rule_version(conn, rule, recorded_at=declared_at)
+    versions = [
+        version
+        for (version,) in conn.execute(
+            "SELECT version FROM universe_rule_versions WHERE starts_with(version, %s)",
+            (rule_version,),
+        ).fetchall()
+    ]
+    if len(versions) != 1:
+        conn.rollback()
+        raise ValueError(
+            f"rule version {rule_version} is not recorded; compute a month under it first"
+            if not versions
+            else f"rule version {rule_version} names {len(versions)} versions; give more of it"
+        )
+    validity = queries.RuleValidity(versions[0], in_force_from, declared_at)
+    conn.execute(
+        "INSERT INTO universe_rule_validity (rule_version, in_force_from, declared_at)"
+        " VALUES (%s, %s, %s)",
+        (validity.rule_version, validity.in_force_from, validity.declared_at),
+    )
+    conn.commit()
+    log.info(
+        "rule validity declared",
+        extra={
+            "rule_version": validity.rule_version,
+            "in_force_from": in_force_from.isoformat(),
+            "declared_at": declared_at.isoformat(),
+        },
+    )
+    return validity
+
+
+# The fields of a build that say what it read; two builds of a month agreeing on
+# them read the same inputs.
+_BUILD_INPUTS = (
+    "window_start",
+    "data_cutoff",
+    "eod_run_ids",
+    "instruments_run_id",
+    "eod_hash",
+    "links_hash",
+)
+
+
+def _record_build(
+    conn: psycopg.Connection,
+    *,
+    month: date,
+    rule_version: str,
+    window_start: date,
+    data_cutoff: date,
+    fresh: bool,
+) -> tuple[queries.UniverseMonthBuild | None, bool, tuple[str, ...]]:
+    """The month's build, whether this run wrote it, and the inputs that differ from it now.
+
+    A build is written only with the membership it describes (``fresh``); one
+    already recorded is compared and kept. A month stored without one, before
+    builds were recorded, is left to ``backfill_universe_builds``.
+    """
+    current = _build_from(
+        conn,
+        month=month,
+        rule_version=rule_version,
+        window_start=window_start,
+        data_cutoff=data_cutoff,
+        cutoff_inferred=False,
+    )
+    stored = queries.universe_month_builds(conn, month=month, rule_version=rule_version)
+    if stored:
+        differences = tuple(
+            name for name in _BUILD_INPUTS if getattr(stored[0], name) != getattr(current, name)
+        )
+        if differences:
+            log.warning(
+                "universe month inputs differ from those its build recorded; the build is kept",
+                extra={
+                    "month": month.isoformat(),
+                    "rule_version": rule_version,
+                    "differences": list(differences),
+                },
+            )
+        return stored[0], False, differences
+    if not fresh:
+        log.warning(
+            "universe month was stored without a build; run `tradeline backfill-universe-builds`",
+            extra={"month": month.isoformat(), "rule_version": rule_version},
+        )
+        return None, False, ()
+    _insert_build(conn, current)
+    return current, True, ()
+
+
+def _build_from(
+    conn: psycopg.Connection,
+    *,
+    month: date,
+    rule_version: str,
+    window_start: date,
+    data_cutoff: date,
+    cutoff_inferred: bool,
+) -> queries.UniverseMonthBuild:
+    """The build of a month whose window is ``window_start`` to ``data_cutoff``, read now.
+
+    End-of-day rows carry no ingest run id, so the runs a window read are the
+    nse_eod runs that wrote rows over a range overlapping it.
+    """
+    run_ids = tuple(
+        run_id
+        for (run_id,) in conn.execute(
+            "SELECT id FROM ingest_runs WHERE source = %s AND rows_written > 0"
+            " AND range_start <= %s AND range_end >= %s ORDER BY started_at, id",
+            (SOURCE_EOD, data_cutoff, window_start),
+        ).fetchall()
+    )
+    rebuild = conn.execute(
+        "SELECT id FROM ingest_runs WHERE source = %s AND error IS NULL"
+        " ORDER BY started_at DESC, id LIMIT 1",
+        (SOURCE_INSTRUMENTS,),
+    ).fetchone()
+    eod_hash, links_hash = queries.universe_window_hashes(
+        conn, start=window_start, cutoff=data_cutoff
+    )
+    return queries.UniverseMonthBuild(
+        month=month,
+        rule_version=rule_version,
+        window_start=window_start,
+        data_cutoff=data_cutoff,
+        eod_run_ids=run_ids,
+        instruments_run_id=None if rebuild is None else rebuild[0],
+        eod_hash=eod_hash,
+        links_hash=links_hash,
+        cutoff_inferred=cutoff_inferred,
+        built_at=datetime.now(UTC),
+    )
+
+
+def _insert_build(conn: psycopg.Connection, build: queries.UniverseMonthBuild) -> None:
+    conn.execute(
+        "INSERT INTO universe_month_builds (month, rule_version, window_start, data_cutoff,"
+        " eod_run_ids, instruments_run_id, eod_hash, links_hash, cutoff_inferred, built_at)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (
+            build.month,
+            build.rule_version,
+            build.window_start,
+            build.data_cutoff,
+            list(build.eod_run_ids),
+            build.instruments_run_id,
+            build.eod_hash,
+            build.links_hash,
+            build.cutoff_inferred,
+            build.built_at,
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class BuildBackfill:
+    """The (month, rule version) pairs given a build, by where their cutoff came from."""
+
+    # Every day of the window lies in the range of a recorded nse_eod run.
+    from_history: tuple[tuple[date, str], ...]
+    # Some day of it does not, so the cutoff is read from the rows there now.
+    cutoff_inferred: tuple[tuple[date, str], ...]
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "from_history": [f"{m:%Y-%m} {v}" for m, v in self.from_history],
+            "cutoff_inferred": [f"{m:%Y-%m} {v}" for m, v in self.cutoff_inferred],
+        }
+
+
+def backfill_universe_builds(conn: psycopg.Connection) -> BuildBackfill:
+    """Give every stored month without a build one, from ``ingest_runs`` history.
+
+    The window is the version's lookback over the end-of-day rows there now,
+    as ``compute_universe`` reads it, and the hashes are of those rows. Each
+    build is committed as it is written, so an interrupted backfill resumes.
+    """
+    pending = conn.execute(
+        "SELECT DISTINCT m.month, m.rule_version, v.parameters FROM universe_membership m"
+        " JOIN universe_rule_versions v ON v.version = m.rule_version"
+        " WHERE NOT EXISTS (SELECT 1 FROM universe_month_builds b"
+        "  WHERE b.month = m.month AND b.rule_version = m.rule_version)"
+        " ORDER BY m.month, m.rule_version"
+    ).fetchall()
+    from_history: list[tuple[date, str]] = []
+    inferred: list[tuple[date, str]] = []
+    for month, rule_version, parameters in pending:
+        days = _window(conn, int(parameters["lookback_trading_days"]), month)
+        row = conn.execute(
+            "SELECT count(*) FROM unnest(%s::date[]) AS d (day) WHERE NOT EXISTS ("
+            " SELECT 1 FROM ingest_runs r WHERE r.source = %s AND r.rows_written > 0"
+            " AND d.day BETWEEN r.range_start AND r.range_end)",
+            (days, SOURCE_EOD),
+        ).fetchone()
+        uncovered = row is not None and row[0] > 0
+        _insert_build(
+            conn,
+            _build_from(
+                conn,
+                month=month,
+                rule_version=rule_version,
+                window_start=days[0],
+                data_cutoff=days[-1],
+                cutoff_inferred=uncovered,
+            ),
+        )
+        conn.commit()
+        (inferred if uncovered else from_history).append((month, rule_version))
+    result = BuildBackfill(tuple(from_history), tuple(inferred))
+    log.info("universe builds backfilled", extra=result.summary())
+    return result
 
 
 def _insert_members(conn: psycopg.Connection, members: tuple[queries.UniverseMember, ...]) -> int:

@@ -64,3 +64,56 @@ trading_calendar = "trading_calendar.csv"
 large_moves = "large_moves.csv"
 # A close more than this many times the previous close, either way, is a Large Move.
 large_move_ratio = 1.5
+
+# The Risk Engine's Limits (docs/risk-controls.md), fractions of Equity where
+# they are. Every Plan of a Run is checked against them in Plan order.
+[risk]
+risk_per_trade = 0.01       # Equity at risk at the stop
+max_open_positions = 8      # held Positions plus this Run's Passes
+max_position = 0.15         # notional at entry
+max_sector = 0.30           # NSE's sector; Unclassified counts as one
+max_gross = 1.0             # no leverage, ever
+participation_cap = 0.01    # of the 20-day average daily traded value
+min_order_value = 5000      # rupees
+max_new_entries = 4         # Passes per Run
+min_reward_to_risk = 1.5    # after rounding to the tick
+daily_loss_halt = 0.03      # of start-of-day Equity; a backtest reports the days, never Halts
+drawdown_halt = 0.10        # from the Equity peak; reported likewise
+# The checked-in dated table of NSE tick sizes, each band citing NSE's circular
+# (see the file's header).
+tick_sizes = "tick_sizes.csv"
+
+# The cost model (ADR 0003, docs/risk-controls.md): every Fill's charges and
+# Slippage, itemised in the Ledger.
+[costs]
+# The checked-in dated rate schedule, each rate citing where it is published
+# (see the file's header).
+schedule = "cost_rates.csv"
+# Real Zerodha contract notes the cost model is checked against; none yet.
+contract_notes = "contract_notes.csv"
+safety_margin = 0.0005      # Slippage per side, of the Order's value
+impact = 0.1                # c x (Order value / 20-day average daily traded value)
+
+# The Protocol (ADR 0007): how pullback_v1 is validated, frozen by
+# `tradeline protocol freeze` with the [risk] Limits and Halts, the [costs] Slippage, the
+# cost schedule as of the freeze, the Universe Rule version, the git commit and
+# the data snapshot. `tradeline protocol windows` prints the Window boundaries
+# as trading days to check before freezing. A change here is a new Protocol.
+[protocol]
+holdout_start = "2024-10"       # the Holdout, month-aligned, never extended
+holdout_months = 24
+windows = 5                     # Out-of-Sample Windows anchored back from the Holdout
+out_of_sample_months = 12       # October to September years
+in_sample_months = 24           # before each Out-of-Sample Window
+k = ["1.5", "2", "2.5", "3"]    # stop distance in ATRs, as exact decimals
+r = ["1.5", "2", "3"]           # target in multiples of the risk
+n = [5, 10, 15]                 # time stop in trading days
+min_in_sample_trades = 30       # fewer and a grid cell is ineligible
+starting_equity = 500000        # rupees, at the Stitched Curve, the Holdout and each In-Sample run
+risk_free_rate = 0.065          # a year, for Sharpe
+band = 0.05                     # a stop or time-stop exit's limit under the close
+warm_up_trading_days = 250      # before the first Window, also hashed in the data snapshot
+sharpe_above = 1.0              # the Backtest Gate, on the Stitched Curve and the Holdout
+drawdown_below = 0.15
+profit_factor_above = 1.3
+min_stitched_trades = 150

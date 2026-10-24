@@ -1,0 +1,36 @@
+# NSE's tick sizes for equities in the Capital Market segment, dated (#72).
+#
+# Every row is reviewed like code and cites the NSE circular that set it. Each
+# is at https://nsearchives.nseindia.com/content/circulars/<DEPT><NUMBER>.pdf,
+# for example NSE/CMTR/62174 at .../CMTR62174.pdf. `tradeline.tick_sizes` reads
+# this file; its location is `risk.tick_sizes` in tradeline.toml.
+#
+# A tick is in force from `in_force_from` (a trade date) until the next date in
+# the file, and replaces every band of the date before. A band is the security
+# price it covers: `from` is `>=N` or `>N` (empty: from zero), `to` is `<N` or
+# `<=N` (empty: no upper bound), as the circular writes them. Within one date
+# the bands cover every price exactly once.
+#
+# NSE/CMTR/62174 sets the price that picks a security's band: from 10 June
+# 2024 the close on the last trading day of the previous month (the latest
+# available close then), held for the month, and kept through a split, bonus,
+# dividend or rights issue until the next monthly review. Before that every
+# equity traded on one tick.
+#
+# 2015-01-01 is the start of the end-of-day data. NSE/CMTR/62174 states the
+# tick it replaced, Rs 0.05, as "the current tick size"; this file takes that
+# tick as in force for every equity from 2015 to 9 June 2024.
+in_force_from,from,to,tick,citation
+2015-01-01,,,0.05,NSE/CMTR/62174
+# NSE/CMTR/62174 (May 24, 2024): price-linked tick from the trade date of June 10,
+# 2024, set from the close of May 31, 2024.
+2024-06-10,,<250,0.01,NSE/CMTR/62174
+2024-06-10,>=250,,0.05,NSE/CMTR/62174
+# NSE/CMTR/67133 (March 13, 2025): coarser ticks above Rs 1,000 from the trade
+# date of April 15, 2025, set from the close of March 28, 2025.
+2025-04-15,,<250,0.01,NSE/CMTR/67133
+2025-04-15,>=250,<=1000,0.05,NSE/CMTR/67133
+2025-04-15,>1000,<=5000,0.10,NSE/CMTR/67133
+2025-04-15,>5000,<=10000,0.50,NSE/CMTR/67133
+2025-04-15,>10000,<=20000,1.00,NSE/CMTR/67133
+2025-04-15,>20000,,5.00,NSE/CMTR/67133

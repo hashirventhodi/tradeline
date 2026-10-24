@@ -47,8 +47,28 @@ An Instrument in the Universe that the Strategy's screen surfaced on a given Run
 _Avoid_: Signal, pick, idea, opportunity
 
 **Strategy**:
-A named, versioned rule set that turns market data into Candidates and Plans. A Strategy version is immutable once it has been run against the Holdout.
+A named, versioned rule set that turns market data into Candidates and Plans. A Strategy version is the Strategy's code revision run under one Protocol, and is immutable once it has been run against the Holdout.
 _Avoid_: Algo, system, model, bot
+
+**Strategy Family**:
+The named rule shape (`pullback`) that every version of a Strategy belongs to, recorded with each version so the lineage is visible. The Holdout is consumed once for the whole family.
+_Avoid_: Variant, lineage (the record of a family's versions, not the family)
+
+**Recorded Universe**:
+A month's Universe computed under a Universe Rule version that was in force and recorded before the month's first trading day: what the system itself knew then.
+_Avoid_: Live universe, original universe
+
+**Reconstructed Universe**:
+A month's Universe computed later, under a Universe Rule version chosen later, from inputs dated before the month began. Every backtest records which of the two each month it read was.
+_Avoid_: Backfilled universe, historical universe (both kinds are historical)
+
+**Rule Validity**:
+The date from which the Operator declares a Universe Rule version the rule in force, distinct from when the version was recorded.
+_Avoid_: Effective date, recorded_at
+
+**Data Cutoff**:
+The last end-of-day date a month's Universe was built from: the trading day before the month's first.
+_Avoid_: As-of (the As-Of Date is a query's date), snapshot date
 
 ### Analysis
 
@@ -81,6 +101,18 @@ _Avoid_: Signal, decision, call, recommendation
 One scheduled decision cycle over the whole Universe, producing Verdicts.
 _Avoid_: Tick, cycle, iteration, scan
 
+**Engine Mode**:
+Which clock and data source an engine run uses: backtest (a simulated clock over stored history), paper, or live. The Strategy, Risk Engine, sizing and cost model never differ by it.
+_Avoid_: Environment, profile
+
+**Backtest**:
+A run of the engine in backtest mode, each Run reading only what was known on its date.
+_Avoid_: Simulation, replay, test run
+
+**Equity**:
+Cash plus open Positions marked at the day's close; what sizing and the Limits are measured against.
+_Avoid_: Capital, account value, NAV
+
 **Shadow Mode**:
 The state in which the AI layer records what it would have done but has no effect on Verdicts.
 
@@ -91,8 +123,16 @@ The code-only component that checks every Plan against the Limits and issues a P
 _Avoid_: Risk manager, risk agent, guardrails
 
 **Limits**:
-The configured constraints the Risk Engine enforces: risk per trade, position count, position size, sector exposure, gross exposure, daily loss, and drawdown.
+The configured constraints the Risk Engine enforces: risk per trade, position count, position size, sector exposure, gross exposure, participation, daily loss, and drawdown.
 _Avoid_: Rules, guardrails, parameters
+
+**Participation Cap**:
+The Limit on an Order's value as a fraction of the Instrument's recent average daily traded value, so that a fill a backtest assumes is one the market could have given.
+_Avoid_: Liquidity limit, ADV cap, volume limit
+
+**Unclassified**:
+The sector of an Instrument with no recorded sector classification. The sector Limit applies to it like any other; in paper and live it means the sector map is stale.
+_Avoid_: Unknown, other, no sector
 
 **Pass**:
 The Risk Engine's signed approval of one specific Plan. A Pass is bound to that Plan and expires with the Run.
@@ -125,8 +165,24 @@ _Avoid_: Holding, trade
 The component that translates Orders into a broker's API calls and broker events back into Fills. The Paper Broker and the Kite Broker are both Broker Adapters.
 
 **Paper Broker**:
-The internal Broker Adapter that simulates Fills against real quotes with modelled slippage and the full Indian cost stack.
+The internal Broker Adapter that simulates Fills against real quotes with modelled slippage and the full Indian cost stack. In a Backtest its quotes are the historical opens.
 _Avoid_: Simulator, sandbox, demo account
+
+**Slippage**:
+The modelled cost beyond the fill price: a fixed safety margin on the Order's value (a limit Order filled in the pre-open auction crosses no spread) plus an impact term from the Order's value relative to the Instrument's average daily traded value.
+_Avoid_: Spread (there is none to cross), friction
+
+**Circuit Lock**:
+A day an Instrument's bar is pinned at its price band, open, high, low and close equal at the band, on which no Order fills.
+_Avoid_: Limit-down, limit-up, freeze
+
+**Gapped Stop**:
+A stop whose exit filled below it because the next open gapped past the exit's protective band, or the day was a Circuit Lock, so the trade lost more than its Plan risked.
+_Avoid_: Slippage (a modelled cost), overshoot, blown stop
+
+**Boundary Exit**:
+The forced close of every open Position at the last out-of-sample day's close, where the Stitched Curve ends and the Holdout begins. An exit with its own reason, never a stop or target.
+_Avoid_: Liquidation, end-of-period close
 
 **Approval**:
 The operator's explicit yes to one Order in live mode. Required for every live Order until the Autonomy Gate passes.
@@ -138,11 +194,31 @@ A measurable, configured rule that must pass before a Strategy or the AI layer a
 _Avoid_: Milestone, checkpoint, criteria
 
 **Holdout**:
-The most recent two years of data, locked and run exactly once per Strategy version.
+A fixed, locked two-year period that a Strategy Family runs exactly once, by its first version. A later version's run on it is Not Independent and cannot pass the Backtest Gate alone.
 _Avoid_: Test set, out-of-sample (ambiguous: walk-forward windows are also out of sample)
+
+**Not Independent**:
+A Holdout run by a later version of a family whose Holdout is already consumed. Recorded as such, and passes the Backtest Gate only together with a Fresh Period.
+_Avoid_: Invalid, tainted, contaminated
+
+**Fresh Period**:
+The trading days after both the consumed Holdout's end and a later Strategy version's Protocol freeze: data that version's design could not have used. It must be at least twelve months long to carry a Backtest Gate.
+_Avoid_: New holdout, extended holdout, forward test
 
 **Walk-Forward**:
 The validation protocol in which parameters are chosen on a rolling window and evaluated on the window that follows it.
+
+**Window**:
+One stretch of Walk-Forward: an In-Sample Window, on which parameters are chosen, and the Out-of-Sample Window after it, on which they are evaluated.
+_Avoid_: Fold, period, split
+
+**Stitched Curve**:
+The one Equity curve over every Out-of-Sample Window in order, as one continuous account with Positions carried across Window boundaries, that the Backtest Gate scores.
+_Avoid_: OOS curve, combined results, concatenated equity
+
+**Protocol**:
+The frozen statement of how a Strategy version is validated: its parameter grid, objective and tie-break, Window boundaries, cost and Slippage parameters, Gate thresholds, and the data it reads. Frozen before any run and never changed; a different Protocol is a new Strategy version.
+_Avoid_: Config, settings, backtest parameters, methodology
 
 **Expectancy**:
 Average profit per trade after all costs, in rupees or as a fraction of equity.

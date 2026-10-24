@@ -13,8 +13,15 @@ import json
 import os
 import tomllib
 from dataclasses import dataclass, field, fields
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Literal, get_args, get_origin, get_type_hints
+
+from tradeline.costs import Slippage
+from tradeline.dates import parse_month
+from tradeline.metrics import HaltLimits
+from tradeline.protocol import Gate, Layout, Terms
+from tradeline.risk import Limits
 
 CONFIG_PATH_VAR = "TRADELINE_CONFIG"
 DEFAULT_CONFIG_PATH = Path("tradeline.toml")
@@ -149,6 +156,133 @@ class Config:
         # (``tradeline.cited_actions``), relative to the working directory.
         cited: str = "cited_corporate_actions.csv"
 
+    @dataclass(frozen=True)
+    class Risk:
+        """The Limits of ``docs/risk-controls.md`` the Risk Engine enforces (``tradeline.risk``),
+        fractions of Equity where they are, and the tick table Plans are priced on."""
+
+        risk_per_trade: float = 0.01
+        max_open_positions: int = 8
+        max_position: float = 0.15
+        max_sector: float = 0.30
+        max_gross: float = 1.0
+        # Of the 20-day average daily traded value.
+        participation_cap: float = 0.01
+        # Rupees.
+        min_order_value: int = 5000
+        max_new_entries: int = 4
+        min_reward_to_risk: float = 1.5
+        # The Halts a backtest reports and never applies: a day's loss on the day before's
+        # Equity, and the fall from the Equity peak.
+        daily_loss_halt: float = 0.03
+        drawdown_halt: float = 0.10
+        # The checked-in dated table of NSE tick sizes (``tradeline.tick_sizes``),
+        # relative to the working directory.
+        tick_sizes: str = "tick_sizes.csv"
+
+        def limits(self) -> Limits:
+            return Limits(
+                risk_per_trade=Decimal(str(self.risk_per_trade)),
+                max_open_positions=self.max_open_positions,
+                max_position=Decimal(str(self.max_position)),
+                max_sector=Decimal(str(self.max_sector)),
+                max_gross=Decimal(str(self.max_gross)),
+                participation_cap=Decimal(str(self.participation_cap)),
+                min_order_value=Decimal(self.min_order_value),
+                max_new_entries=self.max_new_entries,
+                min_reward_to_risk=Decimal(str(self.min_reward_to_risk)),
+            )
+
+        def halts(self) -> HaltLimits:
+            return HaltLimits(
+                daily_loss=Decimal(str(self.daily_loss_halt)),
+                drawdown=Decimal(str(self.drawdown_halt)),
+            )
+
+    @dataclass(frozen=True)
+    class Costs:
+        """The cost model (``tradeline.costs``): the checked-in dated rate schedule, the real
+        contract notes it is checked against, and Slippage's parameters."""
+
+        # Relative to the working directory.
+        schedule: str = "cost_rates.csv"
+        contract_notes: str = "contract_notes.csv"
+        # Of the Order's value, per side.
+        safety_margin: float = 0.0005
+        # c in c x (Order value / 20-day average daily traded value).
+        impact: float = 0.1
+
+        def slippage(self) -> Slippage:
+            return Slippage(
+                margin=Decimal(str(self.safety_margin)), impact=Decimal(str(self.impact))
+            )
+
+    @dataclass(frozen=True)
+    class Protocol:
+        """What the Operator states in a Protocol (``tradeline.protocol``) beyond the Limits
+        and costs: the Windows, the grid, the objective's minimum trades, the band, the
+        starting Equity, the risk-free rate and the Gate thresholds (#72)."""
+
+        # The Holdout: from this month (YYYY-MM), this many months.
+        holdout_start: str = "2024-10"
+        holdout_months: int = 24
+        # Out-of-Sample Windows anchored back from the Holdout, each with its In-Sample
+        # Window before it.
+        windows: int = 5
+        out_of_sample_months: int = 12
+        in_sample_months: int = 24
+        # The grid, each value a decimal string so it is exact.
+        k: list[str] = field(default_factory=lambda: ["1.5", "2", "2.5", "3"])
+        r: list[str] = field(default_factory=lambda: ["1.5", "2", "3"])
+        n: list[int] = field(default_factory=lambda: [5, 10, 15])
+        # A cell with fewer in-sample trades is ineligible.
+        min_in_sample_trades: int = 30
+        # Rupees, at the start of the Stitched Curve, of the Holdout and of each In-Sample run.
+        starting_equity: int = 500000
+        # A year, for Sharpe's excess returns.
+        risk_free_rate: float = 0.065
+        # Under the close, the limit of a stop or time-stop exit.
+        band: float = 0.05
+        # Trading days before the first Window whose Adjusted Series is also hashed.
+        warm_up_trading_days: int = 250
+        # The Backtest Gate.
+        sharpe_above: float = 1.0
+        drawdown_below: float = 0.15
+        profit_factor_above: float = 1.3
+        min_stitched_trades: int = 150
+
+        def __post_init__(self) -> None:
+            try:
+                self.terms()
+            except (ValueError, InvalidOperation) as error:
+                raise ConfigError(f"protocol: {error}") from error
+
+        def terms(self) -> Terms:
+            def exact(values: list[str]) -> tuple[Decimal, ...]:
+                return tuple(Decimal(v) for v in values)
+
+            return Terms(
+                grid={"k": exact(self.k), "r": exact(self.r), "n": tuple(map(Decimal, self.n))},
+                min_in_sample_trades=self.min_in_sample_trades,
+                layout=Layout(
+                    holdout_start=parse_month(self.holdout_start),
+                    holdout_months=self.holdout_months,
+                    windows=self.windows,
+                    out_of_sample_months=self.out_of_sample_months,
+                    in_sample_months=self.in_sample_months,
+                ),
+                band=Decimal(str(self.band)),
+                starting_equity=Decimal(self.starting_equity),
+                risk_free_rate=Decimal(str(self.risk_free_rate)),
+                gate=Gate(
+                    sharpe_above=Decimal(str(self.sharpe_above)),
+                    drawdown_below=Decimal(str(self.drawdown_below)),
+                    profit_factor_above=Decimal(str(self.profit_factor_above)),
+                    min_stitched_trades=self.min_stitched_trades,
+                ),
+                warm_up_trading_days=self.warm_up_trading_days,
+            )
+
     logging: Logging = field(default_factory=Logging)
     universe: UniverseRule = field(default_factory=UniverseRule)
     parity: Parity = field(default_factory=Parity)
@@ -156,6 +290,9 @@ class Config:
     instruments: Instruments = field(default_factory=Instruments)
     corporate_actions: CorporateActions = field(default_factory=CorporateActions)
     integrity: Integrity = field(default_factory=Integrity)
+    risk: Risk = field(default_factory=Risk)
+    costs: Costs = field(default_factory=Costs)
+    protocol: Protocol = field(default_factory=Protocol)
 
     def __post_init__(self) -> None:
         # One Trading Calendar serves both checks (ADR 0018); two paths could drift apart.
@@ -217,6 +354,13 @@ def _build[T](cls: type[T], raw: dict[str, Any], *, prefix: str) -> T:
             if not isinstance(value, dict):
                 raise ConfigError(f"config key {prefix}{name} must be a table")
             values[name] = _build(expected, value, prefix=f"{prefix}{name}.")
+        elif get_origin(expected) is list:
+            (item,) = get_args(expected)
+            if not isinstance(value, list) or not all(
+                isinstance(v, item) and not isinstance(v, bool) for v in value
+            ):
+                raise ConfigError(f"config key {prefix}{name} must be a list of {item.__name__}")
+            values[name] = value
         elif get_origin(expected) is dict:
             values[name] = _string_table(value, prefix=f"{prefix}{name}", types=get_args(expected))
         elif get_origin(expected) is Literal:

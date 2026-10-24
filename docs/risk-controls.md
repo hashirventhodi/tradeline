@@ -11,6 +11,7 @@ All numbers are configuration with these defaults. The illustrative paper accoun
 | Max per Position | 15% of equity | notional at entry |
 | Max per sector | 30% of equity | NSE industry classification |
 | Max gross exposure | 100% of equity | no leverage, ever |
+| Participation Cap | 1% of the 20-day average daily traded value | Order value; keeps a backtest's fills ones the market could have given as capital grows |
 | Min Order value | ₹5,000 | avoids fee-dominated trades |
 | Daily loss halt | 3% of start-of-day equity | realised plus unrealised |
 | Drawdown halt | 10% from equity peak | triggers Halt and requires Operator review to clear |
@@ -21,11 +22,15 @@ All numbers are configuration with these defaults. The illustrative paper accoun
 | Short selling | off | long-only cash equities |
 | Derivatives | off | out of scope |
 
-Checks run in Plan order as if each Pass had filled, so Plans that are fine alone but breach together are caught.
+Checks run in Plan order as if each Pass had filled, so Plans that are fine alone but breach together are caught. The Strategy ranks its Plans deterministically (`pullback_v1`: 126-trading-day return descending, ties by Symbol), so the first Plans to Pass are the same on every run.
+
+The sector Limit reads NSE's classification as of the Run. A day before the first sector load reads the earliest load; an Instrument with none is in the Unclassified sector, which the 30% Limit applies to like any other. In paper and live, a Universe member in Unclassified raises a stale-sector-map alert.
 
 ## Sizing
 
-Shares = floor(equity × risk_per_trade / (entry − stop)), then reduced to satisfy per-Position, sector, and gross Limits. No fractional shares exist on NSE. If the result is below the minimum Order value the Plan is Blocked, not rounded up.
+Shares = floor(Equity × risk_per_trade / (entry − stop)), then reduced to satisfy per-Position, sector, gross and Participation Cap Limits. No fractional shares exist on NSE. If the result is below the minimum Order value the Plan is Blocked, not rounded up. Equity is cash plus open Positions at the day's close. Stop, target and shares round down to the tick in force that day (a dated table of NSE tick sizes), and the minimum reward to risk is re-checked after rounding.
+
+The table is `tick_sizes.csv`, each row citing NSE's circular. It follows the circulars rather than #72's summary of ticks: 5 paisa for every equity to 2024-06-09; from 2024-06-10, 1 paisa below Rs 250 (NSE/CMTR/62174); from 2025-04-15, inside the Holdout, also 10 paisa above Rs 1,000, 50 paisa above Rs 5,000, Re 1 above Rs 10,000 and Rs 5 above Rs 20,000 (NSE/CMTR/67133), bands the summary leaves out. A security's band is picked by its latest close on or before the previous month's end, as NSE fixes it monthly.
 
 ## Cost model (Indian equity delivery, zero-brokerage broker)
 
@@ -36,14 +41,18 @@ Shares = floor(equity × risk_per_trade / (entry − stop)), then reduced to sat
 | Exchange transaction charge | about 0.003% of value, both sides |
 | SEBI turnover fee | ₹10 per crore |
 | GST | 18% on brokerage plus exchange and SEBI charges |
-| DP charge | about ₹16 per scrip per sell day |
-| Slippage | half the quoted spread plus an impact term from Order value relative to average daily traded value |
+| DP charge | about ₹16 per scrip per sell day, GST included |
+| Slippage | a 5 basis point safety margin on value per side, plus an impact term c × (Order value / 20-day average daily traded value) |
 
-A round trip on a liquid large cap costs roughly 0.3% of value before slippage. Every backtest and paper result is after these costs.
+Rates are a dated schedule, each with the date it came into force, checked against the broker's published charges when a Protocol is frozen. A backtest applies the schedule as of its Protocol's freeze to every trade, since the question is whether the Strategy clears the costs it will pay from now on; a contract note is checked against the rates in force on its own date. The safety margin is not a spread: entries and exits are limit Orders filled in the pre-open auction, which cross none. A round trip on a liquid large cap costs roughly 0.3% of value before slippage. Every backtest and paper result is after these costs; a backtest report also states its results with c at zero and at twice its value.
+
+The schedule is `cost_rates.csv` (`[costs]` in `tradeline.toml`), each rate citing where it is published, from 2023-04-01, the first date every rate could be cited for; a trade before it is refused. STT and stamp duty round to the rupee and the other charges to the paisa, per Fill, as Zerodha's calculator rounds. c is `[costs] impact` (0.1), and a Protocol freezes it with the safety margin and the schedule's rates, so every backtest under the Protocol prices with the c it states; paper prices with the configured c. Real contract notes go in `contract_notes.csv`, each a test against the rates on its trade date; none has been supplied.
 
 ## Halt
 
 Triggered by the Operator or by the daily loss or drawdown Limit. Cancels pending Orders, blocks new entries, keeps managing exits. Cleared by the Operator after review; a drawdown Halt also requires a written note in the Ledger.
+
+A backtest never Halts: both Halts need the Operator to clear them, and a backtest has no honest way to simulate that decision. It reports every day either Limit would have fired, with the drawdown at that point, beside the Gate outcome.
 
 ## Flatten
 
@@ -55,4 +64,6 @@ Off by default. Turned on by editing server configuration, not from any UI. Requ
 
 ## Gates
 
-See ADR 0015. Backtest Gate: OOS Sharpe > 1.0 after costs, max drawdown < 15%, ≥ 150 trades, profit factor > 1.3. Paper Gate: 90 trading days, Expectancy within 30% of backtest, slippage within model, zero Limit breaches. Live Gate and Autonomy Gate: 90 days each with the same checks. AI Promotion Gate: ≥ 200 shadow decisions, vetoed trades show significantly lower Expectancy than kept trades (p < 0.05), confidence calibrated.
+See ADR 0015. Backtest Gate: Sharpe > 1.0 after costs, max drawdown < 15% and profit factor > 1.3 on both the Stitched Curve and the Holdout; ≥ 150 trades on the Stitched Curve, the Holdout's count reported. Sharpe is the mean of the Equity curve's daily excess returns over the Protocol's risk-free rate (default 6.5% a year; idle cash earns nothing), over their standard deviation, times √252. Max drawdown is the largest peak-to-trough fall of the daily marked curve. Profit factor is gross profit of winning trades over gross loss of losers, after costs. Profit factor with winning trades and no losing one is unbounded (∞ in the report) and clears its threshold; with no closed trade it is not established and fails, as Sharpe does on a curve whose returns do not vary. Every curve starts at the starting Equity, so the first day's return counts. Expectancy is mean net rupee P&L per closed trade, also as a fraction of Equity at entry.
+
+The full report (`tradeline backtest report --protocol P`) writes JSON and Markdown. The JSON holds no backtest id and no timing, so two runs of one Protocol over the same data write byte-identical JSON; the runtime of each stage (the Ledger's first write to its last, pauses included) is in the Markdown only. Paper Gate: 90 trading days, Expectancy within 30% of backtest, slippage within model, zero Limit breaches. Live Gate and Autonomy Gate: 90 days each with the same checks. AI Promotion Gate: ≥ 200 shadow decisions, vetoed trades show significantly lower Expectancy than kept trades (p < 0.05), confidence calibrated.

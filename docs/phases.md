@@ -76,6 +76,26 @@ Accept when:
 - Backtest trades carry the same schema as live trades.
 - Historical Universe reconstruction is designed and built per the ADR 0005 amendment: recorded versus reconstructed mode, rule validity period, and data cutoff are distinct and stored; every backtest records the rule version, data provenance, and mode it used; an unversioned query for a date with no valid version never falls back to today's Universe.
 
+### Revisions
+
+**#72, 2026-10-24, grilled before the build.** The Build line gains the Risk Engine, and the acceptance criteria are restated so each is checkable. Build: event-driven engine with a simulated clock, one set of Ledger tables tagged by Engine Mode (ADR 0019), Strategy interface and `pullback_v1`, Risk Engine with Limits, sizing, Pass and Block, cost model for Indian delivery with a dated rate schedule, Paper Broker fill model against historical opens (ADR 0003 amendment), Universe reconstruction (ADR 0005 amendment), the Protocol, Walk-Forward and Holdout (ADR 0007 amendment), Backtest Gate evaluation, backtest report.
+
+Accept when:
+
+- The same Strategy object runs in backtest mode and in a paper dry-run (`tradeline run --mode paper`, one Run over the data `collect-daily` loaded, filled next day against the end-of-day open) with no code branches on mode: the same day run in both modes yields identical Candidates, Plans, Passes, Blocks and Verdicts.
+- A Run reads the Adjusted Series and the Universe only as of its own date: a test adds a bar and a Corporate Action dated after a Run's day and the Run is unchanged.
+- The Risk Engine never issues a Pass for a Plan that breaches any single Limit, shown by a property-based test over generated portfolios and Plans; five Plans that pass alone but breach gross exposure together produce exactly the right Blocks; a Pass bound to a Plan is rejected by the Paper Broker if any Plan field changes. (Moved from Phase 3.)
+- The cost model reproduces hand-computed round trips from the dated rate schedule to the rupee, with trades before and after 2024-10, as its stated check. No real Zerodha contract note is available to the build; when the Operator supplies one, it is added as a test against the rates in force on its trade date, and the acceptance run says whether any was.
+- A Protocol is frozen in the Ledger before any run, and the engine refuses a backtest naming none. Its Window boundaries are generated from the Trading Calendar and printed for independent checking before the freeze.
+- Walk-Forward over the five Windows runs end to end and writes every Window's chosen parameters, in-sample trade count and out-of-sample result to the Ledger. One two-year backtest of one grid cell finishes in under 3 minutes and the whole Protocol in under 4 hours, measured alone on the laptop with the Compose Postgres, resumable per cell.
+- The Holdout lock is enforced: a second run of the same Strategy version on the Holdout is refused and recorded as an attempt. A later version of the family is recorded as Not Independent and cannot pass the Backtest Gate without a Fresh Period of at least twelve months.
+- The Backtest Gate is evaluated and reported honestly, pass or fail: Sharpe above 1.0 over the Protocol's risk-free rate, drawdown under 15 percent and profit factor above 1.3 on both the Stitched Curve and the Holdout; at least 150 trades on the Stitched Curve, the Holdout's count reported. Either failing fails. A failing result is an acceptable phase outcome and is documented as such.
+- The report lists every Gapped Stop with its realised loss, every day a daily-loss or drawdown Halt would have fired (near the top, beside the Gate outcome), results with the impact coefficient at zero and at twice its value, the mode of every Universe month read, and the family lineage.
+- Backtest trades carry the same schema as live trades: there is one set of tables, and the mode is a column (ADR 0019).
+- Historical Universe reconstruction is built per the ADR 0005 amendment: Rule Validity is declared by the Operator, mode is derived, each month build stores its Data Cutoff, ingest run ids and content hash, and a backtest verifies the hashes of the months it reads before running.
+
+The grilling's other decisions (the Strategy's exact rule, the grid, the fill model, Equity, metric definitions, sectors in a backtest) are in #72 and the ADR amendments it names.
+
 ## Phase 3: Risk Engine, Paper Broker on live data, Ledger, scheduler
 
 Build: Limits and Risk Engine with Pass and Block, Halt and Flatten, Paper Broker against live Kite quotes, scheduled daily Run, Session Login flow with Data-Only Mode, Ledger completeness.
@@ -87,6 +107,10 @@ Accept when:
 - Halt cancels pending Orders and blocks entries while exits still execute, demonstrated in an integration test over a simulated week.
 - Twenty consecutive trading days of paper Runs complete on schedule with zero missed Runs and zero unexplained gaps in the Ledger.
 - A missed Session Login produces a Data-Only day with no Orders and an alert.
+
+### Revisions
+
+**#72, 2026-10-24.** The Risk Engine's Limits, sizing, Pass and Block moved to Phase 2, since a backtest without them measures a portfolio live would never hold. The first three acceptance lines above (the property-based test, the sequential Blocks, the Pass bound to its Plan) are Phase 2's now. Phase 3 keeps Halt and Flatten, the daily-loss and drawdown Halts (a backtest reports the days they would have fired and never simulates them, since every Halt needs the Operator to clear it), the Paper Broker against live Kite quotes, the scheduled Run, Session Login and Data-Only Mode, and Ledger completeness. A member of the Universe in the Unclassified sector raises a stale-sector-map alert in paper and live.
 
 ## Phase 4: AI layer in Shadow Mode
 

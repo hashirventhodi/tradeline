@@ -64,7 +64,7 @@ This system has no demonstrated edge. The baseline strategy is a well-known pull
 | [docs/phases.md](docs/phases.md) | Six build phases, each with checkable acceptance criteria |
 | [docs/risk-controls.md](docs/risk-controls.md) | Limits and defaults, sizing, cost model, Halt and Flatten, gates |
 | [docs/research.md](docs/research.md) | What has been demonstrated, what is feasible, India-specific facts, costs, sources |
-| [docs/adr/](docs/adr/) | Fifteen architecture decision records, each with the alternatives rejected |
+| [docs/adr/](docs/adr/) | The architecture decision records, each with the alternatives rejected |
 
 ## The design in ten lines
 
