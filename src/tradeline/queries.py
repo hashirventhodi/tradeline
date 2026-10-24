@@ -2046,14 +2046,23 @@ def orders(
     open_only: bool = False,
 ) -> list[LedgerOrder]:
     """An account's Orders in the order they were placed; only those neither filled nor
-    cancelled when ``open_only``."""
+    cancelled when ``open_only``.
+
+    Each placed Order's cancellation and Fill are looked up by its key (the laterals,
+    kept from being flattened into joins by ``OFFSET 0``). A backtest's account is
+    written and read inside one transaction, so the planner's statistics see empty
+    tables, and as plain joins it compared every placed Order with every cancelled
+    one: a call grew with the square of the account's Orders, 0.8 s a day a year into
+    an In-Sample cell (#85)."""
     rows = conn.execute(
         "SELECT p.id, p.run_id, p.rank, p.position_id, p.instrument, p.symbol, p.side,"
         " p.purpose, p.limit_price, p.shares, p.session, p.day, p.seq, c.day, c.seq, c.reason,"
         " f.day, f.seq, f.price"
         " FROM orders p"
-        " LEFT JOIN orders c ON (c.mode, c.id, c.event) = (p.mode, p.id, 'cancelled')"
-        " LEFT JOIN fills f ON (f.mode, f.order_id) = (p.mode, p.id)"
+        " LEFT JOIN LATERAL (SELECT c.id, c.day, c.seq, c.reason FROM orders c"
+        "  WHERE (c.mode, c.id, c.event) = (p.mode, p.id, 'cancelled') OFFSET 0) c ON true"
+        " LEFT JOIN LATERAL (SELECT f.order_id, f.day, f.seq, f.price FROM fills f"
+        "  WHERE (f.mode, f.order_id) = (p.mode, p.id) OFFSET 0) f ON true"
         " WHERE p.event = 'placed' AND p.mode = %(mode)s"
         " AND p.backtest_id IS NOT DISTINCT FROM %(backtest_id)s AND p.dry_run = %(dry_run)s"
         " AND (NOT %(open_only)s OR (c.id IS NULL AND f.order_id IS NULL))"
