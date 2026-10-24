@@ -77,6 +77,8 @@ participation_cap = 0.01    # of the 20-day average daily traded value
 min_order_value = 5000      # rupees
 max_new_entries = 4         # Passes per Run
 min_reward_to_risk = 1.5    # after rounding to the tick
+daily_loss_halt = 0.03      # of start-of-day Equity; a backtest reports the days, never Halts
+drawdown_halt = 0.10        # from the Equity peak; reported likewise
 # The checked-in dated table of NSE tick sizes, each band citing NSE's circular
 # (see the file's header).
 tick_sizes = "tick_sizes.csv"
@@ -91,3 +93,8 @@ schedule = "cost_rates.csv"
 contract_notes = "contract_notes.csv"
 safety_margin = 0.0005      # Slippage per side, of the Order's value
 impact = 0.1                # c x (Order value / 20-day average daily traded value)
+
+# How a backtest report scores a backtest (tradeline.metrics), until the
+# Protocol states it (#81).
+[backtest]
+risk_free_rate = 0.065      # a year; idle cash earns nothing

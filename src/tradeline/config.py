@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Literal, get_args, get_origin, get_type_hints
 
 from tradeline.costs import Slippage
+from tradeline.metrics import HaltLimits
 from tradeline.risk import Limits
 
 CONFIG_PATH_VAR = "TRADELINE_CONFIG"
@@ -169,6 +170,10 @@ class Config:
         min_order_value: int = 5000
         max_new_entries: int = 4
         min_reward_to_risk: float = 1.5
+        # The Halts a backtest reports and never applies: a day's loss on the day before's
+        # Equity, and the fall from the Equity peak.
+        daily_loss_halt: float = 0.03
+        drawdown_halt: float = 0.10
         # The checked-in dated table of NSE tick sizes (``tradeline.tick_sizes``),
         # relative to the working directory.
         tick_sizes: str = "tick_sizes.csv"
@@ -184,6 +189,12 @@ class Config:
                 min_order_value=Decimal(self.min_order_value),
                 max_new_entries=self.max_new_entries,
                 min_reward_to_risk=Decimal(str(self.min_reward_to_risk)),
+            )
+
+        def halts(self) -> HaltLimits:
+            return HaltLimits(
+                daily_loss=Decimal(str(self.daily_loss_halt)),
+                drawdown=Decimal(str(self.drawdown_halt)),
             )
 
     @dataclass(frozen=True)
@@ -204,6 +215,16 @@ class Config:
                 margin=Decimal(str(self.safety_margin)), impact=Decimal(str(self.impact))
             )
 
+    @dataclass(frozen=True)
+    class Backtest:
+        """How a backtest is scored (``tradeline.metrics``) until the Protocol states it (#81)."""
+
+        # A year; Sharpe's excess returns are over it a trading day as rate / 252.
+        risk_free_rate: float = 0.065
+
+        def risk_free(self) -> Decimal:
+            return Decimal(str(self.risk_free_rate))
+
     logging: Logging = field(default_factory=Logging)
     universe: UniverseRule = field(default_factory=UniverseRule)
     parity: Parity = field(default_factory=Parity)
@@ -213,6 +234,7 @@ class Config:
     integrity: Integrity = field(default_factory=Integrity)
     risk: Risk = field(default_factory=Risk)
     costs: Costs = field(default_factory=Costs)
+    backtest: Backtest = field(default_factory=Backtest)
 
     def __post_init__(self) -> None:
         # One Trading Calendar serves both checks (ADR 0018); two paths could drift apart.
