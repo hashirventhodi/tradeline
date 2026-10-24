@@ -115,3 +115,29 @@ def exit_trigger(
 def exit_limit(close: Decimal, *, band: Decimal, tick: Decimal) -> Decimal:
     """A stop or time-stop exit's limit: the close less the band, rounded down to the tick."""
     return round_down(close * (1 - band), tick)
+
+
+class FillModel:
+    """The fill model as an object the engine is handed, so a backtest and a paper Run can be
+    shown to fill through the very same one (ADR 0002); each method is the function above
+    of the same purpose."""
+
+    def entry(self, limit: Decimal, bar: Bar | None) -> Outcome:
+        return fill_entry(limit, bar)
+
+    def exit(self, limit: Decimal, bar: Bar | None) -> Outcome:
+        return fill_exit(limit, bar)
+
+    def target(self, target: Decimal, bar: Bar | None, *, stop: Decimal) -> Outcome:
+        return fill_target(target, bar, stop=stop)
+
+    def trigger(
+        self, bar: Bar, *, stop: Decimal, days_held: int, time_stop_days: int
+    ) -> ExitReason | None:
+        return exit_trigger(bar, stop=stop, days_held=days_held, time_stop_days=time_stop_days)
+
+    def exit_limit(self, close: Decimal, *, band: Decimal, tick: Decimal) -> Decimal:
+        return exit_limit(close, band=band, tick=tick)
+
+
+FILL_MODEL = FillModel()

@@ -36,6 +36,18 @@ NSE fixes the month's tick by (the last close of the month before), and the
 20-day average daily traded value. The sector is the load in force, or the
 earliest load for a day before it (``queries.sectors_for_run``).
 
+In paper mode the clock is the wall clock (``WallClock``, one step: today in
+IST or a named day, never a later one) and the data source is
+``CollectedMarketData``: the same stored rows ``collect-daily`` loaded, the same
+refusal past the As-Of Date, a refusal of a day not yet collected, and the
+stale-sector-map alert for an Unclassified Instrument. Its Orders fill the next
+day against that day's end-of-day bar through the same fill model; Phase 3
+replaces the bar with live quotes. Phase 2's paper Runs are dry runs: every row
+is marked ``dry_run``, an account of its own that the Paper Gate never counts
+(``queries.paper_gate_trades``). Both modes go through one loop (``_step``),
+and the Strategy, the Risk Engine (``RiskEngine``, sizing included), the cost
+model and the fill model (``FillModel``) are passed through it unchanged.
+
 Every Fill carries its charges and Slippage from the cost model
 (``tradeline.costs``), itemised. The account's cash is its starting Equity
 plus what its Fills moved (``queries.account_cash_flows``), and Equity is that
@@ -60,7 +72,7 @@ Protocol. It is refused when it names none, when the code is not at the commit
 the Protocol was frozen at, when its Strategy or its parameters are not the
 Protocol's, when its range runs outside the Protocol's, and when a Universe
 month or an Adjusted Series it would read is not what the Protocol froze. A
-single day, ``run``, takes its terms from its caller.
+single day, ``run``, and the paper dry-run take their terms from their caller.
 """
 
 from __future__ import annotations
@@ -70,38 +82,31 @@ import json
 import logging
 import math
 import uuid
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, replace
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from fractions import Fraction
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 import psycopg
 
 from tradeline import queries
 from tradeline.adjust import ADJUSTED_KINDS, AdjustedBar
 from tradeline.costs import CostModel
-from tradeline.dates import month_of
+from tradeline.dates import IST, month_of
 from tradeline.freeze import verify_snapshot
-from tradeline.paper_broker import (
-    Bar,
-    Unfilled,
-    exit_limit,
-    exit_trigger,
-    fill_entry,
-    fill_exit,
-    fill_target,
-)
+from tradeline.paper_broker import FILL_MODEL, Bar, FillModel, Unfilled
 from tradeline.revision import code_revision, git_commit
 from tradeline.risk import (
+    RISK_ENGINE,
     Decision,
     Holding,
     Limits,
     Pass,
     Portfolio,
     Proposal,
-    assess,
+    RiskEngine,
     verify_pass,
 )
 from tradeline.strategy import Candidate, Member, Plan, Strategy
@@ -112,10 +117,10 @@ log = logging.getLogger(__name__)
 
 EngineMode = Literal["backtest", "paper", "live"]
 
-# Equity at the start of an account, as the Protocol states it by default.
+# Equity at the start of a backtest, until the Protocol states it (#81).
 STARTING_EQUITY = Decimal("500000")
-# The protective band under the close a stop or time-stop exit is limited at, as the
-# Protocol states it by default.
+# The protective band under the close a stop or time-stop exit is limited at, until the
+# Protocol states it (#81).
 EXIT_BAND = Decimal("0.05")
 # The trading days the Participation Cap averages traded value over.
 TRADED_VALUE_DAYS = 20
@@ -134,6 +139,26 @@ class SimulatedClock:
 
     def days(self) -> Iterator[date]:
         return self._calendar.trading_days(self._start, self._end)
+
+
+def _today() -> date:
+    return datetime.now(IST).date()
+
+
+class WallClock:
+    """Paper time: the one day it is now in IST, or ``day`` when one is named (a day missed,
+    run late). A day after today is refused: no Run is as of a day yet to come."""
+
+    def __init__(self, *, today: Callable[[], date] = _today, day: date | None = None) -> None:
+        self._today = today
+        self._day = day
+
+    def days(self) -> Iterator[date]:
+        today = self._today()
+        day = today if self._day is None else self._day
+        if day > today:
+            raise ValueError(f"{day} is after today ({today}) on the wall clock")
+        yield day
 
 
 class StoredMarketData:
@@ -179,6 +204,12 @@ class StoredMarketData:
             raise ValueError(f"{instrument} has no close by {self._as_of} to fix its tick by")
         return this_month[0]
 
+    def sectors(self, symbols: Sequence[str]) -> dict[str, str]:
+        """The sector of each Symbol that has one as of the Run (``queries.sectors_for_run``);
+        a Symbol missing is Unclassified."""
+        found = queries.sectors_for_run(self._conn, sorted(set(symbols)), as_of=self._as_of)
+        return {s.symbol: s.sector for s in found}
+
     def _closes(self, instrument: str, *, start: date, end: date) -> list[Decimal]:
         """Closes from ``start`` to the day before ``end``, oldest first."""
         rows = queries.end_of_day(
@@ -197,6 +228,40 @@ class StoredMarketData:
                 f"the Trading Calendar has fewer than {count} days before {self._as_of}"
             )
         return days[-count:]
+
+
+class CollectedMarketData(StoredMarketData):
+    """Paper mode's data: what ``collect-daily`` loaded, read as of the wall clock's day, the
+    same Adjusted Series and the same refusal of a read past the As-Of Date. A day whose
+    end-of-day file is not loaded is refused, so a paper Run never decides on an earlier
+    day's data. NSE's sector list is loaded as it stands now, so an Instrument it does not
+    classify means the map is stale: a read that finds one Unclassified logs the
+    stale-sector-map alert."""
+
+    def __init__(self, conn: psycopg.Connection, calendar: TradingCalendar, *, as_of: date) -> None:
+        if as_of not in queries.end_of_day_dates(conn, start=as_of, end=as_of):
+            raise ValueError(
+                f"no end-of-day data is loaded for {as_of}; run collect-daily for the day first"
+            )
+        super().__init__(conn, calendar, as_of=as_of)
+
+    def sectors(self, symbols: Sequence[str]) -> dict[str, str]:
+        found = super().sectors(symbols)
+        unclassified = sorted(set(symbols) - found.keys())
+        if unclassified:
+            log.warning(
+                "stale sector map",
+                extra={"as_of": self.as_of.isoformat(), "unclassified": unclassified},
+            )
+        return found
+
+
+class MarketSource(Protocol):
+    """Where a mode's Run reads the market from, bound to its As-Of Date."""
+
+    def __call__(
+        self, conn: psycopg.Connection, calendar: TradingCalendar, *, as_of: date
+    ) -> StoredMarketData: ...
 
 
 @dataclass(frozen=True)
@@ -219,11 +284,13 @@ class RunResult:
     # The account after the session: Equity is cash plus the open Positions at the close.
     cash: Decimal = Decimal(0)
     equity: Decimal = Decimal(0)
+    dry_run: bool = False
 
     def summary(self) -> dict[str, Any]:
         return {
             "run_id": str(self.run_id),
             "mode": self.mode,
+            "dry_run": self.dry_run,
             "backtest_id": None if self.backtest_id is None else str(self.backtest_id),
             "as_of": self.as_of.isoformat(),
             "universe_size": self.universe_size,
@@ -253,6 +320,10 @@ def run(
     starting_equity: Decimal,
     band: Decimal = EXIT_BAND,
     backtest_id: uuid.UUID | None = None,
+    dry_run: bool = False,
+    data_source: MarketSource = StoredMarketData,
+    risk_engine: RiskEngine = RISK_ENGINE,
+    fill_model: FillModel = FILL_MODEL,
     protocol: str | None = None,
 ) -> RunResult:
     """The day ``as_of`` in one account: its held Positions restated for any split or bonus
@@ -261,13 +332,19 @@ def run(
     ``starting_equity``, after ``costs``) with its open Positions held, then the Orders for
     the next session.
 
-    A backtest id is required in backtest mode and refused in any other. ``protocol`` is
-    the hash of the Protocol the Strategy version runs under, if any.
+    The market is read from ``data_source`` as of the day; the Strategy, ``risk_engine``,
+    ``costs`` and ``fill_model`` are used as given, whatever the mode. A backtest id is
+    required in backtest mode and refused in any other; ``dry_run`` marks a paper dry-run's
+    rows (an account of its own), and only a paper Run can be one. ``protocol`` is the hash
+    of the Protocol the Strategy version runs under, if any.
     """
     if (mode == "backtest") != (backtest_id is not None):
         raise ValueError("a backtest id is required in backtest mode and only there")
+    if dry_run and mode != "paper":
+        raise ValueError("only a paper Run can be a dry run")
     if as_of not in set(calendar.trading_days(as_of, as_of)):
         raise ValueError(f"{as_of} is not a trading day on the Trading Calendar")
+    data = data_source(conn, calendar, as_of=as_of)
     month = month_of(as_of)
     universe = queries.universe_membership(conn, month, as_of=as_of, rule_version=rule_version)
     if not universe:
@@ -276,16 +353,18 @@ def run(
             " run `tradeline universe` for the month first"
         )
     members = [Member(m.instrument or m.symbol, m.symbol) for m in universe]
-    data = StoredMarketData(conn, calendar, as_of=as_of)
     account = _Account(
         conn,
         data,
         calendar,
         mode=mode,
         backtest_id=backtest_id,
+        dry_run=dry_run,
         costs=costs,
         tick_sizes=tick_sizes,
+        fill_model=fill_model,
     )
+    tags: queries.Account = {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run}
     next_session = _next_session(calendar, as_of)
     candidates = strategy.screen(members, data, as_of)
     plans = [strategy.plan(c) for c in candidates]
@@ -296,14 +375,13 @@ def run(
         held_instruments = {p.instrument for p in held}
         # One Position per Instrument: a Candidate already held is skipped, not assessed.
         to_assess = [p for p in plans if p.instrument not in held_instruments]
-        proposals = _proposals(conn, to_assess, data, tick_sizes, as_of=as_of)
-        holdings = _holdings(conn, held, account, as_of=as_of)
-        cash = starting_equity + queries.account_cash_flows(
-            conn, mode=mode, backtest_id=backtest_id
-        )
+        sectors = data.sectors([m.symbol for m in members] + [p.symbol for p in held])
+        proposals = _proposals(to_assess, data, tick_sizes, sectors, as_of=as_of)
+        holdings = _holdings(held, account, sectors)
+        cash = starting_equity + queries.account_cash_flows(conn, **tags)
         equity = cash + sum((h.value for h in holdings), Decimal(0))
         portfolio = Portfolio(equity, holdings)
-        decisions = assess(proposals, portfolio=portfolio, limits=limits, run_id=run_id)
+        decisions = risk_engine.assess(proposals, portfolio=portfolio, limits=limits, run_id=run_id)
         strategy_id = _strategy_row(
             conn, strategy, mode=mode, backtest_id=backtest_id, protocol=protocol
         )
@@ -311,8 +389,7 @@ def run(
             conn,
             strategy,
             run_id=run_id,
-            mode=mode,
-            backtest_id=backtest_id,
+            **tags,
             strategy_id=strategy_id,
             as_of=as_of,
             rule_version=rule_version,
@@ -320,17 +397,11 @@ def run(
             cash=cash,
             equity=equity,
         )
-        _insert_candidates(conn, candidates, mode=mode, backtest_id=backtest_id, run_id=run_id)
-        _insert_plans(conn, plans, mode=mode, backtest_id=backtest_id, run_id=run_id)
-        _insert_decisions(
-            conn, decisions, proposals, equity=equity, mode=mode, backtest_id=backtest_id
-        )
+        _insert_candidates(conn, candidates, **tags, run_id=run_id)
+        _insert_plans(conn, plans, **tags, run_id=run_id)
+        _insert_decisions(conn, decisions, proposals, equity=equity, **tags)
         _insert_held_verdicts(
-            conn,
-            [p for p in plans if p.instrument in held_instruments],
-            mode=mode,
-            backtest_id=backtest_id,
-            run_id=run_id,
+            conn, [p for p in plans if p.instrument in held_instruments], **tags, run_id=run_id
         )
         placed = account.place_exits(
             run_id=run_id, session=next_session, band=band, tick_sizes=tick_sizes
@@ -356,6 +427,7 @@ def run(
         open_positions=still_open,
         cash=cash,
         equity=equity,
+        dry_run=dry_run,
     )
     log.info("run written to the ledger", extra=result.summary())
     return result
@@ -370,37 +442,128 @@ def backtest(
     end: date,
     calendar: TradingCalendar,
     tick_sizes: TickSizes,
+    risk_engine: RiskEngine = RISK_ENGINE,
+    fill_model: FillModel = FILL_MODEL,
+    costs: CostModel | None = None,
 ) -> list[RunResult]:
     """A backtest under the frozen Protocol ``protocol`` (its hash, or 12 or more characters
     of it) from ``start`` to ``end``: one day per step of the simulated clock, each filling
     the day before's Orders and then Running, all under one backtest id, one account
     starting at the Protocol's starting Equity, every trade priced on its cost schedule's
-    date, and every Run under its Universe Rule version, Limits and band."""
+    date, and every Run under its Universe Rule version, Limits and band.
+
+    ``costs`` is the cost model to price with when the caller holds one (the same object a
+    paper account uses); it is refused unless it prices as the Protocol states."""
     frozen = _protocol_for(conn, strategy, protocol, start=start, end=end)
     terms = frozen.protocol
-    costs = terms.cost_model()
-    backtest_id = uuid.uuid4()
-    results = [
-        run(
-            conn,
-            strategy,
-            mode="backtest",
-            as_of=day,
-            calendar=calendar,
-            rule_version=terms.rule_version,
-            limits=terms.limits,
-            tick_sizes=tick_sizes,
-            costs=costs,
-            starting_equity=terms.starting_equity,
-            band=terms.band,
-            backtest_id=backtest_id,
-            protocol=frozen.hash,
+    if costs is None:
+        costs = terms.cost_model()
+    elif (costs.rates_as_of, costs.slippage) != (terms.costs_as_of, terms.slippage) or (
+        costs.schedule.rates(terms.costs_as_of) != terms.rates
+    ):
+        raise ValueError(
+            f"the cost model does not price as Protocol {frozen.hash[:12]} states: its"
+            f" schedule as of {terms.costs_as_of} with Slippage {terms.slippage}"
         )
-        for day in SimulatedClock(calendar, start=start, end=end).days()
-    ]
+    results = _step(
+        conn,
+        strategy,
+        SimulatedClock(calendar, start=start, end=end),
+        mode="backtest",
+        backtest_id=uuid.uuid4(),
+        dry_run=False,
+        data_source=StoredMarketData,
+        calendar=calendar,
+        rule_version=terms.rule_version,
+        limits=terms.limits,
+        tick_sizes=tick_sizes,
+        costs=costs,
+        starting_equity=terms.starting_equity,
+        band=terms.band,
+        risk_engine=risk_engine,
+        fill_model=fill_model,
+        protocol=frozen.hash,
+    )
     if not results:
         raise ValueError(f"no trading day from {start} to {end} on the Trading Calendar")
     return results
+
+
+def paper(
+    conn: psycopg.Connection,
+    strategy: Strategy,
+    *,
+    clock: WallClock,
+    calendar: TradingCalendar,
+    rule_version: str,
+    limits: Limits,
+    tick_sizes: TickSizes,
+    costs: CostModel,
+    starting_equity: Decimal = STARTING_EQUITY,
+    band: Decimal = EXIT_BAND,
+    risk_engine: RiskEngine = RISK_ENGINE,
+    fill_model: FillModel = FILL_MODEL,
+) -> RunResult:
+    """The paper dry-run's day on the wall clock: the session fills the Orders the day before
+    placed against the day's end-of-day bar, through the same fill model as a backtest (live
+    quotes replace that bar in Phase 3), then one Run over what ``collect-daily`` loaded.
+    Every row is tagged paper and marked a dry run, so the Paper Gate never counts it. The
+    account is the dry run's own, starting at ``starting_equity``, and its days run in order
+    as a backtest's do. ``costs`` should price each Fill on its own day's rates."""
+    (result,) = _step(
+        conn,
+        strategy,
+        clock,
+        mode="paper",
+        backtest_id=None,
+        dry_run=True,
+        data_source=CollectedMarketData,
+        calendar=calendar,
+        rule_version=rule_version,
+        limits=limits,
+        tick_sizes=tick_sizes,
+        costs=costs,
+        starting_equity=starting_equity,
+        band=band,
+        risk_engine=risk_engine,
+        fill_model=fill_model,
+    )
+    return result
+
+
+class Clock(Protocol):
+    """A mode's time: the days its Runs are as of, in order."""
+
+    def days(self) -> Iterator[date]: ...
+
+
+def _step(
+    conn: psycopg.Connection,
+    strategy: Strategy,
+    clock: Clock,
+    *,
+    mode: EngineMode,
+    backtest_id: uuid.UUID | None,
+    dry_run: bool,
+    data_source: MarketSource,
+    **unchanged: Any,
+) -> list[RunResult]:
+    """The engine's loop: one Run as of each day the clock steps to. The mode, its clock and
+    its data source are all that differ between modes; everything else passes through
+    ``unchanged``."""
+    return [
+        run(
+            conn,
+            strategy,
+            mode=mode,
+            as_of=day,
+            backtest_id=backtest_id,
+            dry_run=dry_run,
+            data_source=data_source,
+            **unchanged,
+        )
+        for day in clock.days()
+    ]
 
 
 @functools.cache
@@ -533,10 +696,14 @@ class _Account:
         *,
         mode: EngineMode,
         backtest_id: uuid.UUID | None,
+        dry_run: bool,
         costs: CostModel,
         tick_sizes: TickSizes,
+        fill_model: FillModel,
     ) -> None:
         self._conn = conn
+        self._dry_run = dry_run
+        self._fill_model = fill_model
         self._data = data
         self._calendar = calendar
         self._mode = mode
@@ -557,8 +724,12 @@ class _Account:
 
     def session(self) -> int:
         """Fill the Orders open for the day against its bar; the number of Fills."""
-        mode, backtest_id = self._mode, self._backtest_id
-        open_orders = queries.orders(self._conn, mode=mode, backtest_id=backtest_id, open_only=True)
+        account: queries.Account = {
+            "mode": self._mode,
+            "backtest_id": self._backtest_id,
+            "dry_run": self._dry_run,
+        }
+        open_orders = queries.orders(self._conn, **account, open_only=True)
         stale = sorted({o.session for o in open_orders if o.session != self._day})
         if stale:
             raise ValueError(
@@ -566,10 +737,7 @@ class _Account:
                 " run its days in order"
             )
         self._positions = {
-            p.id: p
-            for p in queries.positions(
-                self._conn, mode=mode, backtest_id=backtest_id, open_only=True
-            )
+            p.id: p for p in queries.positions(self._conn, **account, open_only=True)
         }
         ordered = [
             _Order(
@@ -720,7 +888,7 @@ class _Account:
                         )
                     )
                 )
-                reason = exit_trigger(
+                reason = self._fill_model.trigger(
                     bar,
                     stop=position.stop,
                     days_held=held,
@@ -737,7 +905,9 @@ class _Account:
                     self._day,
                     reference_close=self._data.reference_close(position.instrument),
                 )
-                limit = exit_limit(self.close(position.instrument), band=band, tick=tick)
+                limit = self._fill_model.exit_limit(
+                    self.close(position.instrument), band=band, tick=tick
+                )
             self._place(
                 _Order(
                     uuid.uuid4(),
@@ -788,7 +958,7 @@ class _Account:
         return self._bars[instrument]
 
     def _meet_entry(self, order: _Order) -> int:
-        outcome = fill_entry(order.limit_price, self._bar(order.instrument))
+        outcome = self._fill_model.entry(order.limit_price, self._bar(order.instrument))
         if isinstance(outcome, Unfilled):
             self._cancel(order, outcome.reason)
             return 0
@@ -822,7 +992,7 @@ class _Account:
         return 1
 
     def _meet_exit(self, order: _Order) -> int:
-        outcome = fill_exit(order.limit_price, self._bar(order.instrument))
+        outcome = self._fill_model.exit(order.limit_price, self._bar(order.instrument))
         if isinstance(outcome, Unfilled):
             self._cancel(order, outcome.reason)
             self._exits_due[order.position_id] = order.purpose
@@ -833,7 +1003,9 @@ class _Account:
 
     def _meet_target(self, order: _Order) -> int:
         position = self._positions[order.position_id]
-        outcome = fill_target(order.limit_price, self._bar(order.instrument), stop=position.stop)
+        outcome = self._fill_model.target(
+            order.limit_price, self._bar(order.instrument), stop=position.stop
+        )
         if isinstance(outcome, Unfilled):
             return 0
         del self._targets[order.position_id]
@@ -856,12 +1028,13 @@ class _Account:
 
     def _write_order(self, order: _Order, *, event: str, reason: str | None) -> None:
         self._conn.execute(
-            "INSERT INTO orders (mode, backtest_id, id, event, day, seq, reason, run_id, rank,"
-            " position_id, instrument, symbol, side, purpose, limit_price, shares, session)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "INSERT INTO orders (mode, backtest_id, dry_run, id, event, day, seq, reason, run_id,"
+            " rank, position_id, instrument, symbol, side, purpose, limit_price, shares, session)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 self._mode,
                 self._backtest_id,
+                self._dry_run,
                 order.id,
                 event,
                 self._day,
@@ -899,15 +1072,16 @@ class _Account:
             ),
         )
         self._conn.execute(
-            "INSERT INTO fills (mode, backtest_id, order_id, day, seq, position_id, instrument,"
-            " symbol, side, price, shares, "
+            "INSERT INTO fills (mode, backtest_id, dry_run, order_id, day, seq, position_id,"
+            " instrument, symbol, side, price, shares, "
             + ", ".join(charges.items())
-            + ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s"
+            + ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s"
             + ", %s" * len(charges.items())
             + ")",
             (
                 self._mode,
                 self._backtest_id,
+                self._dry_run,
                 order.id,
                 self._day,
                 self._next_seq(),
@@ -932,14 +1106,15 @@ class _Account:
         """The Position's state after an event: ``opened`` or ``closed`` by its exit unless
         ``event`` says otherwise."""
         self._conn.execute(
-            "INSERT INTO positions (mode, backtest_id, position_id, event, day, seq, run_id,"
-            " rank, instrument, symbol, opened_on, shares, entry, stop, target, time_stop_days,"
-            " exit_price, exit_reason, factor, cash_in_lieu)"
+            "INSERT INTO positions (mode, backtest_id, dry_run, position_id, event, day, seq,"
+            " run_id, rank, instrument, symbol, opened_on, shares, entry, stop, target,"
+            " time_stop_days, exit_price, exit_reason, factor, cash_in_lieu)"
             " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
-            " %s, %s)",
+            " %s, %s, %s)",
             (
                 self._mode,
                 self._backtest_id,
+                self._dry_run,
                 position.id,
                 event or ("opened" if position.exit_reason is None else "closed"),
                 self._day,
@@ -963,16 +1138,10 @@ class _Account:
 
 
 def _holdings(
-    conn: psycopg.Connection,
-    held: Sequence[queries.LedgerPosition],
-    account: _Account,
-    *,
-    as_of: date,
+    held: Sequence[queries.LedgerPosition], account: _Account, sectors: dict[str, str]
 ) -> tuple[Holding, ...]:
-    """Each open Position as the Limits see it: its sector as of the Run and its value at
-    the day's close."""
-    found = queries.sectors_for_run(conn, sorted({p.symbol for p in held}), as_of=as_of)
-    sectors = {s.symbol: s.sector for s in found}
+    """Each open Position as the Limits see it: its sector as of the Run (from ``sectors``)
+    and its value at the day's close."""
     return tuple(
         Holding(p.instrument, sectors.get(p.symbol), p.shares * account.close(p.instrument))
         for p in held
@@ -985,28 +1154,27 @@ def _insert_held_verdicts(
     *,
     mode: EngineMode,
     backtest_id: uuid.UUID | None,
+    dry_run: bool,
     run_id: uuid.UUID,
 ) -> None:
     """SKIP, reason ``held``, for each Candidate whose Instrument the account already holds."""
     with conn.cursor() as cursor:
         cursor.executemany(
-            "INSERT INTO verdicts (mode, backtest_id, run_id, rank, verdict, reason)"
-            " VALUES (%s, %s, %s, %s, 'SKIP', 'held')",
-            [(mode, backtest_id, run_id, p.rank) for p in plans],
+            "INSERT INTO verdicts (mode, backtest_id, dry_run, run_id, rank, verdict, reason)"
+            " VALUES (%s, %s, %s, %s, %s, 'SKIP', 'held')",
+            [(mode, backtest_id, dry_run, run_id, p.rank) for p in plans],
         )
 
 
 def _proposals(
-    conn: psycopg.Connection,
     plans: Sequence[Plan],
     data: StoredMarketData,
     tick_sizes: TickSizes,
+    sectors: dict[str, str],
     *,
     as_of: date,
 ) -> list[Proposal]:
     """Each Plan with what the Limits read about its Instrument as of the Run."""
-    found = queries.sectors_for_run(conn, sorted({p.symbol for p in plans}), as_of=as_of)
-    sectors = {s.symbol: s.sector for s in found}
     return [
         Proposal(
             plan,
@@ -1069,6 +1237,7 @@ def _insert_run(
     run_id: uuid.UUID,
     mode: EngineMode,
     backtest_id: uuid.UUID | None,
+    dry_run: bool,
     strategy_id: uuid.UUID,
     as_of: date,
     rule_version: str,
@@ -1077,13 +1246,14 @@ def _insert_run(
     equity: Decimal,
 ) -> None:
     conn.execute(
-        "INSERT INTO runs (id, mode, backtest_id, strategy_id, as_of, universe_month,"
+        "INSERT INTO runs (id, mode, backtest_id, dry_run, strategy_id, as_of, universe_month,"
         " universe_rule_version, universe_size, parameters, cash, equity)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (
             run_id,
             mode,
             backtest_id,
+            dry_run,
             strategy_id,
             as_of,
             month_of(as_of),
@@ -1106,16 +1276,18 @@ def _insert_candidates(
     *,
     mode: EngineMode,
     backtest_id: uuid.UUID | None,
+    dry_run: bool,
     run_id: uuid.UUID,
 ) -> None:
     with conn.cursor() as cursor:
         cursor.executemany(
-            "INSERT INTO candidates (mode, backtest_id, run_id, rank, instrument, symbol, score,"
-            " facts) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            "INSERT INTO candidates (mode, backtest_id, dry_run, run_id, rank, instrument,"
+            " symbol, score, facts) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
             [
                 (
                     mode,
                     backtest_id,
+                    dry_run,
                     run_id,
                     c.rank,
                     c.instrument,
@@ -1134,16 +1306,19 @@ def _insert_plans(
     *,
     mode: EngineMode,
     backtest_id: uuid.UUID | None,
+    dry_run: bool,
     run_id: uuid.UUID,
 ) -> None:
     with conn.cursor() as cursor:
         cursor.executemany(
-            "INSERT INTO plans (mode, backtest_id, run_id, rank, instrument, symbol, entry, stop,"
-            " target, time_stop_days, facts) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "INSERT INTO plans (mode, backtest_id, dry_run, run_id, rank, instrument, symbol,"
+            " entry, stop, target, time_stop_days, facts)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             [
                 (
                     mode,
                     backtest_id,
+                    dry_run,
                     run_id,
                     p.rank,
                     p.instrument,
@@ -1167,6 +1342,7 @@ def _insert_decisions(
     equity: Decimal,
     mode: EngineMode,
     backtest_id: uuid.UUID | None,
+    dry_run: bool,
 ) -> None:
     """Each Pass or Block, with what it read, and the Verdict it makes."""
     with conn.cursor() as cursor:
@@ -1191,22 +1367,38 @@ def _insert_decisions(
             )
             if isinstance(decision, Pass):
                 cursor.execute(
-                    "INSERT INTO passes (mode, backtest_id, run_id, rank, plan_hash, entry, stop,"
-                    " target, time_stop_days, shares, sector, facts)"
-                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                    (mode, backtest_id, decision.run_id, plan.rank, decision.plan_hash, *priced),
+                    "INSERT INTO passes (mode, backtest_id, dry_run, run_id, rank, plan_hash,"
+                    " entry, stop, target, time_stop_days, shares, sector, facts)"
+                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        mode,
+                        backtest_id,
+                        dry_run,
+                        decision.run_id,
+                        plan.rank,
+                        decision.plan_hash,
+                        *priced,
+                    ),
                 )
                 verdict, reason = "BUY", "pass"
             else:
                 cursor.execute(
-                    "INSERT INTO blocks (mode, backtest_id, run_id, rank, limit_name, entry, stop,"
-                    " target, time_stop_days, shares, sector, facts)"
-                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                    (mode, backtest_id, decision.run_id, plan.rank, decision.limit, *priced),
+                    "INSERT INTO blocks (mode, backtest_id, dry_run, run_id, rank, limit_name,"
+                    " entry, stop, target, time_stop_days, shares, sector, facts)"
+                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        mode,
+                        backtest_id,
+                        dry_run,
+                        decision.run_id,
+                        plan.rank,
+                        decision.limit,
+                        *priced,
+                    ),
                 )
                 verdict, reason = "SKIP", decision.limit
             cursor.execute(
-                "INSERT INTO verdicts (mode, backtest_id, run_id, rank, verdict, reason)"
-                " VALUES (%s, %s, %s, %s, %s, %s)",
-                (mode, backtest_id, decision.run_id, plan.rank, verdict, reason),
+                "INSERT INTO verdicts (mode, backtest_id, dry_run, run_id, rank, verdict,"
+                " reason) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (mode, backtest_id, dry_run, decision.run_id, plan.rank, verdict, reason),
             )

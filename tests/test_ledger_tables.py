@@ -84,3 +84,19 @@ def test_the_application_role_cannot_update_or_delete_ledger_rows_in_any_partiti
                 with pytest.raises(psycopg.errors.InsufficientPrivilege):
                     conn.execute(psycopg.sql.SQL(statement).format(psycopg.sql.Identifier(name)))
                 conn.rollback()
+
+
+DRY_RUN_TABLES = tuple(t for t in LEDGER_TABLES if t != "strategies")
+
+
+@pytest.mark.parametrize("table", DRY_RUN_TABLES)
+@pytest.mark.parametrize(
+    ("mode", "backtest_id"), [("backtest", uuid.uuid4()), ("live", None)], ids=["backtest", "live"]
+)
+def test_only_a_paper_row_can_be_marked_a_dry_run(
+    database_url: str, table: str, mode: str, backtest_id: uuid.UUID | None
+) -> None:
+    marked = INSERTS[table].replace("(mode, backtest_id,", "(mode, backtest_id, dry_run,", 1)
+    marked = marked.replace("VALUES (%s, %s,", "VALUES (%s, %s, true,", 1)
+    with app_connection(database_url) as conn, pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(marked, (mode, backtest_id))

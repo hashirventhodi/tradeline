@@ -40,7 +40,7 @@ from synthetic_eod import (
 )
 from tradeline import queries
 from tradeline.cli import main
-from tradeline.costs import Slippage, load_cost_schedule
+from tradeline.costs import CostModel, Slippage, load_cost_schedule
 from tradeline.db import app_connection
 from tradeline.engine import backtest
 from tradeline.protocol import TIE_BREAK, Gate, Span, Window, content_hash
@@ -355,3 +355,22 @@ def test_a_frozen_protocol_cannot_be_changed_or_claim_a_hash_its_content_lacks(
         )
     conn.rollback()
     assert queries.protocol(conn, frozen.hash) is not None
+
+
+def test_a_cost_model_that_does_not_price_as_the_protocol_states_is_refused(
+    conn: psycopg.Connection,
+) -> None:
+    frozen = freeze_protocol(conn, MARKET, FIRST, LAST)
+    schedule = load_cost_schedule(REPO_ROOT / "cost_rates.csv")
+
+    with pytest.raises(ValueError, match="does not price as Protocol"):
+        backtest(
+            conn,
+            PullbackV1(),
+            protocol=frozen.hash,
+            start=FIRST,
+            end=FIRST,
+            calendar=repo_calendar(),
+            tick_sizes=TICK_SIZES,
+            costs=CostModel(schedule, Slippage(impact=D(0)), rates_as_of=COSTS_AS_OF),
+        )
