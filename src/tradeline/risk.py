@@ -5,9 +5,10 @@ Plan order as if each Pass before had filled, so Plans that are fine alone but
 breach a Limit together are caught, and the first to Pass are the same on
 every run (``docs/risk-controls.md``).
 
-Each Plan is first priced (``tradeline.strategy.pricing``): stop and target
-rounded down to the tick in force, sized at floor(Equity x risk per trade /
-(entry - stop)) shares. Then, in this order, it is Blocked for:
+Each Plan is first priced (``tradeline.strategy.pricing``): stop rounded down
+to the tick in force, target at the Plan's multiple of the rounded risk
+rounded up, sized at floor(Equity x risk per trade / (entry - stop)) shares.
+Then, in this order, it is Blocked for:
 
 - ``stop_required``: no stop under the entry once rounded (and above zero);
 - ``min_reward_to_risk``: (target - entry) / (entry - stop) under the minimum,

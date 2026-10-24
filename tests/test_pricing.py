@@ -65,30 +65,43 @@ def test_a_day_before_the_table_has_no_tick() -> None:
         TICKS.tick(date(2014, 12, 31), reference_close=D("100"))
 
 
-def test_pricing_rounds_stop_target_and_shares_down_on_the_5_paisa_tick() -> None:
+def test_pricing_rounds_the_stop_and_shares_down_and_the_target_up_on_the_5_paisa_tick() -> None:
     priced = price_plan(PLAN, tick=D("0.05"), equity=D("500000"), risk_per_trade=D("0.01"))
 
-    assert (priced.entry, priced.stop, priced.target) == (D("200.00"), D("193.30"), D("213.30"))
+    # The target keeps the Plan's multiple of the risk, 13.337 / 6.667, over the rounded
+    # risk of 6.70: 200 + 13.4030, rounded up.
+    assert (priced.entry, priced.stop, priced.target) == (D("200.00"), D("193.30"), D("213.45"))
     # 5,000 rupees at risk over 6.70 a share is 746.3 shares.
     assert priced.shares == 746
-    # (213.30 - 200) / (200 - 193.30)
-    assert priced.reward_to_risk == D("13.30") / D("6.70")
+    # (213.45 - 200) / (200 - 193.30)
+    assert priced.reward_to_risk == D("13.45") / D("6.70")
 
 
 def test_pricing_rounds_to_the_1_paisa_tick_below_rs_250_from_june_2024() -> None:
     tick = TICKS.tick(date(2024, 7, 1), reference_close=D("199.00"))
     priced = price_plan(PLAN, tick=tick, equity=D("500000"), risk_per_trade=D("0.01"))
 
-    assert (priced.stop, priced.target) == (D("193.33"), D("213.33"))
+    # 200 + 6.67 x 13.337 / 6.667 = 213.3430, rounded up.
+    assert (priced.stop, priced.target) == (D("193.33"), D("213.35"))
     # 5,000 over 6.67 is 749.6.
     assert priced.shares == 749
 
 
-def test_rounding_can_take_a_plan_under_the_minimum_reward_to_risk() -> None:
-    # Unrounded: (210.04 - 200) / (200 - 193.31) = 10.04 / 6.69, just over 1.5.
+def test_rounding_never_takes_a_plan_under_its_own_reward_to_risk() -> None:
+    # Unrounded: (210.04 - 200) / (200 - 193.31) = 10.04 / 6.69, just over 1.5. Rounding
+    # both prices down, as pricing did until #85, gave 10.00 / 6.70, under it.
     plan = replace(PLAN, stop=D("193.31"), target=D("210.04"))
     priced = price_plan(plan, tick=D("0.05"), equity=D("500000"), risk_per_trade=D("0.01"))
 
-    # Rounded down: 10.00 / 6.70, under 1.5.
-    assert priced.reward_to_risk == D("10.00") / D("6.70")
-    assert priced.reward_to_risk < D("1.5")
+    # 200 + 6.70 x 10.04 / 6.69 = 210.0550, rounded up to 210.10.
+    assert (priced.stop, priced.target) == (D("193.30"), D("210.10"))
+    assert priced.reward_to_risk == D("10.10") / D("6.70")
+    assert priced.reward_to_risk >= D("10.04") / D("6.69")
+
+
+def test_a_target_already_on_the_tick_at_the_multiple_is_kept() -> None:
+    plan = replace(PLAN, stop=D("194.00"), target=D("209.00"))
+    priced = price_plan(plan, tick=D("0.05"), equity=D("500000"), risk_per_trade=D("0.01"))
+
+    assert (priced.stop, priced.target) == (D("194.00"), D("209.00"))
+    assert priced.reward_to_risk == D("1.5")

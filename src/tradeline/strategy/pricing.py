@@ -1,13 +1,16 @@
 """Plan pricing: a Strategy's Plan put on the tick, with its size at the risk per trade.
 
 A Strategy prices its Plan from indicators, so its stop and target can fall
-between ticks. Pricing rounds the stop and the target down to the tick in
-force that day (``tradeline.tick_sizes``) and sizes the Plan at
-floor(Equity x risk per trade / (entry - stop)) shares, so rounding only ever
-widens the risk and narrows the reward. The entry, a close, is a traded price
-and already on the tick. The minimum reward to risk is the Risk Engine's to
-re-check on the rounded prices (``PricedPlan.reward_to_risk``), as are the
-Limits that reduce the size.
+between ticks. Pricing rounds the stop down to the tick in force that day
+(``tradeline.tick_sizes``), sets the target at the Plan's own multiple of the
+risk over the rounded stop's risk, rounded up, and sizes the Plan at
+floor(Equity x risk per trade / (entry - stop)) shares. So rounding widens the
+risk and never takes the reward to risk under the Plan's: rounding both prices
+down did, and at r = 1.5 the Risk Engine Blocked almost every Plan for
+``min_reward_to_risk`` (#85). The target is at most one tick further than that
+multiple. The entry, a close, is a traded price and already on the tick. The
+minimum reward to risk is the Risk Engine's to re-check on the rounded prices
+(``PricedPlan.reward_to_risk``), as are the Limits that reduce the size.
 
 Every Strategy's Plans go through this module, so it is part of every
 Strategy's code revision (``tradeline.revision``).
@@ -61,6 +64,11 @@ def round_down(price: Decimal | Fraction, tick: Decimal) -> Decimal:
     return math.floor(Fraction(price) / Fraction(tick)) * tick
 
 
+def round_up(price: Decimal | Fraction, tick: Decimal) -> Decimal:
+    """``price`` rounded up to the tick, exactly."""
+    return math.ceil(Fraction(price) / Fraction(tick)) * tick
+
+
 def shares_within(budget: Decimal, per_share: Decimal) -> int:
     """The whole shares ``budget`` buys at ``per_share`` each; none for a budget under zero."""
     if budget <= 0:
@@ -71,11 +79,20 @@ def shares_within(budget: Decimal, per_share: Decimal) -> int:
 def price_plan(
     plan: Plan, *, tick: Decimal, equity: Decimal, risk_per_trade: Decimal
 ) -> PricedPlan:
-    """``plan`` with its stop and target rounded down to ``tick`` and sized at the risk per
-    trade. A stop that does not round to a price under the entry sizes the Plan at no shares."""
+    """``plan`` with its stop rounded down to ``tick``, its target at its own multiple of the
+    rounded risk rounded up, and sized at the risk per trade. A stop that does not round to a
+    price under the entry sizes the Plan at no shares."""
     stop = round_down(plan.stop, tick)
-    target = round_down(plan.target, tick)
     risk = plan.entry - stop
+    if plan.stop < plan.entry:
+        multiple = (Fraction(plan.target) - Fraction(plan.entry)) / (
+            Fraction(plan.entry) - Fraction(plan.stop)
+        )
+        target = round_up(Fraction(plan.entry) + multiple * Fraction(risk), tick)
+    else:
+        # No multiple to keep: a stop not under the entry, which rounding may still put
+        # under it. The target rounds down, never further.
+        target = round_down(plan.target, tick)
     shares = shares_within(equity * risk_per_trade, risk) if stop > 0 and risk > 0 else 0
     return PricedPlan(
         rank=plan.rank,
