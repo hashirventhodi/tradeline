@@ -65,6 +65,7 @@ from tradeline.freeze import FreezeResult
 from tradeline.freeze import freeze_protocol as freeze
 from tradeline.ingest.corporate_actions import ingest_corporate_actions, year_chunks
 from tradeline.ingest.eod import ingest_eod
+from tradeline.metrics import HaltLimits
 from tradeline.protocol import Gate, Layout, Terms, months_between
 from tradeline.revision import git_commit
 from tradeline.risk import Limits
@@ -520,11 +521,12 @@ def freeze_protocol(
     terms: Terms | None = None,
     strategy: Strategy | None = None,
     limits: Limits | None = None,
+    halts: HaltLimits | None = None,
     commit: str | None = None,
 ) -> FreezeResult:
     """Store the Universe for the months of ``first`` to ``last`` and freeze a Protocol over
     them (``protocol_terms`` unless ``terms`` is given) for ``pullback_v1`` under the
-    Market's rule, the default Limits and Slippage and the checked-in schedule as of
+    Market's rule, the default Limits, Halts and Slippage and the checked-in schedule as of
     ``COSTS_AS_OF``, at the commit the tests run at unless ``commit`` is given."""
     compute_universe_months(conn, market, first, last)
     return freeze(
@@ -533,6 +535,7 @@ def freeze_protocol(
         strategy=strategy or PullbackV1(),
         rule_version=market.rule.version,
         limits=limits or Limits(),
+        halts=halts or HaltLimits(),
         schedule=load_cost_schedule(REPO_ROOT / "cost_rates.csv"),
         slippage=Slippage(),
         costs_as_of=COSTS_AS_OF,

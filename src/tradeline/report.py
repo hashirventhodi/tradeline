@@ -404,12 +404,11 @@ def report_backtest(
     end: date,
     calendar: TradingCalendar,
     tick_sizes: TickSizes,
-    halts: HaltLimits,
     contract_notes: int,
 ) -> ReportResult:
     """Backtest the cell from ``start`` to ``end`` under the frozen Protocol ``protocol``,
     then with its Slippage impact c at zero and at twice its value, and report all three from
-    the Ledger, scored at the Protocol's risk-free rate."""
+    the Ledger, scored at the Protocol's risk-free rate, the Halt days at its Halt fractions."""
 
     def timed(impact: Decimal | None) -> tuple[uuid.UUID, float]:
         began = time.monotonic()
@@ -451,7 +450,7 @@ def report_backtest(
         starting_equity=terms.starting_equity,
         costs=terms.cost_model(),
         risk_free_rate=terms.risk_free_rate,
-        halts=halts,
+        halts=terms.halts,
         account=read_account(conn, backtest_id),
         variants=tuple(variants),
         contract_notes=contract_notes,

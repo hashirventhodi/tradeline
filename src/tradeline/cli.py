@@ -516,6 +516,7 @@ def protocol(ctx: Context, args: argparse.Namespace) -> int:
             strategy=PullbackV1(),
             rule_version=ctx.config.universe.version,
             limits=ctx.config.risk.limits(),
+            halts=ctx.config.risk.halts(),
             schedule=load_cost_schedule(Path(ctx.config.costs.schedule)),
             slippage=ctx.config.costs.slippage(),
             costs_as_of=args.costs_as_of or datetime.now(IST).date(),
@@ -667,7 +668,6 @@ def backtest_report(ctx: Context, args: argparse.Namespace) -> int:
             end=end,
             calendar=calendar,
             tick_sizes=tick_sizes,
-            halts=ctx.config.risk.halts(),
             contract_notes=len(notes),
         )
     args.out.write_text(result.report.text())

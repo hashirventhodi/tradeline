@@ -43,6 +43,7 @@ from tradeline.cli import main
 from tradeline.costs import CostModel, Slippage, load_cost_schedule
 from tradeline.db import app_connection
 from tradeline.engine import backtest
+from tradeline.metrics import HaltLimits
 from tradeline.protocol import TIE_BREAK, Gate, Span, Window, content_hash
 from tradeline.revision import code_revision, git_commit
 from tradeline.risk import Limits
@@ -94,6 +95,7 @@ def config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, loaded: str) -> Path
         f'[integrity]\ntrading_calendar = "{REPO_ROOT / "trading_calendar.csv"}"\n'
         f'[parity]\ntrading_calendar = "{REPO_ROOT / "trading_calendar.csv"}"\n'
         f'[risk]\ntick_sizes = "{REPO_ROOT / "tick_sizes.csv"}"\n'
+        "daily_loss_halt = 0.02\ndrawdown_halt = 0.08\n"
         f'[costs]\nschedule = "{REPO_ROOT / "cost_rates.csv"}"\n' + PROTOCOL_TOML
     )
     monkeypatch.setenv("TRADELINE_CONFIG", str(path))
@@ -117,6 +119,8 @@ def test_protocol_freeze_writes_the_protocol_once_and_prints_its_window_boundari
     (frozen,) = queries.protocols(conn)
     assert frozen.protocol.windows == WINDOWS
     assert frozen.protocol.holdout == HOLDOUT
+    # The configured Halts, so the days a report lists are the frozen ones.
+    assert frozen.protocol.halts == HaltLimits(daily_loss=D("0.02"), drawdown=D("0.08"))
 
     assert main(freeze_cli()) == 0
 
@@ -198,6 +202,7 @@ def test_every_protocol_field_is_readable_through_the_query_layer(
     assert protocol.band == D("0.05")
     assert protocol.limits == Limits()
     assert protocol.limits.participation_cap == D("0.01")
+    assert protocol.halts == HaltLimits(daily_loss=D("0.03"), drawdown=D("0.10"))
     assert protocol.starting_equity == D(500000)
     assert protocol.risk_free_rate == D("0.065")
     assert protocol.gate == Gate(D("1.0"), D("0.15"), D("1.3"), 150)

@@ -4,6 +4,7 @@ A Protocol states the parameter grid, the objective and its tie-break, the
 Walk-Forward Windows and the Holdout as trading days from the Trading Calendar,
 the cost schedule's date with the rates in force on it and Slippage's
 parameters, the exit band, the Limits (the Participation Cap among them), the
+daily-loss and drawdown Halt fractions a backtest reports against, the
 starting Equity, the risk-free rate, the Gate thresholds, the Universe Rule
 version, the Strategy family, name and code revision, the git commit it was
 frozen at, and the data snapshot: each Universe month's mode and build, and the
@@ -33,11 +34,13 @@ from typing import Any
 
 from tradeline.costs import CHARGES, CostModel, CostSchedule, Rate, Rates, Slippage
 from tradeline.dates import month_end, month_of, next_month
+from tradeline.metrics import HaltLimits
 from tradeline.risk import Limits
 from tradeline.trading_calendar import TradingCalendar
 
-# The layout of the serialised content; a change to it is a new format.
-FORMAT = 1
+# The layout of the serialised content; a change to it is a new format. Format 2 adds the
+# Halt fractions (#84).
+FORMAT = 2
 OBJECTIVE = (
     "in-sample Sharpe after costs, averaged with the cell's grid neighbours along each axis;"
     " a cell with fewer than min_in_sample_trades in-sample trades is ineligible"
@@ -152,6 +155,8 @@ class Protocol:
     slippage: Slippage
     band: Decimal
     limits: Limits
+    # The Halts a backtest never simulates but reports the days of (``docs/risk-controls.md``).
+    halts: HaltLimits
     starting_equity: Decimal
     risk_free_rate: Decimal
     gate: Gate
@@ -211,6 +216,7 @@ class Protocol:
             },
             "band": self.band,
             "limits": dataclasses.asdict(self.limits),
+            "halts": dataclasses.asdict(self.halts),
             "starting_equity": self.starting_equity,
             "risk_free_rate": self.risk_free_rate,
             "gate": dataclasses.asdict(self.gate),
@@ -251,6 +257,7 @@ class Protocol:
             slippage=Slippage(**{name: Decimal(v) for name, v in costs["slippage"].items()}),
             band=Decimal(content["band"]),
             limits=Limits(**_limits(content["limits"])),
+            halts=HaltLimits(**{name: Decimal(v) for name, v in content["halts"].items()}),
             starting_equity=Decimal(content["starting_equity"]),
             risk_free_rate=Decimal(content["risk_free_rate"]),
             gate=Gate(
