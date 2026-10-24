@@ -10,6 +10,7 @@ those numbers.
 import uuid
 from dataclasses import fields, replace
 from decimal import Decimal
+from fractions import Fraction
 from typing import Any
 
 import pytest
@@ -125,15 +126,26 @@ def test_an_unclassified_instrument_counts_toward_the_unclassified_sectors_30_pe
     assert [d.sector for d in decisions] == [UNCLASSIFIED, UNCLASSIFIED]
 
 
-def test_a_plan_whose_reward_to_risk_falls_under_the_minimum_after_rounding_is_blocked() -> None:
-    # 10.04 / 6.69 before rounding; 10.00 / 6.70, under 1.5, after.
-    plan = proposal(1, entry="200", stop="193.31", target="210.04")
+def test_a_plan_whose_reward_to_risk_is_under_the_minimum_is_blocked() -> None:
+    # 10.00 / 6.70, both prices on the tick.
+    plan = proposal(1, entry="200", stop="193.30", target="210.00")
 
     (decision,) = decide([plan])
 
     assert isinstance(decision, Block)
     assert decision.limit == "min_reward_to_risk"
     assert (decision.plan.stop, decision.plan.target) == (D("193.30"), D("210.00"))
+
+
+def test_rounding_does_not_take_a_plan_at_the_minimum_under_it() -> None:
+    # 10.04 / 6.69 before rounding. Rounding both prices down, as pricing did until #85,
+    # gave 10.00 / 6.70, under 1.5; the target now keeps the multiple over 6.70, rounded up.
+    plan = proposal(1, entry="200", stop="193.31", target="210.04")
+
+    (decision,) = decide([plan])
+
+    assert not isinstance(decision, Block)
+    assert (decision.plan.stop, decision.plan.target) == (D("193.30"), D("210.10"))
 
 
 @pytest.mark.parametrize("stop", ["100", "101", "0.04"], ids=["at-entry", "above", "rounds-to-0"])
@@ -272,7 +284,16 @@ def test_no_pass_breaches_any_limit_given_the_portfolio_and_the_passes_before_it
         assert plan.shares > 0
         assert plan.stop > 0 and plan.stop < plan.entry
         assert plan.stop % asked_for.tick == 0 and plan.target % asked_for.tick == 0
-        assert plan.stop <= asked_for.plan.stop and plan.target <= asked_for.plan.target
+        assert plan.stop <= asked_for.plan.stop
+        if asked_for.plan.stop < plan.entry:
+            # The asked multiple of the rounded risk, rounded up by under a tick.
+            multiple = Fraction(asked_for.plan.target - plan.entry) / Fraction(
+                plan.entry - asked_for.plan.stop
+            )
+            reach = Fraction(plan.entry) + multiple * Fraction(plan.entry - plan.stop)
+            assert reach <= plan.target < reach + Fraction(asked_for.tick)
+        else:
+            assert plan.target <= asked_for.plan.target
         assert (plan.target - plan.entry) / (plan.entry - plan.stop) >= limits.min_reward_to_risk
         assert plan.shares * (plan.entry - plan.stop) <= equity * limits.risk_per_trade
         assert value <= equity * limits.max_position

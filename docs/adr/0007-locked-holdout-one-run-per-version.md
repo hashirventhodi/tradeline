@@ -20,3 +20,7 @@ Running the Holdout once is not enough if what is run on it was shaped by lookin
 - **The c sensitivity is information, never a run of the Holdout.** The report's reruns of the Holdout with the Slippage impact c at zero and at twice its value, at the parameters the Holdout ran at, each in its own account, neither consume the family's Holdout nor count as an attempt: they are recorded apart (`cost_sensitivities`), every Run of them states the c it was priced with, and the Gate never reads them.
 
 Alternatives rejected: letting a later version advance only by the Paper Gate (slower and not repeatable); declaring a new two-year Holdout when enough data exists (freezes the family for two years); counting the Fresh Period from the consumed Holdout's end alone (the Operator has seen those days).
+
+## Amendment (2026-10-24, #85): a frozen commit stays reachable
+
+A Protocol names the git commit it was frozen at, and a run under it is refused at any other commit, so a Protocol whose commit is lost can never be run or checked again. Every Protocol that ran a Walk-Forward, a Holdout or a reproduction is tagged `protocol/<first 12 characters of its hash>` at its commit, and a branch carrying one merges with a merge commit, never squashed or rebased. A Protocol is run from a checkout nothing else touches while it runs: the engine checks the commit and the clean tree at each cell's start, not during it (#87).

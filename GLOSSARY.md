@@ -226,7 +226,7 @@ Average profit per trade after all costs, in rupees or as a fraction of equity.
 ### Price data
 
 **Raw Series**:
-An Instrument's daily prices and volumes exactly as NSE's official end-of-day files state them, each day under the Symbol it was published under, never adjusted and never modified.
+An Instrument's daily prices and volumes in its equity listing series exactly as NSE's official end-of-day files state them, each day under the Symbol it was published under, never adjusted and never modified. Rows NSE lists under the same Symbol in another series (a block deal, the issuer's bonds, preference or partly paid shares) are not the Instrument's.
 _Avoid_: Unadjusted prices, raw candles (the broker's candles are the broker's own adjusted view)
 
 **Corporate Action**:

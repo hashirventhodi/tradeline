@@ -96,6 +96,13 @@ Accept when:
 
 The grilling's other decisions (the Strategy's exact rule, the grid, the fill model, Equity, metric definitions, sectors in a backtest) are in #72 and the ADR amendments it names.
 
+**#85, 2026-10-24, the acceptance run.** The Backtest Gate **fails**, an outcome this phase accepts. `pullback_v1` under Protocol `41e47fd39af3` (commit `c5588e7`, tag `protocol/41e47fd39af3`) misses all six gated thresholds: the Stitched Curve's Sharpe is 0.073, its drawdown 33.5 percent and its profit factor 1.12 over 691 trades; the Holdout's are -1.39, 31.2 percent and 0.77 over 277 trades. The family's Holdout is consumed. The full report is on #72 and the run in `docs/research.md`, "Phase 2 acceptance run (#85)".
+
+- **Contract notes: none supplied.** `contract_notes.csv` holds none, so the cost model's check stays the hand-computed round trips, as the line above allows.
+- **Window boundaries:** checked before the freeze against the Trading Calendar file and, separately, against the trading days of the stored end-of-day files, by a script that imports nothing from the package. All 12 dates agree, and the two day sets (2,416 days) are equal.
+- **Runtime: passes, after two fixes the run found.** First measured, the eight In-Sample cells recorded in 49 minutes took up to 9.5 minutes each, about 24 hours for the Protocol. Two queries were planned against Ledger tables whose statistics read empty, and walked every account's rows and the dead rows each rolled-back cell leaves (commits `3a6af7b`, `89a7531`, `b297dc5`). After them, measured alone on the laptop with the Compose Postgres: one two-year cell 155.8 s from start-up; Walk-Forward 3,592.8 s, its cells 13.7 to 119.5 s (median 15.6 s); the Holdout 147.8 s; the report with the c sensitivity 948.6 s; with the freeze (70.5 s), 79 minutes in all.
+- **Three changes the run made, each in its own commit before the final freeze:** an Instrument's Raw Series is its rows in the equity listing series (`58e208f`; block deals and bonds under its Symbol were read as its bars); the two query-plan fixes, shown to change no result by eight In-Sample cells reproduced exactly under Protocol `f9285f6631ca`, which differs from the stopped `c0527f5740ff` in its commit alone; and the target priced at the Plan's own multiple of the rounded risk, rounded up (`c5588e7`), found from trade counts (98 percent of Plans at r = 1.5 Blocked for the minimum reward to risk) before any result was read.
+
 ## Phase 3: Risk Engine, Paper Broker on live data, Ledger, scheduler
 
 Build: Limits and Risk Engine with Pass and Block, Halt and Flatten, Paper Broker against live Kite quotes, scheduled daily Run, Session Login flow with Data-Only Mode, Ledger completeness.

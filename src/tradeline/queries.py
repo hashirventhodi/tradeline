@@ -34,7 +34,14 @@ from tradeline.adjust import (
 )
 from tradeline.costs import Charges
 from tradeline.dates import IST, month_end
-from tradeline.instruments import Anomaly, Interval, KeyFrom, Link, LinkCandidate
+from tradeline.instruments import (
+    LISTING_SERIES,
+    Anomaly,
+    Interval,
+    KeyFrom,
+    Link,
+    LinkCandidate,
+)
 from tradeline.paper_broker import ExitReason, OrderPurpose
 from tradeline.protocol import Protocol
 from tradeline.sources.nse import Delisting, SymbolChange
@@ -108,8 +115,11 @@ def end_of_day(
     ``instrument`` is an Instrument key, or a Symbol read as the Instrument it
     named on ``as_of`` (``end`` when not given; see ``_owned``). The rows are
     those of every Symbol the Instrument had, each under the Symbol it was
-    published under. All series are returned unless one is named; an
-    Instrument that moved between series inside the range has rows under each.
+    published under. Every equity listing series (``LISTING_SERIES``) is returned
+    unless one is named; an Instrument that moved between series inside the range
+    has rows under each. Rows in any other series under its Symbols (a block deal,
+    BL, or the issuer's bonds, preference or partly paid shares) are not the
+    Instrument's and are never returned, so naming one of those gives no rows.
     """
     owned = _owned(conn, instrument, as_of=end if as_of is None else as_of)
     return _end_of_day(conn, owned, start=start, end=end, series=series)
@@ -125,9 +135,16 @@ def _end_of_day(
         " AND (o.since IS NULL OR e.trade_date >= o.since)"
         " AND (o.until IS NULL OR e.trade_date < o.until)"
         " WHERE e.trade_date BETWEEN %(start)s AND %(end)s"
+        " AND e.series = ANY(%(listing_series)s)"
         " AND (%(series)s::text IS NULL OR e.series = %(series)s)"
         " ORDER BY e.trade_date, e.series, e.symbol",
-        {**owned.params(), "start": start, "end": end, "series": series},
+        {
+            **owned.params(),
+            "start": start,
+            "end": end,
+            "listing_series": list(LISTING_SERIES),
+            "series": series,
+        },
     ).fetchall()
     return [EndOfDayRow(*row) for row in rows]
 
@@ -379,8 +396,9 @@ def adjusted_daily_candles(
     """The Adjusted Series of an Instrument from ``start`` to ``end`` as it stood on ``as_of``.
 
     ``instrument`` is an Instrument key, or a Symbol read as the Instrument it
-    named on ``as_of``. The Raw Series is NSE's end-of-day rows of every Symbol
-    the Instrument had, each bar under the Symbol it was published under: the
+    named on ``as_of``. The Raw Series is NSE's end-of-day rows, in the equity
+    listing series (``LISTING_SERIES``), of every Symbol the Instrument had, each bar
+    under the Symbol it was published under: the
     official unadjusted prices (``end_of_day``). Kite's candles are already
     adjusted by Kite's rules and are not the input here. The adjustment is
     computed on every read from the raw rows and the stored factors
@@ -2019,6 +2037,14 @@ class LedgerPosition:
         return None if self.exit_reason is None else self.as_of
 
 
+def _account_predicate(backtest_id: uuid.UUID | None, column: str = "backtest_id") -> str:
+    """The predicate an account's Ledger rows are read by: its backtest id, or none for the
+    paper and live accounts. Stated as ``=`` or ``IS NULL``, never ``IS NOT DISTINCT FROM``,
+    which no index serves: a read then walked every account's rows, and the dead rows each
+    Walk-Forward cell rolls back, growing through a cell and from cell to cell (#85)."""
+    return f"{column} IS NULL" if backtest_id is None else f"{column} = %(backtest_id)s"
+
+
 def orders(
     conn: psycopg.Connection,
     *,
@@ -2028,41 +2054,64 @@ def orders(
     open_only: bool = False,
 ) -> list[LedgerOrder]:
     """An account's Orders in the order they were placed; only those neither filled nor
-    cancelled when ``open_only``."""
-    rows = conn.execute(
-        "SELECT p.id, p.run_id, p.rank, p.position_id, p.instrument, p.symbol, p.side,"
-        " p.purpose, p.limit_price, p.shares, p.session, p.day, p.seq, c.day, c.seq, c.reason,"
-        " f.day, f.seq, f.price"
-        " FROM orders p"
-        " LEFT JOIN orders c ON (c.mode, c.id, c.event) = (p.mode, p.id, 'cancelled')"
-        " LEFT JOIN fills f ON (f.mode, f.order_id) = (p.mode, p.id)"
-        " WHERE p.event = 'placed' AND p.mode = %(mode)s"
-        " AND p.backtest_id IS NOT DISTINCT FROM %(backtest_id)s AND p.dry_run = %(dry_run)s"
-        " AND (NOT %(open_only)s OR (c.id IS NULL AND f.order_id IS NULL))"
-        " ORDER BY p.day, p.seq",
-        {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run, "open_only": open_only},
-    ).fetchall()
-    return [
-        LedgerOrder(
-            id=row[0],
-            run_id=row[1],
-            rank=row[2],
-            position_id=row[3],
-            instrument=row[4],
-            symbol=row[5],
-            side=row[6],
-            purpose=row[7],
-            limit_price=row[8],
-            shares=row[9],
-            session=row[10],
-            placed=(row[11], row[12]),
-            cancelled=None if row[13] is None else (row[13], row[14]),
-            cancel_reason=row[15],
-            filled=None if row[16] is None else (row[16], row[17]),
-            fill_price=row[18],
+    cancelled when ``open_only``.
+
+    Read as three scans of the account's own rows (its placed Orders, its cancellations
+    and its Fills) joined here by Order id, not as a join in SQL. A backtest's account is
+    written and read inside one transaction, so the planner's statistics see empty
+    tables, costs every lookup at one row, and can look an Order's cancellation or Fill
+    up through any index on the Engine Mode alone: every row of the partition per Order,
+    the dead rows each rolled-back Walk-Forward cell leaves included. As a join, a call
+    grew with the square of the account's Orders, 0.84 s for the one call a day a year
+    into an In-Sample cell (3,519 Orders; one cell alone on the laptop with the Compose
+    Postgres), and a lateral lookup by key lasted only until a vacuum re-planned it (#85).
+    """
+    account = f"mode = %(mode)s AND {_account_predicate(backtest_id)} AND dry_run = %(dry_run)s"
+    params = {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run}
+    cancelled = {
+        row[0]: row[1:]
+        for row in conn.execute(
+            f"SELECT id, day, seq, reason FROM orders WHERE {account} AND event = 'cancelled'",
+            params,
+        ).fetchall()
+    }
+    filled = {
+        row[0]: row[1:]
+        for row in conn.execute(
+            f"SELECT order_id, day, seq, price FROM fills WHERE {account}", params
+        ).fetchall()
+    }
+    found = []
+    for row in conn.execute(
+        "SELECT id, run_id, rank, position_id, instrument, symbol, side, purpose, limit_price,"
+        f" shares, session, day, seq FROM orders WHERE {account} AND event = 'placed'"
+        " ORDER BY day, seq",
+        params,
+    ).fetchall():
+        cancel, fill = cancelled.get(row[0]), filled.get(row[0])
+        if open_only and (cancel is not None or fill is not None):
+            continue
+        found.append(
+            LedgerOrder(
+                id=row[0],
+                run_id=row[1],
+                rank=row[2],
+                position_id=row[3],
+                instrument=row[4],
+                symbol=row[5],
+                side=row[6],
+                purpose=row[7],
+                limit_price=row[8],
+                shares=row[9],
+                session=row[10],
+                placed=(row[11], row[12]),
+                cancelled=None if cancel is None else (cancel[0], cancel[1]),
+                cancel_reason=None if cancel is None else cancel[2],
+                filled=None if fill is None else (fill[0], fill[1]),
+                fill_price=None if fill is None else fill[2],
+            )
         )
-        for row in rows
-    ]
+    return found
 
 
 def fills(
@@ -2077,7 +2126,7 @@ def fills(
         "SELECT order_id, day, seq, position_id, instrument, symbol, side, price, shares, "
         + ", ".join(_CHARGE_COLUMNS)
         + " FROM fills WHERE mode = %(mode)s"
-        " AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s AND dry_run = %(dry_run)s"
+        f" AND {_account_predicate(backtest_id)} AND dry_run = %(dry_run)s"
         " ORDER BY day, seq",
         {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
     ).fetchall()
@@ -2111,7 +2160,7 @@ def positions(
         "SELECT position_id, run_id, rank, instrument, symbol, opened_on, shares, entry, stop,"
         " target, time_stop_days, day, exit_reason, exit_price FROM ("
         "  SELECT DISTINCT ON (position_id) * FROM positions"
-        "  WHERE mode = %(mode)s AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s"
+        f"  WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
         "  AND dry_run = %(dry_run)s"
         "  ORDER BY position_id, day DESC, seq DESC) p"
         " WHERE NOT %(open_only)s OR event <> 'closed'"
@@ -2154,7 +2203,7 @@ def position_events(
     rows = conn.execute(
         "SELECT position_id, event, day, seq, instrument, symbol, shares, entry, stop, target,"
         " factor, cash_in_lieu, exit_price, exit_reason FROM positions"
-        " WHERE mode = %(mode)s AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s"
+        f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
         " AND dry_run = %(dry_run)s ORDER BY day, seq",
         {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
     ).fetchall()
@@ -2193,10 +2242,10 @@ def account_cash_flows(
     row = conn.execute(
         "SELECT coalesce((SELECT sum(CASE side WHEN 'sell' THEN price * shares"
         " ELSE -price * shares END - (" + charges + ")) FROM fills"
-        " WHERE mode = %(mode)s AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s"
+        f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
         " AND dry_run = %(dry_run)s), 0)"
         " + coalesce((SELECT sum(cash_in_lieu) FROM positions"
-        " WHERE mode = %(mode)s AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s"
+        f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
         " AND dry_run = %(dry_run)s), 0)",
         {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
     ).fetchone()

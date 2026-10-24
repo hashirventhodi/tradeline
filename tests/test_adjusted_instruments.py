@@ -122,6 +122,31 @@ def test_a_split_filed_under_both_symbols_is_applied_once(fresh_database_url: st
     assert (bar.close, bar.volume, bar.factor) == (D("133.85"), 117_250, Fraction(1, 5))
 
 
+def test_rows_outside_the_equity_listing_series_are_not_the_instruments(
+    fresh_database_url: str,
+) -> None:
+    """NSE's file lists other securities under an Instrument's Symbol: a block deal (BL) at
+    its own price, and the issuer's bonds (N1 to NZ). The #85 acceptance run found them read
+    as second bars of the day."""
+    load(fresh_database_url, filed_under("GUJGASLTD"))
+    day = date(2019, 1, 16)
+    with app_connection(fresh_database_url) as conn:
+        conn.execute(
+            "INSERT INTO eod_bhavcopy (trade_date, symbol, series, open, high, low, close,"
+            " traded_qty, traded_value, trades) VALUES"
+            " (%s, 'GUJGASLTD', 'BL', 700.00, 700.00, 700.00, 700.00, 100000, 70000000, 1),"
+            " (%s, 'GUJGASLTD', 'N1', 1010.00, 1010.00, 1010.00, 1010.00, 10, 10100, 1)",
+            (day, day),
+        )
+        rows = queries.end_of_day(conn, KEY, start=day, end=day)
+        bars = queries.adjusted_daily_candles(conn, KEY, start=day, end=day, as_of=LAST)
+        span = queries.adjusted_series_span(conn, KEY, start=FIRST, end=LAST)
+
+        assert [(r.series, r.close) for r in rows] == [("EQ", D("143.3"))]
+        assert [(b.series, b.close) for b in bars] == [("EQ", D("143.3"))]
+        assert [b.series for b in span.bars(start=day, end=day, as_of=LAST)] == ["EQ"]
+
+
 def test_a_split_that_issues_a_new_isin_gives_one_unbroken_series(
     conn: psycopg.Connection,
 ) -> None:
