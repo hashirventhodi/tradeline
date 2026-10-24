@@ -2037,7 +2037,7 @@ class LedgerPosition:
         return None if self.exit_reason is None else self.as_of
 
 
-def _account(backtest_id: uuid.UUID | None, column: str = "backtest_id") -> str:
+def _account_predicate(backtest_id: uuid.UUID | None, column: str = "backtest_id") -> str:
     """The predicate an account's Ledger rows are read by: its backtest id, or none for the
     paper and live accounts. Stated as ``=`` or ``IS NULL``, never ``IS NOT DISTINCT FROM``,
     which no index serves: a read then walked every account's rows, and the dead rows each
@@ -2060,8 +2060,9 @@ def orders(
     kept from being flattened into joins by ``OFFSET 0``). A backtest's account is
     written and read inside one transaction, so the planner's statistics see empty
     tables, and as plain joins it compared every placed Order with every cancelled
-    one: a call grew with the square of the account's Orders, 0.8 s a day a year into
-    an In-Sample cell (#85)."""
+    one: a call grew with the square of the account's Orders, 0.84 s for the one call
+    a day a year into an In-Sample cell (3,519 Orders; one cell alone on the laptop with
+    the Compose Postgres, #85)."""
     rows = conn.execute(
         "SELECT p.id, p.run_id, p.rank, p.position_id, p.instrument, p.symbol, p.side,"
         " p.purpose, p.limit_price, p.shares, p.session, p.day, p.seq, c.day, c.seq, c.reason,"
@@ -2072,7 +2073,7 @@ def orders(
         " LEFT JOIN LATERAL (SELECT f.order_id, f.day, f.seq, f.price FROM fills f"
         "  WHERE (f.mode, f.order_id) = (p.mode, p.id) OFFSET 0) f ON true"
         " WHERE p.event = 'placed' AND p.mode = %(mode)s"
-        f" AND {_account(backtest_id, 'p.backtest_id')} AND p.dry_run = %(dry_run)s"
+        f" AND {_account_predicate(backtest_id, 'p.backtest_id')} AND p.dry_run = %(dry_run)s"
         " AND (NOT %(open_only)s OR (c.id IS NULL AND f.order_id IS NULL))"
         " ORDER BY p.day, p.seq",
         {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run, "open_only": open_only},
@@ -2112,7 +2113,7 @@ def fills(
         "SELECT order_id, day, seq, position_id, instrument, symbol, side, price, shares, "
         + ", ".join(_CHARGE_COLUMNS)
         + " FROM fills WHERE mode = %(mode)s"
-        f" AND {_account(backtest_id)} AND dry_run = %(dry_run)s"
+        f" AND {_account_predicate(backtest_id)} AND dry_run = %(dry_run)s"
         " ORDER BY day, seq",
         {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
     ).fetchall()
@@ -2146,7 +2147,7 @@ def positions(
         "SELECT position_id, run_id, rank, instrument, symbol, opened_on, shares, entry, stop,"
         " target, time_stop_days, day, exit_reason, exit_price FROM ("
         "  SELECT DISTINCT ON (position_id) * FROM positions"
-        f"  WHERE mode = %(mode)s AND {_account(backtest_id)}"
+        f"  WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
         "  AND dry_run = %(dry_run)s"
         "  ORDER BY position_id, day DESC, seq DESC) p"
         " WHERE NOT %(open_only)s OR event <> 'closed'"
@@ -2189,7 +2190,7 @@ def position_events(
     rows = conn.execute(
         "SELECT position_id, event, day, seq, instrument, symbol, shares, entry, stop, target,"
         " factor, cash_in_lieu, exit_price, exit_reason FROM positions"
-        f" WHERE mode = %(mode)s AND {_account(backtest_id)}"
+        f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
         " AND dry_run = %(dry_run)s ORDER BY day, seq",
         {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
     ).fetchall()
@@ -2228,10 +2229,10 @@ def account_cash_flows(
     row = conn.execute(
         "SELECT coalesce((SELECT sum(CASE side WHEN 'sell' THEN price * shares"
         " ELSE -price * shares END - (" + charges + ")) FROM fills"
-        f" WHERE mode = %(mode)s AND {_account(backtest_id)}"
+        f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
         " AND dry_run = %(dry_run)s), 0)"
         " + coalesce((SELECT sum(cash_in_lieu) FROM positions"
-        f" WHERE mode = %(mode)s AND {_account(backtest_id)}"
+        f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
         " AND dry_run = %(dry_run)s), 0)",
         {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
     ).fetchone()
