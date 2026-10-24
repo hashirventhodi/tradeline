@@ -4,7 +4,8 @@
 range, then again with the Slippage impact c at zero and at twice its value, and
 reads all three back from the Ledger (``tradeline.queries``); the report is that
 reading and nothing else. Its metrics are ``tradeline.metrics`` over the daily
-marked Equity curve (each Run's Equity) and the closed trades.
+marked Equity curve (the starting Equity, then each Run's Equity) and the closed
+trades.
 
 A closed trade is a Position the backtest closed; its net P&L is what its Fills
 moved into cash after every charge and Slippage, plus any cash paid in lieu of a
@@ -174,7 +175,9 @@ class Scores:
 @dataclass(frozen=True)
 class Account:
     """One backtest read back from the Ledger: its daily curve, its closed trades, its open
-    Positions marked at the last close, its Passes and its Blocks."""
+    Positions marked at the last close, its Passes and its Blocks. The curve starts at the
+    account's starting Equity, the day before ``days[0]``, then holds each day's Equity,
+    so the first day's return counts."""
 
     days: tuple[date, ...]
     curve: tuple[Decimal, ...]
@@ -245,7 +248,11 @@ def read_account(conn: psycopg.Connection, backtest_id: uuid.UUID) -> Account:
     runs = queries.runs(conn, mode="backtest", backtest_id=backtest_id)
     if not runs:
         raise ValueError(f"no backtest {backtest_id} in the Ledger")
-    curve = []
+    protocol = runs[0].strategy.protocol
+    frozen = None if protocol is None else queries.protocol(conn, protocol)
+    if frozen is None:
+        raise ValueError(f"backtest {backtest_id} names no frozen Protocol to start it from")
+    curve = [frozen.protocol.starting_equity]
     for ran in runs:
         if ran.equity is None:
             raise ValueError(f"the Run on {ran.as_of} records no Equity; backtest it again")

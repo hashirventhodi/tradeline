@@ -425,7 +425,8 @@ class _Runner:
                 p.exit_reason is not None
                 for p in queries.positions(conn, mode="backtest", backtest_id=backtest_id)
             )
-        curve = [r.equity for r in results]
+        # From the starting Equity, as the report reads a curve (``report.Account``).
+        curve = [terms.starting_equity, *(r.equity for r in results)]
         cell = queries.WalkForwardCell(
             protocol=self._frozen.hash,
             window=number,

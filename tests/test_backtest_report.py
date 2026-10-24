@@ -164,12 +164,13 @@ def test_sharpe_is_the_daily_excess_return_of_the_runs_equity_over_its_deviation
     report, finished, database_url = two_years
     with app_connection(database_url) as conn:
         runs = queries.runs(conn, mode="backtest", backtest_id=uuid.UUID(finished["backtest_id"]))
-    curve = [float(r.equity or 0) for r in runs]
+    # From the starting Equity, so the first day's return counts.
+    curve = [500000.0] + [float(r.equity or 0) for r in runs]
     excess = [b / a - 1 - 0.065 / 252 for a, b in zip(curve, curve[1:], strict=False)]
 
     expected = statistics.mean(excess) / statistics.stdev(excess) * 252**0.5
 
-    assert len(curve) == 494
+    assert len(curve) == 1 + 494
     assert float(report["metrics"]["sharpe"]) == pytest.approx(expected, abs=0.0001)
     assert report["risk_free_rate"] == "0.065000"
 

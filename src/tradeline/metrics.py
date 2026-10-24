@@ -1,8 +1,8 @@
 """The metrics a backtest is scored by, as the Backtest Gate will score it (ADR 0015).
 
-Pure arithmetic over the daily marked Equity curve (each Run's Equity: cash plus
-the open Positions at the day's close) and the closed trades' net P&L after
-costs (``docs/risk-controls.md``, Gates):
+Pure arithmetic over the daily marked Equity curve (the starting Equity, then
+each Run's Equity: cash plus the open Positions at the day's close) and the
+closed trades' net P&L after costs (``docs/risk-controls.md``, Gates):
 
 - Sharpe: the mean of the curve's daily excess returns over the risk-free rate
   (a yearly rate taken as rate / 252 a trading day; idle cash earns nothing),
@@ -129,13 +129,14 @@ def expectancy(trades: Sequence[PositionResult]) -> Expectancy | None:
 def halt_days(
     days: Sequence[date], curve: Sequence[Decimal], *, daily_loss: Decimal, drawdown: Decimal
 ) -> list[HaltDay]:
-    """Every day of the curve either Halt Limit would have fired on."""
-    if len(days) != len(curve):
-        raise ValueError("the curve needs one Equity a day")
+    """Every day either Halt Limit would have fired on, of a curve that starts at the
+    starting Equity and then holds one Equity for each of ``days``."""
+    if len(curve) != len(days) + 1:
+        raise ValueError("the curve needs its starting Equity, then one Equity a day")
     found = []
-    falls = drawdowns(curve)
-    for i, (day, equity, fall) in enumerate(zip(days, curve, falls, strict=True)):
-        loss = Decimal(0) if i == 0 else (curve[i - 1] - equity) / curve[i - 1]
+    falls = drawdowns(curve)[1:]
+    for i, (day, equity, fall) in enumerate(zip(days, curve[1:], falls, strict=True)):
+        loss = (curve[i] - equity) / curve[i]
         checks: tuple[tuple[HaltLimit, Decimal, Decimal], ...] = (
             ("daily_loss", loss, daily_loss),
             ("drawdown", fall, drawdown),
