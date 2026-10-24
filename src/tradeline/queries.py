@@ -2297,6 +2297,8 @@ class WalkForwardWindow:
     out_of_sample_trades: int
     start_equity: Decimal | None
     end_equity: Decimal | None
+    # When the Window was recorded: the end of its Out-of-Sample stretch's writing.
+    recorded_at: datetime | None = None
 
 
 def walk_forward(conn: psycopg.Connection, protocol: str) -> WalkForward | None:
@@ -2328,7 +2330,7 @@ def walk_forward_windows(conn: psycopg.Connection, protocol: str) -> list[WalkFo
     rows = conn.execute(
         "SELECT protocol, window_number, cells, eligible_cells, parameters, objective,"
         " in_sample_sharpe, in_sample_trades, out_of_sample_runs, out_of_sample_trades,"
-        " start_equity, end_equity FROM walk_forward_windows WHERE protocol = %s"
+        " start_equity, end_equity, recorded_at FROM walk_forward_windows WHERE protocol = %s"
         " ORDER BY window_number",
         (protocol,),
     ).fetchall()
@@ -2455,3 +2457,63 @@ def lineage(conn: psycopg.Connection, protocol: str) -> Lineage:
         family(name, [p for p in frozen if p.protocol.family == name]),
         tuple(family(f, [p for p in earlier if p.protocol.family == f]) for f in beside),
     )
+
+
+# --- The Backtest Gate (#84) --------------------------------------------------
+
+
+@dataclass(frozen=True)
+class GateEvaluation:
+    """One evaluation of the Backtest Gate on a Protocol's Stitched Curve and Holdout run,
+    with what it read: the Protocol's thresholds, each curve's metrics (exact decimal
+    strings, None where the curve gives none), the Holdout run's standing, every check, and
+    how many real contract notes the cost model was checked against."""
+
+    id: uuid.UUID
+    gate: str
+    protocol: str
+    evaluated_at: datetime
+    stitched_backtest_id: uuid.UUID
+    holdout_attempt: uuid.UUID
+    thresholds: dict[str, Any]
+    inputs: dict[str, Any]
+    standing: dict[str, Any]
+    checks: list[dict[str, Any]]
+    contract_notes: int
+    outcome: str
+    reason: str
+
+
+def gate_evaluations(conn: psycopg.Connection, *, protocol: str) -> list[GateEvaluation]:
+    """The Backtest Gate's evaluations under the Protocol whose full hash is ``protocol``, in
+    the order made."""
+    rows = conn.execute(
+        "SELECT id, gate, protocol, evaluated_at, stitched_backtest_id, holdout_attempt,"
+        " thresholds, inputs, standing, checks, contract_notes, outcome, reason"
+        " FROM gate_evaluations WHERE protocol = %s ORDER BY evaluated_at, id",
+        (protocol,),
+    ).fetchall()
+    return [GateEvaluation(*row) for row in rows]
+
+
+@dataclass(frozen=True)
+class CostSensitivity:
+    """A Protocol's Stitched Curve or Holdout run again with the Slippage impact c at
+    ``impact``, in the account ``backtest_id``: information, never a Protocol result."""
+
+    protocol: str
+    curve: str
+    impact: Decimal
+    backtest_id: uuid.UUID
+    started_at: datetime
+
+
+def cost_sensitivities(conn: psycopg.Connection, protocol: str) -> list[CostSensitivity]:
+    """The c sensitivity accounts under the Protocol whose full hash is ``protocol``, by
+    impact, the Stitched Curve before the Holdout."""
+    rows = conn.execute(
+        "SELECT protocol, curve, impact, backtest_id, started_at FROM cost_sensitivities"
+        " WHERE protocol = %s ORDER BY impact, curve DESC",
+        (protocol,),
+    ).fetchall()
+    return [CostSensitivity(*row) for row in rows]

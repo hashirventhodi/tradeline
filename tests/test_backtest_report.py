@@ -4,12 +4,11 @@ from its JSON (and, for Sharpe's curve, the query layer).
 The two-year report is ``synthetic_eod.two_year_market`` from 2022-07-01 to
 2024-06-28 under a Protocol frozen over it (``synthetic_eod.freeze_protocol``),
 as ``test_positions.py`` backtests it (k = 2, r = 2, n = 10, Rs 5,00,000, the
-cost schedule as of 2026-10-24, c = 0.1, risk-free 6.5 percent), with the Halts
-(configuration, not the Protocol's) lowered
-to a 0.8 percent daily loss and a 1.4 percent drawdown so that some fire. Its
-six closed trades, worked in ``test_positions.py``, net Rs 945.79, 2,553.64,
-3,776.42, 2,603.77 and -5,589.17 (the differences of the Runs' Equity there),
-and BIRCH's last, 76 shares bought at 991.75 and sold at 971.75, nets -1,520
+cost schedule as of 2026-10-24, c = 0.1, risk-free 6.5 percent), with the
+Protocol's Halts lowered to a 0.8 percent daily loss and a 1.4 percent drawdown
+so that some fire. Its six closed trades, worked in ``test_positions.py``, net
+Rs 945.79, 2,553.64, 3,776.42, 2,603.77 and -5,589.17 (the differences of the
+Runs' Equity there), and BIRCH's last, 76 shares bought at 991.75 and sold at 971.75, nets -1,520
 less the buy's charges (STT 75, stamp 11, exchange 2.31, SEBI 0.08, GST 0.43,
 Slippage 37.6865 + 0.1 x 75,373^2 / 9,83,25,000 -> 43.46: Rs 132.28) and the
 sale's (Rs 134.58): -1,786.86. So:
@@ -69,6 +68,7 @@ from synthetic_eod import (
 from tradeline import queries
 from tradeline.cli import main
 from tradeline.db import app_connection
+from tradeline.metrics import HaltLimits
 from tradeline.risk import Limits
 
 D = Decimal
@@ -91,17 +91,19 @@ def report_over(
     *,
     frozen_over: tuple[date, date] | None = None,
     limits: Limits | None = None,
-    extra_risk: str = "",
+    halts: HaltLimits | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Load the market, freeze a Protocol over ``frozen_over`` (``start`` to ``end`` unless
-    given) with ``limits``, and report it from ``start`` to ``end``; the report's JSON and
-    the command's last log line."""
+    given) with ``limits`` and ``halts``, and report it from ``start`` to ``end``; the
+    report's JSON and the command's last log line."""
     fixtures = write_fixtures(market, directory / "fixtures", repo_calendar())
     with app_connection(database_url) as conn:
         load_market(conn, fixtures, market)
-        frozen = freeze_protocol(conn, market, *(frozen_over or (start, end)), limits=limits)
+        frozen = freeze_protocol(
+            conn, market, *(frozen_over or (start, end)), limits=limits, halts=halts
+        )
     config = directory / "tradeline.toml"
-    config.write_text(config_text(market, extra_risk))
+    config.write_text(config_text(market))
     out = directory / "report.json"
     logs = io.StringIO()
     with pytest.MonkeyPatch.context() as patch, contextlib.redirect_stdout(logs):
@@ -124,7 +126,7 @@ def two_years(
         tmp_path_factory.mktemp("two_years"),
         two_year_market(),
         *TWO_YEARS,
-        extra_risk="daily_loss_halt = 0.008\ndrawdown_halt = 0.014\n",
+        halts=HaltLimits(daily_loss=D("0.008"), drawdown=D("0.014")),
     )
     return report, finished, database_url
 

@@ -1,8 +1,8 @@
 """Freezing a Protocol, and checking at run time that its data is still the rows there now.
 
 ``freeze_protocol`` states the Protocol (``tradeline.protocol``) from the
-Operator's Terms, the configured Limits and cost schedule, the Strategy, the
-Universe Rule version and the git commit, and the data snapshot it reads from
+Operator's Terms, the configured Limits, Halt fractions and cost schedule, the
+Strategy, the Universe Rule version and the git commit, and the data snapshot it reads from
 the database: for each month from the first In-Sample day to the Holdout's
 last, the month's mode (Recorded or Reconstructed) and its build, whose hashes
 are checked against the rows stored now; and for every member of those months,
@@ -26,6 +26,7 @@ import psycopg
 
 from tradeline import queries
 from tradeline.costs import CostSchedule, Slippage
+from tradeline.metrics import HaltLimits
 from tradeline.protocol import (
     OBJECTIVE,
     TIE_BREAK,
@@ -91,6 +92,7 @@ def freeze_protocol(
     strategy: Strategy,
     rule_version: str,
     limits: Limits,
+    halts: HaltLimits,
     schedule: CostSchedule,
     slippage: Slippage,
     costs_as_of: date,
@@ -127,6 +129,7 @@ def freeze_protocol(
         slippage=slippage,
         band=terms.band,
         limits=limits,
+        halts=halts,
         starting_equity=terms.starting_equity,
         risk_free_rate=terms.risk_free_rate,
         gate=terms.gate,

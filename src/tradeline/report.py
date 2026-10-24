@@ -77,6 +77,8 @@ class ClosedTrade:
     exit_reason: str
     net_pnl: Decimal
     equity_at_entry: Decimal
+    # The sector its Pass was held to; ``unclassified`` when none was recorded.
+    sector: str = UNCLASSIFIED
 
     @property
     def gapped(self) -> bool:
@@ -140,13 +142,56 @@ class Scores:
 @dataclass(frozen=True)
 class Account:
     """One backtest read back from the Ledger: its daily curve, its closed trades, its open
-    Positions marked at the last close, and its Blocks."""
+    Positions marked at the last close, its Passes and its Blocks."""
 
     days: tuple[date, ...]
     curve: tuple[Decimal, ...]
     closed: tuple[ClosedTrade, ...]
     open: tuple[OpenPosition, ...]
     blocks: tuple[queries.LedgerBlock, ...]
+    passes: tuple[queries.LedgerPass, ...] = ()
+
+    def limits_json(self) -> dict[str, Any]:
+        """Where the Limits bound: the Candidates beyond the Passes (Blocked by the entry
+        cap), the Passes the Participation Cap sized down and the Plans it Blocked, the
+        Blocks caused by Unclassified and the trades held in it, and every Block by Limit."""
+        by_limit = Counter(b.limit for b in self.blocks)
+        return {
+            "candidates_beyond_passes": by_limit["max_new_entries"],
+            "participation_cap": {
+                "passes_sized_down": sum(_capped(p) for p in self.passes),
+                "blocks": by_limit["participation_cap"],
+            },
+            "unclassified": {
+                "blocks": sum(
+                    b.limit == "max_sector" and b.sector == UNCLASSIFIED for b in self.blocks
+                ),
+                "trades": sum(t.sector == UNCLASSIFIED for t in self.closed),
+            },
+            "blocks_by_limit": dict(sorted(by_limit.items())),
+        }
+
+    def gapped_stops_json(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "symbol": t.symbol,
+                "opened_on": t.opened_on.isoformat(),
+                "closed_on": t.closed_on.isoformat(),
+                "shares": t.shares,
+                "entry": _text(t.entry, RUPEE),
+                "stop": _text(t.stop, RUPEE),
+                "exit_price": _text(t.exit_price, RUPEE),
+                "planned_risk": _text(t.planned_risk, RUPEE),
+                "realised_loss": _text(-t.net_pnl, RUPEE),
+            }
+            for t in self.closed
+            if t.gapped
+        ]
+
+    def halt_days(self, halts: HaltLimits) -> list[HaltDay]:
+        return halt_days(
+            self.days, self.curve, daily_loss=halts.daily_loss, drawdown=halts.drawdown
+        )
 
     def scores(self, *, risk_free_rate: Decimal) -> Scores:
         pnls = [t.net_pnl for t in self.closed]
@@ -183,14 +228,13 @@ def read_account(conn: psycopg.Connection, backtest_id: uuid.UUID) -> Account:
     blocks: list[queries.LedgerBlock] = []
     for ran in runs:
         blocks += queries.blocks(conn, ran.id)
+        passes[ran.id] = {p.rank: p for p in queries.passes(conn, ran.id)}
     closed, still_open = [], []
     last = runs[-1].as_of
     for position in queries.positions(conn, mode="backtest", backtest_id=backtest_id):
         if position.exit_reason is None or position.exit_price is None:
             still_open.append(_marked(conn, position, last))
             continue
-        if position.run_id not in passes:
-            passes[position.run_id] = {p.rank: p for p in queries.passes(conn, position.run_id)}
         granted = passes[position.run_id][position.rank]
         closed.append(
             ClosedTrade(
@@ -206,11 +250,27 @@ def read_account(conn: psycopg.Connection, backtest_id: uuid.UUID) -> Account:
                 exit_reason=position.exit_reason,
                 net_pnl=flows[position.id],
                 equity_at_entry=granted.facts["equity"],
+                sector=granted.sector,
             )
         )
     closed.sort(key=lambda t: (t.closed_on, t.opened_on, t.symbol))
     return Account(
-        tuple(r.as_of for r in runs), tuple(curve), tuple(closed), tuple(still_open), tuple(blocks)
+        tuple(r.as_of for r in runs),
+        tuple(curve),
+        tuple(closed),
+        tuple(still_open),
+        tuple(blocks),
+        tuple(p for ranked in passes.values() for p in ranked.values()),
+    )
+
+
+def _capped(granted: queries.LedgerPass) -> bool:
+    """The Participation Cap sized the Pass down: it allowed fewer shares than its stop's
+    risk did, and the Pass took the cap's."""
+    facts = granted.facts
+    cap = facts.get("allowed_participation_cap")
+    return (
+        cap is not None and cap == granted.shares and cap < facts.get("allowed_risk_per_trade", cap)
     )
 
 
@@ -262,17 +322,11 @@ class BacktestReport:
 
     @property
     def halt_days(self) -> list[HaltDay]:
-        return halt_days(
-            self.account.days,
-            self.account.curve,
-            daily_loss=self.halts.daily_loss,
-            drawdown=self.halts.drawdown,
-        )
+        return self.account.halt_days(self.halts)
 
     def as_json(self) -> dict[str, Any]:
         account = self.account
         by_limit = Counter(b.limit for b in account.blocks)
-        halts = self.halt_days
         return {
             "protocol": self.strategy.protocol,
             "strategy": {
@@ -288,15 +342,7 @@ class BacktestReport:
             "halt_would_have_fired": {
                 "daily_loss_limit": _text(self.halts.daily_loss, FRACTION),
                 "drawdown_limit": _text(self.halts.drawdown, FRACTION),
-                "days": [
-                    {
-                        "day": h.day.isoformat(),
-                        "limits": list(h.limits),
-                        "daily_loss": _text(h.daily_loss, FRACTION),
-                        "drawdown": _text(h.drawdown, FRACTION),
-                    }
-                    for h in halts
-                ],
+                "days": halt_days_json(self.halt_days),
             },
             "metrics": self.scores.as_json(),
             "starting_equity": _text(self.starting_equity, RUPEE),
@@ -311,21 +357,7 @@ class BacktestReport:
             "cost_sensitivity": [
                 {"impact": str(v.impact), **v.scores.as_json()} for v in self.variants
             ],
-            "gapped_stops": [
-                {
-                    "symbol": t.symbol,
-                    "opened_on": t.opened_on.isoformat(),
-                    "closed_on": t.closed_on.isoformat(),
-                    "shares": t.shares,
-                    "entry": _text(t.entry, RUPEE),
-                    "stop": _text(t.stop, RUPEE),
-                    "exit_price": _text(t.exit_price, RUPEE),
-                    "planned_risk": _text(t.planned_risk, RUPEE),
-                    "realised_loss": _text(-t.net_pnl, RUPEE),
-                }
-                for t in account.closed
-                if t.gapped
-            ],
+            "gapped_stops": account.gapped_stops_json(),
             "candidates_beyond_passes": by_limit["max_new_entries"],
             "unclassified_blocks": sum(
                 b.limit == "max_sector" and b.sector == UNCLASSIFIED for b in account.blocks
@@ -404,12 +436,11 @@ def report_backtest(
     end: date,
     calendar: TradingCalendar,
     tick_sizes: TickSizes,
-    halts: HaltLimits,
     contract_notes: int,
 ) -> ReportResult:
     """Backtest the cell from ``start`` to ``end`` under the frozen Protocol ``protocol``,
     then with its Slippage impact c at zero and at twice its value, and report all three from
-    the Ledger, scored at the Protocol's risk-free rate."""
+    the Ledger, scored at the Protocol's risk-free rate, the Halt days at its Halt fractions."""
 
     def timed(impact: Decimal | None) -> tuple[uuid.UUID, float]:
         began = time.monotonic()
@@ -451,12 +482,24 @@ def report_backtest(
         starting_equity=terms.starting_equity,
         costs=terms.cost_model(),
         risk_free_rate=terms.risk_free_rate,
-        halts=halts,
+        halts=terms.halts,
         account=read_account(conn, backtest_id),
         variants=tuple(variants),
         contract_notes=contract_notes,
     )
     return ReportResult(report, backtest_id, variant_ids, seconds, variant_seconds)
+
+
+def halt_days_json(days: list[HaltDay]) -> list[dict[str, Any]]:
+    return [
+        {
+            "day": h.day.isoformat(),
+            "limits": list(h.limits),
+            "daily_loss": _text(h.daily_loss, FRACTION),
+            "drawdown": _text(h.drawdown, FRACTION),
+        }
+        for h in days
+    ]
 
 
 def _text(value: Decimal | None, places: Decimal) -> str | None:

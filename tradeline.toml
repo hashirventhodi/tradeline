@@ -95,7 +95,7 @@ safety_margin = 0.0005      # Slippage per side, of the Order's value
 impact = 0.1                # c x (Order value / 20-day average daily traded value)
 
 # The Protocol (ADR 0007): how pullback_v1 is validated, frozen by
-# `tradeline protocol freeze` with the [risk] Limits, the [costs] Slippage, the
+# `tradeline protocol freeze` with the [risk] Limits and Halts, the [costs] Slippage, the
 # cost schedule as of the freeze, the Universe Rule version, the git commit and
 # the data snapshot. `tradeline protocol windows` prints the Window boundaries
 # as trading days to check before freezing. A change here is a new Protocol.
