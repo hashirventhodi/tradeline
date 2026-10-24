@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 from tradeline import universe as universe_service
 from tradeline.cited_actions import load_cited_actions
@@ -23,6 +24,7 @@ from tradeline.collect import collect_daily as collect_daily_service
 from tradeline.compare_adjusted import compare_adjusted as compare_adjusted_service
 from tradeline.config import Config, default_config_path, load_config
 from tradeline.conformance import check_conformance
+from tradeline.costs import CostModel, load_cost_schedule
 from tradeline.dates import IST, month_end, month_of, next_month, parse_month
 from tradeline.db import NotAppRoleMember, app_connection, connect
 from tradeline.engine import backtest as backtest_service
@@ -501,6 +503,7 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
             rule_version=ctx.config.universe.version,
             limits=ctx.config.risk.limits(),
             tick_sizes=tick_sizes,
+            costs=_cost_model(ctx, args.costs_as_of),
         )
     log.info("run finished", extra=result.summary())
     return 0
@@ -524,6 +527,7 @@ def backtest(ctx: Context, args: argparse.Namespace) -> int:
             rule_version=ctx.config.universe.version,
             limits=ctx.config.risk.limits(),
             tick_sizes=tick_sizes,
+            costs=_cost_model(ctx, args.costs_as_of),
         )
     log.info(
         "backtest finished",
@@ -534,12 +538,34 @@ def backtest(ctx: Context, args: argparse.Namespace) -> int:
             "passes": sum(r.passes for r in results),
             "fills": sum(r.fills for r in results),
             "open_positions": results[-1].open_positions,
+            "equity": str(results[-1].equity),
         },
     )
     return 0
 
 
+def _cost_model(ctx: Context, as_of: date | None) -> CostModel:
+    """The configured cost model, its schedule as of ``as_of`` for every trade (today in IST
+    when not given), until the Protocol states the date (#81)."""
+    return CostModel(
+        load_cost_schedule(Path(ctx.config.costs.schedule)),
+        ctx.config.costs.slippage(),
+        rates_as_of=as_of or datetime.now(IST).date(),
+    )
+
+
 Command = Callable[[Context, argparse.Namespace], int]
+
+# The date whose cost schedule prices every trade of a backtest.
+COSTS_AS_OF: tuple[tuple[str, ...], dict[str, Any]] = (
+    ("--costs-as-of",),
+    {
+        "metavar": "DATE",
+        "type": date.fromisoformat,
+        "default": None,
+        "help": "price every trade on the cost schedule in force on DATE (default today)",
+    },
+)
 
 COMMANDS: dict[str, Command] = {
     "migrate": migrate,
@@ -828,6 +854,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--date", dest="day", metavar="DATE", type=date.fromisoformat, required=True
     )
+    run_parser.add_argument(*COSTS_AS_OF[0], **COSTS_AS_OF[1])
     backtest_parser = subparsers.add_parser(
         "backtest",
         parents=[date_range],
@@ -844,6 +871,7 @@ def build_parser() -> argparse.ArgumentParser:
     backtest_parser.add_argument(
         "--n", type=int, default=defaults.n, help="time stop in trading days (default %(default)s)"
     )
+    backtest_parser.add_argument(*COSTS_AS_OF[0], **COSTS_AS_OF[1])
     return parser
 
 

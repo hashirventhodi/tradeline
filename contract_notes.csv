@@ -1,0 +1,12 @@
+# Real Zerodha contract notes the cost model is checked against (#72, #78).
+#
+# One row per equity delivery trade on NSE, copied from a contract note the
+# Operator supplies, each checked by tests/test_costs.py against the rates of
+# cost_rates.csv in force on its trade date. A note whose day held more than
+# one trade gives one row per trade only when the note itemises them; otherwise
+# add a note with a single trade. `side` is buy or sell; `stamp_duty` is 0 on a
+# sell. `source` names the note (its number and date), never a client id.
+#
+# None has been supplied yet: the cost model's check is the hand-computed round
+# trips in tests/test_costs.py, and the backtest report says no note was available.
+trade_date,side,price,shares,stt,stamp_duty,exchange_charge,sebi_fee,gst,source

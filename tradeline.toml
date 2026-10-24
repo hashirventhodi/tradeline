@@ -80,3 +80,14 @@ min_reward_to_risk = 1.5    # after rounding to the tick
 # The checked-in dated table of NSE tick sizes, each band citing NSE's circular
 # (see the file's header).
 tick_sizes = "tick_sizes.csv"
+
+# The cost model (ADR 0003, docs/risk-controls.md): every Fill's charges and
+# Slippage, itemised in the Ledger.
+[costs]
+# The checked-in dated rate schedule, each rate citing where it is published
+# (see the file's header).
+schedule = "cost_rates.csv"
+# Real Zerodha contract notes the cost model is checked against; none yet.
+contract_notes = "contract_notes.csv"
+safety_margin = 0.0005      # Slippage per side, of the Order's value
+impact = 0.1                # c x (Order value / 20-day average daily traded value)

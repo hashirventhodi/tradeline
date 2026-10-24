@@ -41,6 +41,7 @@ from synthetic_eod import (
     compute_universe_months,
     load_market,
     repo_calendar,
+    repo_costs,
     write_fixtures,
 )
 from tradeline import queries
@@ -56,7 +57,8 @@ NEXT_DAY = date(2023, 6, 16)
 RISK: dict[str, Any] = {
     "limits": Limits(),
     "tick_sizes": load_tick_sizes(REPO_ROOT / "tick_sizes.csv"),
-    "equity": STARTING_EQUITY,
+    "starting_equity": STARTING_EQUITY,
+    "costs": repo_costs(),
 }
 
 

@@ -44,6 +44,7 @@ from synthetic_eod import (
     load_market,
     load_sectors_on,
     repo_calendar,
+    repo_costs,
     write_fixtures,
 )
 from tradeline import queries
@@ -152,7 +153,8 @@ def test_a_participation_cap_block_and_the_earliest_sector_load_read_before_it(
             backtest_id=uuid.uuid4(),
             limits=Limits(),
             tick_sizes=load_tick_sizes(REPO_ROOT / "tick_sizes.csv"),
-            equity=D("500000"),
+            starting_equity=D("500000"),
+            costs=repo_costs(),
         )
         verdicts = queries.verdicts(conn, result.run_id)
         passes = queries.passes(conn, result.run_id)
