@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
+from tradeline import universe as universe_service
 from tradeline.cited_actions import load_cited_actions
 from tradeline.collect import collect_daily as collect_daily_service
 from tradeline.compare_adjusted import compare_adjusted as compare_adjusted_service
@@ -65,7 +66,6 @@ from tradeline.transport import (
     Transport,
     transport_for,
 )
-from tradeline.universe import compute_universe
 from tradeline.verify_universe import verify_universe as verify_universe_service
 
 log = logging.getLogger(__name__)
@@ -359,8 +359,31 @@ def universe(ctx: Context, args: argparse.Namespace) -> int:
     ):
         month = args.month
         while month <= end:
-            compute_universe(conn, ctx.config.universe, month=month)
+            universe_service.compute_universe(conn, ctx.config.universe, month=month)
             month = next_month(month)
+    return 0
+
+
+def declare_rule_validity(ctx: Context, args: argparse.Namespace) -> int:
+    """Declare a Universe Rule version, the configured one by default, in force from a date."""
+    version = ctx.config.universe.version if args.rule_version is None else args.rule_version
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        universe_service.declare_rule_validity(
+            conn,
+            version,
+            in_force_from=args.in_force_from,
+            declared_at=datetime.now(IST),
+            rule=ctx.config.universe,
+        )
+    return 0
+
+
+def backfill_universe_builds(ctx: Context, args: argparse.Namespace) -> int:
+    """Give every stored Universe month without a build one, and list where each cutoff came
+    from."""
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = universe_service.backfill_universe_builds(conn)
+    log.info("backfill-universe-builds finished", extra=result.summary())
     return 0
 
 
@@ -484,6 +507,8 @@ COMMANDS: dict[str, Command] = {
     "login": login,
     "ingest": ingest,
     "universe": universe,
+    "declare-rule-validity": declare_rule_validity,
+    "backfill-universe-builds": backfill_universe_builds,
     "parity": parity,
     "compare-adjusted": compare_adjusted,
     "sectors": sectors,
@@ -634,6 +659,25 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="YYYY-MM",
         type=parse_month,
         help="the last month; defaults to --month",
+    )
+
+    validity_parser = subparsers.add_parser(
+        "declare-rule-validity",
+        help="declare a Universe Rule version the rule in force from a date (Rule Validity);"
+        " append-only, a later declaration supersedes from its own date",
+    )
+    validity_parser.add_argument(
+        "--in-force-from", metavar="DATE", type=date.fromisoformat, required=True
+    )
+    validity_parser.add_argument(
+        "--rule-version",
+        metavar="VERSION",
+        help="a recorded version or a unique prefix of one; defaults to the configured rule's",
+    )
+    subparsers.add_parser(
+        "backfill-universe-builds",
+        help="record a build for every stored Universe month without one, from the ingest run"
+        " history, or marked cutoff-inferred where the history does not cover its window",
     )
 
     subparsers.add_parser(
