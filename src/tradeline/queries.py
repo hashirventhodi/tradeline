@@ -9,7 +9,7 @@ candles, Universe membership, sectors, announcements.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
@@ -629,6 +629,198 @@ def universe_rule_versions(conn: psycopg.Connection) -> list[UniverseRuleVersion
         " ORDER BY recorded_at, version"
     ).fetchall()
     return [UniverseRuleVersion(*row) for row in rows]
+
+
+@dataclass(frozen=True)
+class RuleValidity:
+    """The Operator's declaration that a rule version is the rule in force from a date."""
+
+    rule_version: str
+    in_force_from: date
+    declared_at: datetime
+
+
+def universe_rule_validity(conn: psycopg.Connection) -> list[RuleValidity]:
+    """Every Rule Validity declaration, in the order declared."""
+    rows = conn.execute(
+        "SELECT rule_version, in_force_from, declared_at FROM universe_rule_validity"
+        " ORDER BY declared_at, in_force_from, rule_version"
+    ).fetchall()
+    return [RuleValidity(*row) for row in rows]
+
+
+UniverseMode = Literal["recorded", "reconstructed"]
+
+
+def universe_month_mode(
+    conn: psycopg.Connection, month: date, *, rule_version: str
+) -> UniverseMode:
+    """Whether the month's Universe under ``rule_version`` is a Recorded or a Reconstructed one.
+
+    Recorded when, by what was declared before the month began, the version
+    was the one in force on the month's first day (the declaration with the
+    latest ``in_force_from`` on or before it), and the version was recorded
+    before the month began too; reconstructed otherwise. "Before the month
+    began" is before the start of its first calendar day in India, never later
+    than its first trading day's, so no month is called recorded that was not.
+    """
+    if month.day != 1:
+        raise ValueError(f"a Universe month is given by its first day, not {month}")
+    began = datetime.combine(month, time(), IST)
+    row = conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM universe_rule_versions"
+        "  WHERE version = %(version)s AND recorded_at < %(began)s)"
+        " AND %(version)s IS NOT DISTINCT FROM (SELECT rule_version FROM universe_rule_validity"
+        "  WHERE declared_at < %(began)s AND in_force_from <= %(month)s"
+        "  ORDER BY in_force_from DESC, declared_at DESC LIMIT 1)",
+        {"version": rule_version, "began": began, "month": month},
+    ).fetchone()
+    return "recorded" if row is not None and row[0] else "reconstructed"
+
+
+@dataclass(frozen=True)
+class UniverseMonthBuild:
+    """What one month's Universe under one rule version was built from (ADR 0005)."""
+
+    month: date
+    rule_version: str
+    window_start: date
+    # The Data Cutoff: the last end-of-day date in the window.
+    data_cutoff: date
+    # The nse_eod ingest runs that wrote rows in the window, oldest first.
+    eod_run_ids: tuple[uuid.UUID, ...]
+    # The last Instruments rebuild before the build; None if none had run.
+    instruments_run_id: uuid.UUID | None
+    eod_hash: str
+    links_hash: str
+    # True when no recorded ingest run covers the window, so a backfill read the
+    # cutoff from the rows there at the time.
+    cutoff_inferred: bool
+    built_at: datetime
+
+
+def universe_month_builds(
+    conn: psycopg.Connection, *, month: date | None = None, rule_version: str | None = None
+) -> list[UniverseMonthBuild]:
+    """Every recorded month build, or one month's, or one version's, by month then version."""
+    rows = conn.execute(
+        "SELECT month, rule_version, window_start, data_cutoff, eod_run_ids,"
+        " instruments_run_id, eod_hash, links_hash, cutoff_inferred, built_at"
+        " FROM universe_month_builds"
+        " WHERE (%(month)s::date IS NULL OR month = %(month)s)"
+        " AND (%(version)s::text IS NULL OR rule_version = %(version)s)"
+        " ORDER BY month, rule_version",
+        {"month": month, "version": rule_version},
+    ).fetchall()
+    return [
+        UniverseMonthBuild(
+            month=row[0],
+            rule_version=row[1],
+            window_start=row[2],
+            data_cutoff=row[3],
+            eod_run_ids=tuple(row[4]),
+            instruments_run_id=row[5],
+            eod_hash=row[6],
+            links_hash=row[7],
+            cutoff_inferred=row[8],
+            built_at=row[9],
+        )
+        for row in rows
+    ]
+
+
+@dataclass(frozen=True)
+class UniverseMonthHash:
+    """A month window's hashes over the rows there now, and whether its build recorded them."""
+
+    eod_hash: str
+    links_hash: str
+    matches: bool
+
+
+def universe_month_hash(conn: psycopg.Connection, build: UniverseMonthBuild) -> UniverseMonthHash:
+    """Recompute the hashes of ``build``'s window from the rows stored now.
+
+    A mismatch means an input changed after the build: an end-of-day row in
+    the window, or an Instrument interval holding one of its days.
+    """
+    eod, links = universe_window_hashes(conn, start=build.window_start, cutoff=build.data_cutoff)
+    return UniverseMonthHash(
+        eod_hash=eod,
+        links_hash=links,
+        matches=(eod, links) == (build.eod_hash, build.links_hash),
+    )
+
+
+def _row_text(columns: Sequence[str]) -> str:
+    """SQL for one row as text in a hash: every column, NULL as ``\\N``, ``|`` between."""
+    return "concat_ws('|', " + ", ".join(f"coalesce(({c})::text, '\\N')" for c in columns) + ")"
+
+
+def _sha256_of(row_text: str, order: str) -> str:
+    return (
+        "encode(sha256(convert_to(coalesce("
+        f"string_agg({row_text}, E'\\n' ORDER BY {order}), ''), 'UTF8')), 'hex')"
+    )
+
+
+_EOD_HASH = _sha256_of(
+    _row_text(
+        (
+            "trade_date",
+            "symbol",
+            "series",
+            "isin",
+            "open",
+            "high",
+            "low",
+            "close",
+            "last",
+            "prev_close",
+            "traded_qty",
+            "traded_value",
+            "trades",
+        )
+    ),
+    'trade_date, symbol COLLATE "C", series COLLATE "C"',
+)
+_LINKS_HASH = _sha256_of(
+    _row_text(
+        (
+            "i.instrument_key",
+            "i.symbol",
+            "i.series",
+            "i.isin",
+            "i.first_day",
+            "i.last_day",
+            "n.listed_on",
+            "n.key_from",
+        )
+    ),
+    'i.symbol COLLATE "C", i.series COLLATE "C", i.first_day',
+)
+
+
+def universe_window_hashes(
+    conn: psycopg.Connection, *, start: date, cutoff: date
+) -> tuple[str, str]:
+    """SHA-256 of the end-of-day rows dated ``start`` to ``cutoff``, and of the Instrument
+    intervals overlapping those days with their Instruments' listing dates.
+
+    Each is over every column of the rows as text, in byte order, so two
+    databases holding the same rows give the same hashes.
+    """
+    row = conn.execute(
+        f"SELECT (SELECT {_EOD_HASH} FROM eod_bhavcopy"
+        "  WHERE trade_date BETWEEN %(start)s AND %(cutoff)s),"
+        f" (SELECT {_LINKS_HASH} FROM instrument_intervals i"
+        "  JOIN instruments n ON n.key = i.instrument_key"
+        "  WHERE i.first_day <= %(cutoff)s AND i.last_day >= %(start)s)",
+        {"start": start, "cutoff": cutoff},
+    ).fetchone()
+    if row is None:
+        raise AssertionError("an aggregate query returns a row")
+    return row[0], row[1]
 
 
 @dataclass(frozen=True)
