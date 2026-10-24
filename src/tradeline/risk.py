@@ -211,6 +211,24 @@ def assess(
     return decisions
 
 
+class RiskEngine:
+    """The Risk Engine as an object the engine is handed, so a backtest and a paper Run can
+    be shown to use the very same one (ADR 0002); ``assess`` is all it does."""
+
+    def assess(
+        self,
+        proposals: Sequence[Proposal],
+        *,
+        portfolio: Portfolio,
+        limits: Limits,
+        run_id: uuid.UUID,
+    ) -> list[Decision]:
+        return assess(proposals, portfolio=portfolio, limits=limits, run_id=run_id)
+
+
+RISK_ENGINE = RiskEngine()
+
+
 def _sector(name: str | None) -> str:
     return UNCLASSIFIED if name is None else name
 

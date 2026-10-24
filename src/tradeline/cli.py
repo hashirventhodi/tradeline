@@ -27,7 +27,9 @@ from tradeline.conformance import check_conformance
 from tradeline.costs import CostModel, load_contract_notes, load_cost_schedule
 from tradeline.dates import IST, month_end, month_of, next_month, parse_month
 from tradeline.db import NotAppRoleMember, app_connection, connect
+from tradeline.engine import WallClock
 from tradeline.engine import backtest as backtest_service
+from tradeline.engine import paper as paper_service
 from tradeline.environment import Environment
 from tradeline.ingest.announcements import ingest_announcements
 from tradeline.ingest.candles import CurrentUniverse, ingest_candles
@@ -489,23 +491,40 @@ def integrity(ctx: Context, args: argparse.Namespace) -> int:
 
 
 def run(ctx: Context, args: argparse.Namespace) -> int:
-    """One Run of ``pullback_v1`` as of ``--date`` under the configured Universe Rule, written
-    to the Ledger with a Verdict on each Candidate under the configured Limits. In backtest
-    mode it is a backtest of that one day."""
+    """One Run of ``pullback_v1`` under the configured Universe Rule, written to the Ledger
+    with a Verdict on each Candidate under the configured Limits. In backtest mode it is a
+    backtest of the day ``--date``. In paper mode it is the paper dry-run's day on the wall
+    clock (today in IST, or ``--date``) over what ``collect-daily`` loaded: the Orders the
+    dry run placed the day before fill against the day's end-of-day bar first, and each Fill
+    is priced on its own day's rates unless ``--costs-as-of`` names a date."""
     calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
-    tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
-    with _scope(args.day, args.day), app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
-        (result,) = backtest_service(
-            conn,
-            PullbackV1(),
-            start=args.day,
-            end=args.day,
-            calendar=calendar,
-            rule_version=ctx.config.universe.version,
-            limits=ctx.config.risk.limits(),
-            tick_sizes=tick_sizes,
-            costs=_cost_model(ctx, args.costs_as_of),
-        )
+    common: dict[str, Any] = {
+        "calendar": calendar,
+        "rule_version": ctx.config.universe.version,
+        "limits": ctx.config.risk.limits(),
+        "tick_sizes": load_tick_sizes(Path(ctx.config.risk.tick_sizes)),
+    }
+    if args.mode == "backtest" and args.day is None:
+        raise ValueError("run --mode backtest needs --date")
+    clock = WallClock(day=args.day)
+    (day,) = clock.days()
+    with _scope(day, day), app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        if args.mode == "paper":
+            schedule = CostModel(
+                load_cost_schedule(Path(ctx.config.costs.schedule)),
+                ctx.config.costs.slippage(),
+                rates_as_of=args.costs_as_of,
+            )
+            result = paper_service(conn, PullbackV1(), clock=clock, costs=schedule, **common)
+        else:
+            (result,) = backtest_service(
+                conn,
+                PullbackV1(),
+                start=day,
+                end=day,
+                costs=_cost_model(ctx, args.costs_as_of),
+                **common,
+            )
     log.info("run finished", extra=result.summary())
     return 0
 
@@ -883,10 +902,14 @@ def build_parser() -> argparse.ArgumentParser:
         "run",
         help="one Run of the Strategy as of a day over stored data, written to the Ledger",
     )
-    # Paper mode is #80's.
-    run_parser.add_argument("--mode", choices=["backtest"], required=True)
+    run_parser.add_argument("--mode", choices=["backtest", "paper"], required=True)
     run_parser.add_argument(
-        "--date", dest="day", metavar="DATE", type=date.fromisoformat, required=True
+        "--date",
+        dest="day",
+        metavar="DATE",
+        type=date.fromisoformat,
+        default=None,
+        help="the Run's day: required in backtest mode; in paper mode today in IST by default",
     )
     run_parser.add_argument(*COSTS_AS_OF[0], **COSTS_AS_OF[1])
     # One cell: the Strategy at fixed parameters, and the cost schedule's date.

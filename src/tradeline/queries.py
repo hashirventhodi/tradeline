@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from fractions import Fraction
-from typing import Any, Literal, cast
+from typing import Any, Literal, TypedDict, cast
 
 import psycopg
 
@@ -1686,6 +1686,8 @@ class LedgerRun:
     # at the day's adjusted close), what the Run sized against. None before #78.
     cash: Decimal | None = None
     equity: Decimal | None = None
+    # A paper dry-run's Run (#80), which the Paper Gate never counts.
+    dry_run: bool = False
 
 
 @dataclass(frozen=True)
@@ -1718,19 +1720,22 @@ def runs(
     mode: EngineMode | None = None,
     backtest_id: uuid.UUID | None = None,
     as_of: date | None = None,
+    dry_run: bool | None = None,
 ) -> list[LedgerRun]:
-    """Runs in the Ledger, filtered by whichever of mode, backtest and day are given;
-    in day order, then in the order they were recorded."""
+    """Runs in the Ledger, filtered by whichever of mode, backtest, day and dry-run marker
+    are given; in day order, then in the order they were recorded."""
     rows = conn.execute(
         "SELECT r.id, r.mode, r.backtest_id, s.id, s.mode, s.backtest_id, s.family, s.name,"
         " s.code_revision, s.protocol, s.ranking, r.as_of, r.universe_month,"
         " r.universe_rule_version, r.universe_size, r.parameters, r.recorded_at, r.cash,"
-        " r.equity FROM runs r JOIN strategies s ON (s.mode, s.id) = (r.mode, r.strategy_id)"
+        " r.equity, r.dry_run"
+        " FROM runs r JOIN strategies s ON (s.mode, s.id) = (r.mode, r.strategy_id)"
         " WHERE (%(mode)s::text IS NULL OR r.mode = %(mode)s)"
         " AND (%(backtest_id)s::uuid IS NULL OR r.backtest_id = %(backtest_id)s)"
         " AND (%(as_of)s::date IS NULL OR r.as_of = %(as_of)s)"
+        " AND (%(dry_run)s::boolean IS NULL OR r.dry_run = %(dry_run)s)"
         " ORDER BY r.as_of, r.recorded_at, r.id",
-        {"mode": mode, "backtest_id": backtest_id, "as_of": as_of},
+        {"mode": mode, "backtest_id": backtest_id, "as_of": as_of, "dry_run": dry_run},
     ).fetchall()
     return [
         LedgerRun(
@@ -1746,6 +1751,7 @@ def runs(
             recorded_at=row[16],
             cash=row[17],
             equity=row[18],
+            dry_run=row[19],
         )
         for row in rows
     ]
@@ -1875,8 +1881,17 @@ def verdicts(conn: psycopg.Connection, run_id: uuid.UUID) -> list[LedgerVerdict]
 
 
 # An account is one mode's Orders, Fills and Positions: a backtest's (mode backtest and its
-# id), or the paper or the live account (no backtest id). ``day`` and ``seq`` order every
-# event of an account across the three tables.
+# id), the paper or the live account (no backtest id), or the paper dry-run's (paper, marked
+# ``dry_run``, #80). ``day`` and ``seq`` order every event of an account across the three
+# tables.
+
+
+class Account(TypedDict):
+    """What names an account, as the account reads take it."""
+
+    mode: EngineMode
+    backtest_id: uuid.UUID | None
+    dry_run: bool
 
 
 @dataclass(frozen=True)
@@ -1965,6 +1980,7 @@ def orders(
     *,
     mode: EngineMode,
     backtest_id: uuid.UUID | None,
+    dry_run: bool = False,
     open_only: bool = False,
 ) -> list[LedgerOrder]:
     """An account's Orders in the order they were placed; only those neither filled nor
@@ -1977,10 +1993,10 @@ def orders(
         " LEFT JOIN orders c ON (c.mode, c.id, c.event) = (p.mode, p.id, 'cancelled')"
         " LEFT JOIN fills f ON (f.mode, f.order_id) = (p.mode, p.id)"
         " WHERE p.event = 'placed' AND p.mode = %(mode)s"
-        " AND p.backtest_id IS NOT DISTINCT FROM %(backtest_id)s"
+        " AND p.backtest_id IS NOT DISTINCT FROM %(backtest_id)s AND p.dry_run = %(dry_run)s"
         " AND (NOT %(open_only)s OR (c.id IS NULL AND f.order_id IS NULL))"
         " ORDER BY p.day, p.seq",
-        {"mode": mode, "backtest_id": backtest_id, "open_only": open_only},
+        {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run, "open_only": open_only},
     ).fetchall()
     return [
         LedgerOrder(
@@ -2006,15 +2022,20 @@ def orders(
 
 
 def fills(
-    conn: psycopg.Connection, *, mode: EngineMode, backtest_id: uuid.UUID | None
+    conn: psycopg.Connection,
+    *,
+    mode: EngineMode,
+    backtest_id: uuid.UUID | None,
+    dry_run: bool = False,
 ) -> list[LedgerFill]:
     """An account's Fills in the order they happened."""
     rows = conn.execute(
         "SELECT order_id, day, seq, position_id, instrument, symbol, side, price, shares, "
         + ", ".join(_CHARGE_COLUMNS)
         + " FROM fills WHERE mode = %(mode)s"
-        " AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s ORDER BY day, seq",
-        {"mode": mode, "backtest_id": backtest_id},
+        " AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s AND dry_run = %(dry_run)s"
+        " ORDER BY day, seq",
+        {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
     ).fetchall()
     return [_ledger_fill(row) for row in rows]
 
@@ -2035,6 +2056,7 @@ def positions(
     *,
     mode: EngineMode,
     backtest_id: uuid.UUID | None,
+    dry_run: bool = False,
     open_only: bool = False,
 ) -> list[LedgerPosition]:
     """An account's Positions as they stand (the ``current_positions`` view), in the order
@@ -2046,10 +2068,11 @@ def positions(
         " target, time_stop_days, day, exit_reason, exit_price FROM ("
         "  SELECT DISTINCT ON (position_id) * FROM positions"
         "  WHERE mode = %(mode)s AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s"
+        "  AND dry_run = %(dry_run)s"
         "  ORDER BY position_id, day DESC, seq DESC) p"
         " WHERE NOT %(open_only)s OR event <> 'closed'"
         " ORDER BY opened_on, symbol, position_id",
-        {"mode": mode, "backtest_id": backtest_id, "open_only": open_only},
+        {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run, "open_only": open_only},
     ).fetchall()
     return [LedgerPosition(*row) for row in rows]
 
@@ -2077,15 +2100,19 @@ class LedgerPositionEvent:
 
 
 def position_events(
-    conn: psycopg.Connection, *, mode: EngineMode, backtest_id: uuid.UUID | None
+    conn: psycopg.Connection,
+    *,
+    mode: EngineMode,
+    backtest_id: uuid.UUID | None,
+    dry_run: bool = False,
 ) -> list[LedgerPositionEvent]:
     """Every event of an account's Positions, in the order they happened."""
     rows = conn.execute(
         "SELECT position_id, event, day, seq, instrument, symbol, shares, entry, stop, target,"
         " factor, cash_in_lieu, exit_price, exit_reason FROM positions"
         " WHERE mode = %(mode)s AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s"
-        " ORDER BY day, seq",
-        {"mode": mode, "backtest_id": backtest_id},
+        " AND dry_run = %(dry_run)s ORDER BY day, seq",
+        {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
     ).fetchall()
     return [
         LedgerPositionEvent(
@@ -2109,7 +2136,11 @@ def position_events(
 
 
 def account_cash_flows(
-    conn: psycopg.Connection, *, mode: EngineMode, backtest_id: uuid.UUID | None
+    conn: psycopg.Connection,
+    *,
+    mode: EngineMode,
+    backtest_id: uuid.UUID | None,
+    dry_run: bool = False,
 ) -> Decimal:
     """The net cash an account's Fills and restatements moved: every sale's value less its
     charges, every purchase's value and its charges taken away, plus cash paid in lieu of
@@ -2118,11 +2149,23 @@ def account_cash_flows(
     row = conn.execute(
         "SELECT coalesce((SELECT sum(CASE side WHEN 'sell' THEN price * shares"
         " ELSE -price * shares END - (" + charges + ")) FROM fills"
-        " WHERE mode = %(mode)s AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s), 0)"
+        " WHERE mode = %(mode)s AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s"
+        " AND dry_run = %(dry_run)s), 0)"
         " + coalesce((SELECT sum(cash_in_lieu) FROM positions"
-        " WHERE mode = %(mode)s AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s), 0)",
-        {"mode": mode, "backtest_id": backtest_id},
+        " WHERE mode = %(mode)s AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s"
+        " AND dry_run = %(dry_run)s), 0)",
+        {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
     ).fetchone()
     assert row is not None
     found: Decimal = row[0]
     return found
+
+
+def paper_gate_trades(conn: psycopg.Connection) -> list[LedgerPosition]:
+    """The paper trades the Paper Gate counts (ADR 0015): the paper account's closed
+    Positions, in the order they opened. A paper dry-run's (#80) are never among them."""
+    return [
+        p
+        for p in positions(conn, mode="paper", backtest_id=None, dry_run=False)
+        if p.closed_on is not None
+    ]
