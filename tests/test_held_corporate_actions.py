@@ -27,6 +27,7 @@ Worked by hand:
 """
 
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from fractions import Fraction
@@ -36,19 +37,19 @@ import psycopg
 import pytest
 
 from synthetic_eod import (
+    GRID,
     Bonus,
     Split,
-    compute_universe_months,
+    freeze_protocol,
     load_market,
+    protocol_terms,
     repo_calendar,
-    repo_costs,
     two_year_market,
     write_fixtures,
 )
 from tradeline import queries
 from tradeline.db import app_connection
-from tradeline.engine import STARTING_EQUITY, backtest
-from tradeline.risk import Limits
+from tradeline.engine import backtest
 from tradeline.strategy.pullback import PullbackV1
 from tradeline.tick_sizes import load_tick_sizes
 
@@ -65,18 +66,17 @@ def backtested(database_url: str, tmp_path_factory: pytest.TempPathFactory) -> s
     fixtures = write_fixtures(MARKET, tmp_path_factory.mktemp("actions"), repo_calendar())
     with app_connection(database_url) as conn:
         load_market(conn, fixtures, MARKET)
-        compute_universe_months(conn, MARKET, START, END)
+        # A Protocol over the three months whose grid holds the n = 30 this backtest runs.
+        terms = replace(protocol_terms(START, END), grid={**GRID, "n": (Decimal(30),)})
+        frozen = freeze_protocol(conn, MARKET, START, END, terms=terms)
         backtest(
             conn,
             PullbackV1(n=30),
+            protocol=frozen.hash,
             start=START,
             end=END,
             calendar=repo_calendar(),
-            rule_version=MARKET.rule.version,
-            limits=Limits(),
             tick_sizes=load_tick_sizes(Path(__file__).parents[1] / "tick_sizes.csv"),
-            costs=repo_costs(),
-            starting_equity=STARTING_EQUITY,
         )
     return database_url
 

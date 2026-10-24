@@ -91,3 +91,27 @@ schedule = "cost_rates.csv"
 contract_notes = "contract_notes.csv"
 safety_margin = 0.0005      # Slippage per side, of the Order's value
 impact = 0.1                # c x (Order value / 20-day average daily traded value)
+
+# The Protocol (ADR 0007): how pullback_v1 is validated, frozen by
+# `tradeline protocol freeze` with the [risk] Limits, the [costs] Slippage, the
+# cost schedule as of the freeze, the Universe Rule version, the git commit and
+# the data snapshot. `tradeline protocol windows` prints the Window boundaries
+# as trading days to check before freezing. A change here is a new Protocol.
+[protocol]
+holdout_start = "2024-10"       # the Holdout, month-aligned, never extended
+holdout_months = 24
+windows = 5                     # Out-of-Sample Windows anchored back from the Holdout
+out_of_sample_months = 12       # October to September years
+in_sample_months = 24           # before each Out-of-Sample Window
+k = ["1.5", "2", "2.5", "3"]    # stop distance in ATRs, as exact decimals
+r = ["1.5", "2", "3"]           # target in multiples of the risk
+n = [5, 10, 15]                 # time stop in trading days
+min_in_sample_trades = 30       # fewer and a grid cell is ineligible
+starting_equity = 500000        # rupees, at the Stitched Curve, the Holdout and each In-Sample run
+risk_free_rate = 0.065          # a year, for Sharpe
+band = 0.05                     # a stop or time-stop exit's limit under the close
+warm_up_trading_days = 250      # before the first Window, also hashed in the data snapshot
+sharpe_above = 1.0              # the Backtest Gate, on the Stitched Curve and the Holdout
+drawdown_below = 0.15
+profit_factor_above = 1.3
+min_stitched_trades = 150

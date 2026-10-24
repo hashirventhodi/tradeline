@@ -73,10 +73,9 @@ import psycopg
 import pytest
 
 from synthetic_eod import (
-    COSTS_AS_OF,
     REPO_ROOT,
     TWO_YEARS,
-    compute_universe_months,
+    freeze_protocol,
     load_market,
     repo_calendar,
     two_year_market,
@@ -97,7 +96,7 @@ def backtested(database_url: str, tmp_path_factory: pytest.TempPathFactory) -> s
     fixtures = write_fixtures(MARKET, directory / "fixtures", repo_calendar())
     with app_connection(database_url) as conn:
         load_market(conn, fixtures, MARKET)
-        compute_universe_months(conn, MARKET, *TWO_YEARS)
+        frozen = freeze_protocol(conn, MARKET, *TWO_YEARS)
     rule = MARKET.rule
     config = directory / "tradeline.toml"
     config.write_text(
@@ -114,7 +113,7 @@ def backtested(database_url: str, tmp_path_factory: pytest.TempPathFactory) -> s
         patch.setenv("TRADELINE_CONFIG", str(config))
         patch.setenv("DATABASE_URL", database_url)
         arguments = ["--from", start.isoformat(), "--to", end.isoformat()]
-        assert main(["backtest", *arguments, "--costs-as-of", COSTS_AS_OF.isoformat()]) == 0
+        assert main(["backtest", *arguments, "--protocol", frozen.hash]) == 0
     return database_url
 
 

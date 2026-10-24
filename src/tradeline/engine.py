@@ -53,8 +53,14 @@ prices. Orders open for that session in the Instrument are cancelled, reason
 at the restated prices and shares, an entry is not (the next Run may plan
 again).
 
-Protocols are #81's, so a Strategy version is recorded without one, and the
-starting Equity, the band and the cost schedule's date are the caller's.
+A backtest runs under a frozen Protocol (``tradeline.protocol``, ADR 0007)
+and nothing else: its Universe Rule version, Limits, costs, band and starting
+Equity are the Protocol's, and each Strategy version it records names the
+Protocol. It is refused when it names none, when the code is not at the commit
+the Protocol was frozen at, when its Strategy or its parameters are not the
+Protocol's, when its range runs outside the Protocol's, and when a Universe
+month or an Adjusted Series it would read is not what the Protocol froze. A
+single day, ``run``, takes its terms from its caller.
 """
 
 from __future__ import annotations
@@ -77,6 +83,7 @@ from tradeline import queries
 from tradeline.adjust import ADJUSTED_KINDS, AdjustedBar
 from tradeline.costs import CostModel
 from tradeline.dates import month_of
+from tradeline.freeze import verify_snapshot
 from tradeline.paper_broker import (
     Bar,
     Unfilled,
@@ -86,7 +93,7 @@ from tradeline.paper_broker import (
     fill_exit,
     fill_target,
 )
-from tradeline.revision import code_revision
+from tradeline.revision import code_revision, git_commit
 from tradeline.risk import (
     Decision,
     Holding,
@@ -105,10 +112,10 @@ log = logging.getLogger(__name__)
 
 EngineMode = Literal["backtest", "paper", "live"]
 
-# Equity at the start of a backtest, until the Protocol states it (#81).
+# Equity at the start of an account, as the Protocol states it by default.
 STARTING_EQUITY = Decimal("500000")
-# The protective band under the close a stop or time-stop exit is limited at, until the
-# Protocol states it (#81).
+# The protective band under the close a stop or time-stop exit is limited at, as the
+# Protocol states it by default.
 EXIT_BAND = Decimal("0.05")
 # The trading days the Participation Cap averages traded value over.
 TRADED_VALUE_DAYS = 20
@@ -246,6 +253,7 @@ def run(
     starting_equity: Decimal,
     band: Decimal = EXIT_BAND,
     backtest_id: uuid.UUID | None = None,
+    protocol: str | None = None,
 ) -> RunResult:
     """The day ``as_of`` in one account: its held Positions restated for any split or bonus
     ex-dated since its last day, its session, then one Run over the month's Universe under
@@ -253,7 +261,8 @@ def run(
     ``starting_equity``, after ``costs``) with its open Positions held, then the Orders for
     the next session.
 
-    A backtest id is required in backtest mode and refused in any other.
+    A backtest id is required in backtest mode and refused in any other. ``protocol`` is
+    the hash of the Protocol the Strategy version runs under, if any.
     """
     if (mode == "backtest") != (backtest_id is not None):
         raise ValueError("a backtest id is required in backtest mode and only there")
@@ -295,7 +304,9 @@ def run(
         equity = cash + sum((h.value for h in holdings), Decimal(0))
         portfolio = Portfolio(equity, holdings)
         decisions = assess(proposals, portfolio=portfolio, limits=limits, run_id=run_id)
-        strategy_id = _strategy_row(conn, strategy, mode=mode, backtest_id=backtest_id)
+        strategy_id = _strategy_row(
+            conn, strategy, mode=mode, backtest_id=backtest_id, protocol=protocol
+        )
         _insert_run(
             conn,
             strategy,
@@ -354,20 +365,20 @@ def backtest(
     conn: psycopg.Connection,
     strategy: Strategy,
     *,
+    protocol: str | None,
     start: date,
     end: date,
     calendar: TradingCalendar,
-    rule_version: str,
-    limits: Limits,
     tick_sizes: TickSizes,
-    costs: CostModel,
-    starting_equity: Decimal = STARTING_EQUITY,
-    band: Decimal = EXIT_BAND,
 ) -> list[RunResult]:
-    """A backtest from ``start`` to ``end``: one day per step of the simulated clock, each
-    filling the day before's Orders and then Running, all under one backtest id, one account
-    starting at ``starting_equity``. ``costs`` should fix its schedule's date
-    (``rates_as_of``) so every trade is priced on one schedule."""
+    """A backtest under the frozen Protocol ``protocol`` (its hash, or 12 or more characters
+    of it) from ``start`` to ``end``: one day per step of the simulated clock, each filling
+    the day before's Orders and then Running, all under one backtest id, one account
+    starting at the Protocol's starting Equity, every trade priced on its cost schedule's
+    date, and every Run under its Universe Rule version, Limits and band."""
+    frozen = _protocol_for(conn, strategy, protocol, start=start, end=end)
+    terms = frozen.protocol
+    costs = terms.cost_model()
     backtest_id = uuid.uuid4()
     results = [
         run(
@@ -376,19 +387,80 @@ def backtest(
             mode="backtest",
             as_of=day,
             calendar=calendar,
-            rule_version=rule_version,
-            limits=limits,
+            rule_version=terms.rule_version,
+            limits=terms.limits,
             tick_sizes=tick_sizes,
             costs=costs,
-            starting_equity=starting_equity,
-            band=band,
+            starting_equity=terms.starting_equity,
+            band=terms.band,
             backtest_id=backtest_id,
+            protocol=frozen.hash,
         )
         for day in SimulatedClock(calendar, start=start, end=end).days()
     ]
     if not results:
         raise ValueError(f"no trading day from {start} to {end} on the Trading Calendar")
     return results
+
+
+@functools.cache
+def _git_commit() -> str:
+    """The commit this process runs, read once: the code a process runs cannot change."""
+    return git_commit()
+
+
+def _protocol_for(
+    conn: psycopg.Connection,
+    strategy: Strategy,
+    name: str | None,
+    *,
+    start: date,
+    end: date,
+) -> queries.FrozenProtocol:
+    """The frozen Protocol a backtest of ``strategy`` from ``start`` to ``end`` may run
+    under, or the reason it may not."""
+    if not name:
+        raise ValueError(
+            "a backtest runs under a frozen Protocol and names none;"
+            " freeze one with `tradeline protocol freeze` and name it"
+        )
+    frozen = queries.protocol(conn, name)
+    if frozen is None:
+        raise ValueError(f"no Protocol {name} is frozen; `tradeline protocol freeze` freezes one")
+    terms, short = frozen.protocol, frozen.hash[:12]
+    commit = _git_commit()
+    if terms.git_commit != commit:
+        raise ValueError(
+            f"Protocol {short} was frozen at commit {terms.git_commit} and this is commit"
+            f" {commit}; a run under it must share its commit, so freeze a new Protocol at"
+            " this commit and rerun its Windows"
+        )
+    revision = _code_revision(type(strategy).__module__)
+    if (terms.family, terms.name, terms.code_revision) != (
+        strategy.family,
+        strategy.name,
+        revision,
+    ):
+        raise ValueError(
+            f"Protocol {short} validates {terms.name} ({terms.family}) at code revision"
+            f" {terms.code_revision[:12]}, not {strategy.name} ({strategy.family}) at"
+            f" {revision[:12]}"
+        )
+    parameters = strategy.parameters()
+    for axis, values in terms.grid.items():
+        if Decimal(parameters[axis]) not in values:
+            raise ValueError(
+                f"{axis} = {parameters[axis]} is not on Protocol {short}'s grid"
+                f" ({', '.join(str(v) for v in values)})"
+            )
+    if end < start:
+        raise ValueError(f"range end {end} is before start {start}")
+    if start < terms.first or end > terms.last:
+        raise ValueError(
+            f"{start} to {end} runs outside Protocol {short}'s {terms.first} to {terms.last}"
+        )
+    verify_snapshot(conn, frozen, start=start, end=end)
+    return frozen
 
 
 def _next_session(calendar: TradingCalendar, as_of: date) -> date:
@@ -959,6 +1031,7 @@ def _strategy_row(
     *,
     mode: EngineMode,
     backtest_id: uuid.UUID | None,
+    protocol: str | None,
 ) -> uuid.UUID:
     revision = _code_revision(type(strategy).__module__)
     key = {
@@ -967,19 +1040,21 @@ def _strategy_row(
         "family": strategy.family,
         "name": strategy.name,
         "code_revision": revision,
+        "protocol": protocol,
         "ranking": strategy.ranking,
     }
     conn.execute(
-        "INSERT INTO strategies (mode, backtest_id, family, name, code_revision, ranking)"
-        " VALUES (%(mode)s, %(backtest_id)s, %(family)s, %(name)s, %(code_revision)s,"
-        "  %(ranking)s)"
+        "INSERT INTO strategies (mode, backtest_id, family, name, code_revision, protocol,"
+        " ranking) VALUES (%(mode)s, %(backtest_id)s, %(family)s, %(name)s,"
+        " %(code_revision)s, %(protocol)s, %(ranking)s)"
         " ON CONFLICT DO NOTHING",
         key,
     )
     row = conn.execute(
         "SELECT id FROM strategies WHERE mode = %(mode)s"
         " AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s AND name = %(name)s"
-        " AND code_revision = %(code_revision)s AND protocol IS NULL",
+        " AND code_revision = %(code_revision)s"
+        " AND protocol IS NOT DISTINCT FROM %(protocol)s",
         key,
     ).fetchone()
     assert row is not None

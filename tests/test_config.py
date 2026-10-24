@@ -1,3 +1,5 @@
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -251,6 +253,37 @@ def test_a_config_whose_two_trading_calendars_differ_is_refused_naming_both(
         match=r"parity.trading_calendar \(trading_calendar.csv\)"
         r" and integrity.trading_calendar \(data/calendar.csv\)",
     ):
+        load_config(path)
+
+
+def test_the_committed_config_states_the_specs_protocol_terms() -> None:
+    config = load_config(Path(__file__).resolve().parents[1] / "tradeline.toml")
+
+    assert config.protocol == Config.Protocol()
+    terms = config.protocol.terms()
+    assert terms.grid == {
+        "k": (Decimal("1.5"), Decimal(2), Decimal("2.5"), Decimal(3)),
+        "r": (Decimal("1.5"), Decimal(2), Decimal(3)),
+        "n": (Decimal(5), Decimal(10), Decimal(15)),
+    }
+    assert terms.layout.holdout_start == date(2024, 10, 1)
+    assert (terms.layout.windows, terms.layout.in_sample_months) == (5, 24)
+    assert terms.gate.sharpe_above == Decimal("1.0")
+    assert terms.risk_free_rate == Decimal("0.065")
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["k = [1.5, 2]", 'n = ["5"]', 'k = ["two"]', 'holdout_start = "2024-10-01"'],
+    ids=["grid-floats", "time-stop-strings", "not-a-number", "not-a-month"],
+)
+def test_a_protocol_grid_or_holdout_that_is_not_exact_is_refused_by_name(
+    tmp_path: Path, line: str
+) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text(f"[protocol]\n{line}\n")
+
+    with pytest.raises(ConfigError, match="protocol"):
         load_config(path)
 
 

@@ -24,11 +24,12 @@ from tradeline.collect import collect_daily as collect_daily_service
 from tradeline.compare_adjusted import compare_adjusted as compare_adjusted_service
 from tradeline.config import Config, default_config_path, load_config
 from tradeline.conformance import check_conformance
-from tradeline.costs import CostModel, load_cost_schedule
+from tradeline.costs import load_cost_schedule
 from tradeline.dates import IST, month_end, month_of, next_month, parse_month
 from tradeline.db import NotAppRoleMember, app_connection, connect
 from tradeline.engine import backtest as backtest_service
 from tradeline.environment import Environment
+from tradeline.freeze import freeze_protocol
 from tradeline.ingest.announcements import ingest_announcements
 from tradeline.ingest.candles import CurrentUniverse, ingest_candles
 from tradeline.ingest.cited_actions import ingest_cited_actions
@@ -44,7 +45,9 @@ from tradeline.login import login as login_service
 from tradeline.manual_links import load_manual_links
 from tradeline.migrations import PendingMigrations, UnreadableMigrations, apply_migrations
 from tradeline.parity import parity as parity_service
+from tradeline.protocol import window_boundaries, windows_text
 from tradeline.rebuild_instruments import rebuild_instruments as rebuild_instruments_service
+from tradeline.revision import git_commit
 from tradeline.secrets import (
     DATABASE_URL,
     KITE_ACCESS_TOKEN,
@@ -487,32 +490,62 @@ def integrity(ctx: Context, args: argparse.Namespace) -> int:
     return 0 if report.passed else 1
 
 
+def protocol(ctx: Context, args: argparse.Namespace) -> int:
+    """``protocol freeze`` freezes the configured Protocol for ``pullback_v1`` with the data
+    snapshot read now, at this commit, and prints its Window boundaries; ``protocol
+    windows`` prints the boundaries the configuration gives, writing nothing, for the
+    Operator to check before freezing.
+
+    The boundaries go to stderr; the summary is the last JSON line on stdout.
+    """
+    calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
+    terms = ctx.config.protocol.terms()
+    if args.action == "windows":
+        windows, holdout = window_boundaries(terms.layout, calendar)
+        sys.stderr.write(windows_text(windows, holdout))
+        return 0
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = freeze_protocol(
+            conn,
+            terms,
+            strategy=PullbackV1(),
+            rule_version=ctx.config.universe.version,
+            limits=ctx.config.risk.limits(),
+            schedule=load_cost_schedule(Path(ctx.config.costs.schedule)),
+            slippage=ctx.config.costs.slippage(),
+            costs_as_of=args.costs_as_of or datetime.now(IST).date(),
+            calendar=calendar,
+            commit=git_commit(),
+        )
+    sys.stderr.write(result.text())
+    log.info("protocol freeze finished", extra=result.summary())
+    return 0
+
+
 def run(ctx: Context, args: argparse.Namespace) -> int:
-    """One Run of ``pullback_v1`` as of ``--date`` under the configured Universe Rule, written
-    to the Ledger with a Verdict on each Candidate under the configured Limits. In backtest
-    mode it is a backtest of that one day."""
+    """One Run of ``pullback_v1`` as of ``--date``, written to the Ledger with a Verdict on
+    each Candidate. In backtest mode it is a backtest of that one day under the Protocol
+    ``--protocol`` names."""
     calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
     tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
     with _scope(args.day, args.day), app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
         (result,) = backtest_service(
             conn,
             PullbackV1(),
+            protocol=args.protocol,
             start=args.day,
             end=args.day,
             calendar=calendar,
-            rule_version=ctx.config.universe.version,
-            limits=ctx.config.risk.limits(),
             tick_sizes=tick_sizes,
-            costs=_cost_model(ctx, args.costs_as_of),
         )
     log.info("run finished", extra=result.summary())
     return 0
 
 
 def backtest(ctx: Context, args: argparse.Namespace) -> int:
-    """A backtest of ``pullback_v1`` at fixed parameters from ``--from`` to ``--to``: one Run a
-    trading day under the configured Universe Rule and Limits, the Paper Broker filling each
-    day's Orders against the next day's bar."""
+    """A backtest of ``pullback_v1`` at fixed parameters from ``--from`` to ``--to`` under the
+    Protocol ``--protocol`` names: one Run a trading day under its Universe Rule, Limits and
+    costs, the Paper Broker filling each day's Orders against the next day's bar."""
     end = args.end or args.start
     calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
     tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
@@ -521,18 +554,17 @@ def backtest(ctx: Context, args: argparse.Namespace) -> int:
         results = backtest_service(
             conn,
             strategy,
+            protocol=args.protocol,
             start=args.start,
             end=end,
             calendar=calendar,
-            rule_version=ctx.config.universe.version,
-            limits=ctx.config.risk.limits(),
             tick_sizes=tick_sizes,
-            costs=_cost_model(ctx, args.costs_as_of),
         )
     log.info(
         "backtest finished",
         extra={
             "backtest_id": str(results[0].backtest_id),
+            "protocol": args.protocol,
             "parameters": dict(strategy.parameters()),
             "runs": len(results),
             "passes": sum(r.passes for r in results),
@@ -544,26 +576,15 @@ def backtest(ctx: Context, args: argparse.Namespace) -> int:
     return 0
 
 
-def _cost_model(ctx: Context, as_of: date | None) -> CostModel:
-    """The configured cost model, its schedule as of ``as_of`` for every trade (today in IST
-    when not given), until the Protocol states the date (#81)."""
-    return CostModel(
-        load_cost_schedule(Path(ctx.config.costs.schedule)),
-        ctx.config.costs.slippage(),
-        rates_as_of=as_of or datetime.now(IST).date(),
-    )
-
-
 Command = Callable[[Context, argparse.Namespace], int]
 
-# The date whose cost schedule prices every trade of a backtest.
-COSTS_AS_OF: tuple[tuple[str, ...], dict[str, Any]] = (
-    ("--costs-as-of",),
+# The frozen Protocol a backtest runs under.
+PROTOCOL: tuple[tuple[str, ...], dict[str, Any]] = (
+    ("--protocol",),
     {
-        "metavar": "DATE",
-        "type": date.fromisoformat,
+        "metavar": "HASH",
         "default": None,
-        "help": "price every trade on the cost schedule in force on DATE (default today)",
+        "help": "the frozen Protocol to run under: its hash, or 12 or more characters of it",
     },
 )
 
@@ -583,6 +604,7 @@ COMMANDS: dict[str, Command] = {
     "check-universe": check_universe,
     "collect-daily": collect_daily,
     "integrity": integrity,
+    "protocol": protocol,
     "run": run,
     "backtest": backtest,
 }
@@ -854,7 +876,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--date", dest="day", metavar="DATE", type=date.fromisoformat, required=True
     )
-    run_parser.add_argument(*COSTS_AS_OF[0], **COSTS_AS_OF[1])
+    run_parser.add_argument(*PROTOCOL[0], **PROTOCOL[1])
     backtest_parser = subparsers.add_parser(
         "backtest",
         parents=[date_range],
@@ -871,7 +893,27 @@ def build_parser() -> argparse.ArgumentParser:
     backtest_parser.add_argument(
         "--n", type=int, default=defaults.n, help="time stop in trading days (default %(default)s)"
     )
-    backtest_parser.add_argument(*COSTS_AS_OF[0], **COSTS_AS_OF[1])
+    backtest_parser.add_argument(*PROTOCOL[0], **PROTOCOL[1])
+    protocol_parser = subparsers.add_parser(
+        "protocol", help="the Protocol a Strategy version is validated under (ADR 0007)"
+    )
+    protocol_actions = protocol_parser.add_subparsers(dest="action", required=True)
+    freeze = protocol_actions.add_parser(
+        "freeze",
+        help="freeze the configured Protocol with the data snapshot read now, at this commit,"
+        " and print its Window boundaries as trading days",
+    )
+    freeze.add_argument(
+        "--costs-as-of",
+        metavar="DATE",
+        type=date.fromisoformat,
+        default=None,
+        help="price every trade on the cost schedule in force on DATE (default today)",
+    )
+    protocol_actions.add_parser(
+        "windows",
+        help="print the configured Window boundaries as trading days, writing nothing",
+    )
     return parser
 
 
