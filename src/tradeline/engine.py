@@ -30,7 +30,9 @@ requires.
 In backtest mode the clock is simulated: ``SimulatedClock`` steps one trading
 day at a time over the Trading Calendar, and each step is one Run as of that
 day. The data source, ``StoredMarketData``, is bound to the Run's As-Of Date and
-refuses any read past it. What the Risk Engine reads about each Plan's
+refuses any read past it. A backtest loads each Instrument's rows once
+(``SeriesCache``) and re-adjusts them only when an action's Ex-Date passes, the
+only day its Adjusted Series changes; each read is still as of the Run's day. What the Risk Engine reads about each Plan's
 Instrument comes through it too, none of it after the As-Of Date: the close
 NSE fixes the month's tick by (the last close of the month before), and the
 20-day average daily traded value. The sector is the load in force, or the
@@ -112,6 +114,8 @@ STARTING_EQUITY = Decimal("500000")
 EXIT_BAND = Decimal("0.05")
 # The trading days the Participation Cap averages traded value over.
 TRADED_VALUE_DAYS = 20
+# How far before a backtest's first day the SeriesCache loads each Instrument's rows.
+SERIES_LOOKBACK = timedelta(days=730)
 # How far before the month the close that fixes the tick is looked for.
 REFERENCE_LOOKBACK = timedelta(days=31)
 
@@ -129,13 +133,62 @@ class SimulatedClock:
         return self._calendar.trading_days(self._start, self._end)
 
 
-class StoredMarketData:
-    """The Adjusted Series as it stood on ``as_of``, read from stored end-of-day rows."""
+class SeriesCache:
+    """Each Instrument's Raw Series over a backtest's span, loaded once from the query layer
+    (``queries.adjusted_series_span``) and read as the Adjusted Series as of each day; it
+    holds the span's later rows and never returns them. A Symbol is read as what it names
+    on the day (``queries.instrument_key``). The span starts ``SERIES_LOOKBACK`` before the
+    backtest, enough for any Strategy's lookback; a read from earlier goes to the query
+    layer instead."""
 
-    def __init__(self, conn: psycopg.Connection, calendar: TradingCalendar, *, as_of: date) -> None:
+    def __init__(self, conn: psycopg.Connection, *, start: date, end: date) -> None:
+        self._conn = conn
+        self._start, self._end = start - SERIES_LOOKBACK, end
+        self._spans: dict[str, queries.AdjustedSeriesSpan] = {}
+        # Symbols read as of one day: what each reads as then.
+        self._resolved: dict[str, str] = {}
+        self._resolved_on: date | None = None
+
+    def bars(self, instrument: str, *, start: date, end: date, as_of: date) -> list[AdjustedBar]:
+        if start < self._start or as_of > self._end:
+            return queries.adjusted_daily_candles(
+                self._conn, instrument, start=start, end=end, as_of=as_of
+            )
+        owner = self._owner(instrument, as_of)
+        span = self._spans.get(owner)
+        if span is None:
+            span = queries.adjusted_series_span(self._conn, owner, start=self._start, end=self._end)
+            self._spans[owner] = span
+        return span.bars(start=start, end=end, as_of=as_of)
+
+    def _owner(self, instrument: str, as_of: date) -> str:
+        """An Instrument key as it is; a Symbol as what it reads as on ``as_of``."""
+        if "@" in instrument:
+            return instrument
+        if self._resolved_on != as_of:
+            self._resolved, self._resolved_on = {}, as_of
+        if instrument not in self._resolved:
+            self._resolved[instrument] = queries.instrument_key(self._conn, instrument, as_of=as_of)
+        return self._resolved[instrument]
+
+
+class StoredMarketData:
+    """The Adjusted Series as it stood on ``as_of``, read from stored end-of-day rows, through
+    a backtest's ``SeriesCache`` when it has one."""
+
+    def __init__(
+        self,
+        conn: psycopg.Connection,
+        calendar: TradingCalendar,
+        *,
+        as_of: date,
+        cache: SeriesCache | None = None,
+    ) -> None:
         self._conn = conn
         self._calendar = calendar
         self._as_of = as_of
+        self._cache = cache
+        self._days: list[date] | None = None
 
     @property
     def as_of(self) -> date:
@@ -143,6 +196,8 @@ class StoredMarketData:
 
     def bars(self, instrument: str, *, start: date, end: date) -> list[AdjustedBar]:
         """Refused when ``end`` is after the As-Of Date: no Run may see a later bar."""
+        if self._cache is not None:
+            return self._cache.bars(instrument, start=start, end=end, as_of=self._as_of)
         return queries.adjusted_daily_candles(
             self._conn, instrument, start=start, end=end, as_of=self._as_of
         )
@@ -181,10 +236,15 @@ class StoredMarketData:
 
     def _last_days(self, count: int) -> list[date]:
         """The last ``count`` trading days up to and including ``as_of``."""
-        # Twice the span in calendar days covers ``count`` trading days at any holiday density.
-        days = list(
-            self._calendar.trading_days(self._as_of - timedelta(days=2 * count + 14), self._as_of)
-        )
+        if self._days is None or len(self._days) < count:
+            # Twice the span in calendar days covers ``count`` trading days at any holiday
+            # density.
+            self._days = list(
+                self._calendar.trading_days(
+                    self._as_of - timedelta(days=2 * count + 14), self._as_of
+                )
+            )
+        days = self._days
         if len(days) < count:
             raise ValueError(
                 f"the Trading Calendar has fewer than {count} days before {self._as_of}"
@@ -246,6 +306,7 @@ def run(
     starting_equity: Decimal,
     band: Decimal = EXIT_BAND,
     backtest_id: uuid.UUID | None = None,
+    cache: SeriesCache | None = None,
 ) -> RunResult:
     """The day ``as_of`` in one account: its held Positions restated for any split or bonus
     ex-dated since its last day, its session, then one Run over the month's Universe under
@@ -253,7 +314,8 @@ def run(
     ``starting_equity``, after ``costs``) with its open Positions held, then the Orders for
     the next session.
 
-    A backtest id is required in backtest mode and refused in any other.
+    A backtest id is required in backtest mode and refused in any other. ``cache`` serves
+    the Adjusted Series of a backtest's days, read as of ``as_of`` like any other read.
     """
     if (mode == "backtest") != (backtest_id is not None):
         raise ValueError("a backtest id is required in backtest mode and only there")
@@ -267,7 +329,7 @@ def run(
             " run `tradeline universe` for the month first"
         )
     members = [Member(m.instrument or m.symbol, m.symbol) for m in universe]
-    data = StoredMarketData(conn, calendar, as_of=as_of)
+    data = StoredMarketData(conn, calendar, as_of=as_of, cache=cache)
     account = _Account(
         conn,
         data,
@@ -369,6 +431,7 @@ def backtest(
     starting at ``starting_equity``. ``costs`` should fix its schedule's date
     (``rates_as_of``) so every trade is priced on one schedule."""
     backtest_id = uuid.uuid4()
+    cache = SeriesCache(conn, start=start, end=end)
     results = [
         run(
             conn,
@@ -383,6 +446,7 @@ def backtest(
             starting_equity=starting_equity,
             band=band,
             backtest_id=backtest_id,
+            cache=cache,
         )
         for day in SimulatedClock(calendar, start=start, end=end).days()
     ]

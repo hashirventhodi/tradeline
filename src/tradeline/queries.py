@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import dataclasses
 import uuid
+from bisect import bisect_left, bisect_right
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -404,6 +405,77 @@ def adjusted_daily_candles(
         for r in rows
     ]
     return adjust(bars, _corporate_actions(conn, owned, start=None, end=None), as_of=as_of)
+
+
+class AdjustedSeriesSpan:
+    """An Instrument's Raw Series from ``start`` to ``end``, loaded once, read as the Adjusted
+    Series as it stood on any day in the span (``adjusted_series_span``).
+
+    A read is what ``adjusted_daily_candles`` returns for the same range and As-Of
+    Date, and is refused the same way when the range ends after the As-Of Date: the
+    rows past it are held, never returned. The Adjusted Series changes only on an
+    Ex-Date, so it is adjusted once for each set of actions known, not on every read.
+    """
+
+    def __init__(
+        self,
+        instrument: str,
+        *,
+        start: date,
+        end: date,
+        bars: Sequence[RawBar],
+        actions: Sequence[CorporateAction],
+    ) -> None:
+        self.instrument = instrument
+        self.start, self.end = start, end
+        self._raw = list(bars)
+        self._actions = sorted(actions, key=lambda a: a.ex_date)
+        self._ex_dates = [a.ex_date for a in self._actions]
+        self._known = -1
+        self._adjusted: list[AdjustedBar] = []
+        self._dates: list[date] = []
+
+    def bars(self, *, start: date, end: date, as_of: date) -> list[AdjustedBar]:
+        if end > as_of:
+            raise ValueError(
+                f"range end {end} is after the as-of date {as_of}: bars after the as-of date"
+                " are not known on it"
+            )
+        if start < self.start or as_of > self.end:
+            raise ValueError(
+                f"{start} to {end} as of {as_of} is outside {self.instrument}'s span"
+                f" {self.start} to {self.end}"
+            )
+        known = bisect_right(self._ex_dates, as_of)
+        if known != self._known:
+            self._adjusted = adjust(self._raw, self._actions, as_of=as_of)
+            self._dates = [b.trade_date for b in self._adjusted]
+            self._known = known
+        return self._adjusted[bisect_left(self._dates, start) : bisect_right(self._dates, end)]
+
+
+def adjusted_series_span(
+    conn: psycopg.Connection, owner: str, *, start: date, end: date
+) -> AdjustedSeriesSpan:
+    """The Raw Series from ``start`` to ``end``, and every action filed under its Symbols, of
+    what ``instrument_key`` reads an Instrument as on a day: an Instrument key, or a Symbol no
+    Instrument has had. For reading as of many days (a backtest's); a Symbol that names an
+    Instrument does so only as of a day, so it is refused."""
+    if "@" in owner:
+        owned = _owned(conn, owner, as_of=end)
+    elif conn.execute(
+        "SELECT 1 FROM instrument_intervals WHERE symbol = %s LIMIT 1", (owner,)
+    ).fetchone():
+        raise ValueError(f"{owner} names an Instrument; read it by its key (instrument_key)")
+    else:
+        owned = _Owned(None, owner)
+    rows = _end_of_day(conn, owned, start=start, end=end, series=None)
+    bars = [
+        RawBar(r.symbol, r.series, r.trade_date, r.open, r.high, r.low, r.close, r.traded_qty)
+        for r in rows
+    ]
+    actions = _corporate_actions(conn, owned, start=None, end=None)
+    return AdjustedSeriesSpan(owner, start=start, end=end, bars=bars, actions=actions)
 
 
 @dataclass(frozen=True)
@@ -1547,6 +1619,10 @@ def sectors(
         "  SELECT s.symbol, s.sector, s.effective_from,"
         f"  ({_named_by('s.symbol', 's.effective_from')}) AS instrument_key"
         "  FROM sectors s WHERE s.effective_from <= %(classified_on)s"
+        # Only rows that can match: under an asked Symbol, or a Symbol of an asked Instrument.
+        "  AND (s.symbol IN (SELECT symbol FROM asked) OR s.symbol IN ("
+        "   SELECT i.symbol FROM instrument_intervals i"
+        "   WHERE i.instrument_key IN (SELECT instrument_key FROM target)))"
         ")"
         " SELECT DISTINCT ON (t.symbol) t.symbol, r.sector, r.effective_from, r.symbol"
         " FROM target t JOIN recorded r ON r.instrument_key = t.instrument_key"
@@ -1963,11 +2039,15 @@ def positions(
 ) -> list[LedgerPosition]:
     """An account's Positions as they stand (the ``current_positions`` view), in the order
     they opened; only the open ones when ``open_only``."""
+    # The ``current_positions`` view, read for the one account: filtered before DISTINCT ON,
+    # so a query reads that account's events and not every account's.
     rows = conn.execute(
         "SELECT position_id, run_id, rank, instrument, symbol, opened_on, shares, entry, stop,"
-        " target, time_stop_days, day, exit_reason, exit_price FROM current_positions"
-        " WHERE mode = %(mode)s AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s"
-        " AND (NOT %(open_only)s OR event <> 'closed')"
+        " target, time_stop_days, day, exit_reason, exit_price FROM ("
+        "  SELECT DISTINCT ON (position_id) * FROM positions"
+        "  WHERE mode = %(mode)s AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s"
+        "  ORDER BY position_id, day DESC, seq DESC) p"
+        " WHERE NOT %(open_only)s OR event <> 'closed'"
         " ORDER BY opened_on, symbol, position_id",
         {"mode": mode, "backtest_id": backtest_id, "open_only": open_only},
     ).fetchall()
