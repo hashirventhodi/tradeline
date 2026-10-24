@@ -55,7 +55,7 @@ The named rule shape (`pullback`) that every version of a Strategy belongs to, r
 _Avoid_: Variant, lineage (the record of a family's versions, not the family)
 
 **Recorded Universe**:
-A month's Universe computed under a Universe Rule version that was in force and recorded before the month began: what the system itself knew then.
+A month's Universe computed under a Universe Rule version that was in force and recorded before the month's first trading day: what the system itself knew then.
 _Avoid_: Live universe, original universe
 
 **Reconstructed Universe**:

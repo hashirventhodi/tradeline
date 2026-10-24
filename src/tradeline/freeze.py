@@ -141,6 +141,7 @@ def freeze_protocol(
             start=_warm_up_start(calendar, first, terms.warm_up_trading_days),
             first=first,
             last=last,
+            calendar=calendar,
         ),
     )
     content = canonical(protocol.content())
@@ -190,7 +191,13 @@ def verify_snapshot(
 
 
 def _data_snapshot(
-    conn: psycopg.Connection, rule_version: str, *, start: date, first: date, last: date
+    conn: psycopg.Connection,
+    rule_version: str,
+    *,
+    start: date,
+    first: date,
+    last: date,
+    calendar: TradingCalendar,
 ) -> DataSnapshot:
     months = []
     instruments: set[str] = set()
@@ -216,7 +223,9 @@ def _data_snapshot(
         months.append(
             MonthSnapshot(
                 month=month,
-                mode=queries.universe_month_mode(conn, month, rule_version=rule_version),
+                mode=queries.universe_month_mode(
+                    conn, month, rule_version=rule_version, calendar=calendar
+                ),
                 window_start=build.window_start,
                 data_cutoff=build.data_cutoff,
                 eod_run_ids=build.eod_run_ids,

@@ -121,7 +121,10 @@ def test_run_in_backtest_mode_writes_one_run_with_its_ranked_candidates_and_plan
     assert run.universe_rule_version == MARKET.rule.version
     assert (
         queries.universe_month_mode(
-            conn, run.universe_month, rule_version=run.universe_rule_version
+            conn,
+            run.universe_month,
+            rule_version=run.universe_rule_version,
+            calendar=repo_calendar(),
         )
         == "recorded"
     )
