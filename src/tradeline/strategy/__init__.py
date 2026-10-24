@@ -86,6 +86,11 @@ class Strategy(Protocol):
 
     def parameters(self) -> Mapping[str, str]: ...
 
+    def screen_parameters(self) -> Mapping[str, str]:
+        """The parameters ``screen`` reads: two versions of a Strategy that agree on them
+        screen every day alike, whatever their other parameters."""
+        ...
+
     def screen(
         self, universe: Sequence[Member], data: MarketData, as_of: date
     ) -> list[Candidate]: ...

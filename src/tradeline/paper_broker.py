@@ -21,6 +21,11 @@ time stop when the Position has been held its time stop in trading days. A bar
 that reaches both the stop and the target is a stop: the target fills nothing
 on it, whatever the order of the day's prices, so the fill model never credits
 a target the day could have taken away.
+
+A Boundary Exit closes a Position where Walk-Forward's Stitched Curve ends (the
+last out-of-sample day): at the day's close, whatever the bar, or at the last
+close before it when the Instrument did not trade. It is the account's close,
+not an Order the market could refuse.
 """
 
 from __future__ import annotations
@@ -101,6 +106,11 @@ def fill_target(target: Decimal, bar: Bar | None, *, stop: Decimal) -> Outcome:
     return Unfilled("not_reached")
 
 
+def fill_boundary(bar: Bar | None, *, last_close: Decimal) -> Filled:
+    """A Boundary Exit: at the day's close, or ``last_close`` on a day with no bar."""
+    return Filled(last_close if bar is None else bar.close)
+
+
 def exit_trigger(
     bar: Bar, *, stop: Decimal, days_held: int, time_stop_days: int
 ) -> ExitReason | None:
@@ -130,6 +140,9 @@ class FillModel:
 
     def target(self, target: Decimal, bar: Bar | None, *, stop: Decimal) -> Outcome:
         return fill_target(target, bar, stop=stop)
+
+    def boundary(self, bar: Bar | None, *, last_close: Decimal) -> Filled:
+        return fill_boundary(bar, last_close=last_close)
 
     def trigger(
         self, bar: Bar, *, stop: Decimal, days_held: int, time_stop_days: int

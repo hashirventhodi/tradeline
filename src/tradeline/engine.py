@@ -90,12 +90,12 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from fractions import Fraction
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, TypeVar
 
 import psycopg
 
 from tradeline import queries
-from tradeline.adjust import ADJUSTED_KINDS, AdjustedBar
+from tradeline.adjust import ADJUSTED_KINDS, AdjustedBar, CorporateAction
 from tradeline.costs import CostModel
 from tradeline.dates import IST, month_of
 from tradeline.freeze import verify_snapshot
@@ -117,6 +117,8 @@ from tradeline.tick_sizes import TickSizes
 from tradeline.trading_calendar import TradingCalendar
 
 log = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 EngineMode = Literal["backtest", "paper", "live"]
 
@@ -172,7 +174,12 @@ class SeriesCache:
     holds the span's later rows and never returns them. A Symbol is read as what it names
     on the day (``queries.instrument_key``). The span starts ``SERIES_LOOKBACK`` before the
     backtest, enough for any Strategy's lookback; a read from earlier goes to the query
-    layer instead."""
+    layer instead.
+
+    It also remembers what each day's reads found (``remember``), each under the day it
+    was read as of, so backtests over the same days share one cache: Walk-Forward's grid
+    cells in a Window, and the Window's Out-of-Sample run, load the Window's bars once and
+    read each day's market once."""
 
     def __init__(self, conn: psycopg.Connection, *, start: date, end: date) -> None:
         self._conn = conn
@@ -181,6 +188,15 @@ class SeriesCache:
         # Symbols read as of one day: what each reads as then.
         self._resolved: dict[str, str] = {}
         self._resolved_on: date | None = None
+        self._remembered: dict[tuple[Any, ...], Any] = {}
+
+    def remember(self, key: tuple[Any, ...], read: Callable[[], T]) -> T:
+        """What ``read`` returns, read once for ``key``; the key must name the As-Of Date
+        and everything else the read depends on."""
+        if key not in self._remembered:
+            self._remembered[key] = read()
+        found: T = self._remembered[key]
+        return found
 
     def bars(self, instrument: str, *, start: date, end: date, as_of: date) -> list[AdjustedBar]:
         if start < self._start or as_of > self._end:
@@ -245,9 +261,36 @@ class StoredMarketData:
     def last_bars(self, instrument: str, count: int) -> list[AdjustedBar]:
         return self.bars(instrument, start=self._last_days(count)[0], end=self._as_of)
 
+    def screen(self, strategy: Strategy, members: Sequence[Member]) -> list[Candidate]:
+        """The Strategy's ranked Candidates among ``members`` as of the day. Through a
+        backtest's cache, Strategies of one class that read the same screen parameters
+        (``Strategy.screen_parameters``) screen a day once between them."""
+        if self._cache is None:
+            return strategy.screen(members, self, self._as_of)
+        kind = type(strategy)
+        key = (
+            "screen",
+            self._as_of,
+            f"{kind.__module__}.{kind.__qualname__}",
+            tuple(sorted(strategy.screen_parameters().items())),
+            tuple(members),
+        )
+        return self._cache.remember(key, lambda: strategy.screen(members, self, self._as_of))
+
     def average_traded_value(self, instrument: str, days: int) -> Decimal:
         """The rupees traded a day over the last ``days`` trading days up to ``as_of``, a
         day without trading counting as none."""
+        return self._remember(
+            ("traded_value", instrument, days), lambda: self._average_traded_value(instrument, days)
+        )
+
+    def _remember(self, key: tuple[Any, ...], read: Callable[[], T]) -> T:
+        """``read`` through the backtest's cache, if any, as of the day."""
+        if self._cache is None:
+            return read()
+        return self._cache.remember((*key, self._as_of), read)
+
+    def _average_traded_value(self, instrument: str, days: int) -> Decimal:
         start = self._last_days(days)[0]
         rows = queries.end_of_day(
             self._conn, instrument, start=start, end=self._as_of, as_of=self._as_of
@@ -258,6 +301,11 @@ class StoredMarketData:
         """The close NSE fixes a security's tick by for the month (NSE/CMTR/62174): the latest
         close on or before the last day of the month before; for a security first traded
         this month, its first close."""
+        return self._remember(
+            ("reference_close", instrument), lambda: self._reference_close(instrument)
+        )
+
+    def _reference_close(self, instrument: str) -> Decimal:
         month = month_of(self._as_of)
         before = self._closes(instrument, start=month - REFERENCE_LOOKBACK, end=month)
         if before:
@@ -270,8 +318,28 @@ class StoredMarketData:
     def sectors(self, symbols: Sequence[str]) -> dict[str, str]:
         """The sector of each Symbol that has one as of the Run (``queries.sectors_for_run``);
         a Symbol missing is Unclassified."""
-        found = queries.sectors_for_run(self._conn, sorted(set(symbols)), as_of=self._as_of)
-        return {s.symbol: s.sector for s in found}
+        asked = sorted(set(symbols))
+        if self._cache is None:
+            found = queries.sectors_for_run(self._conn, asked, as_of=self._as_of)
+            return {s.symbol: s.sector for s in found}
+        # A Symbol's sector does not depend on the others asked with it, so the day's sectors
+        # are kept by Symbol (None: Unclassified) and only those not yet read are asked for.
+        known: dict[str, str | None] = self._cache.remember(("sectors", self._as_of), dict)
+        unknown = [s for s in asked if s not in known]
+        if unknown:
+            found = queries.sectors_for_run(self._conn, unknown, as_of=self._as_of)
+            sectors = {s.symbol: s.sector for s in found}
+            known.update({s: sectors.get(s) for s in unknown})
+        return {s: sector for s in asked if (sector := known[s]) is not None}
+
+    def corporate_actions(self, instrument: str, *, start: date) -> list[CorporateAction]:
+        """The Instrument's actions ex-dated from ``start`` to the As-Of Date."""
+        return self._remember(
+            ("corporate_actions", instrument, start),
+            lambda: queries.corporate_actions(
+                self._conn, instrument, start=start, end=self._as_of, as_of=self._as_of
+            ),
+        )
 
     def _closes(self, instrument: str, *, start: date, end: date) -> list[Decimal]:
         """Closes from ``start`` to the day before ``end``, oldest first."""
@@ -394,6 +462,9 @@ def run(
     fill_model: FillModel = FILL_MODEL,
     protocol: str | None = None,
     impact: Decimal | None = None,
+    entries: bool = True,
+    boundary: bool = False,
+    commit: bool = True,
 ) -> RunResult:
     """The day ``as_of`` in one account: its held Positions restated for any split or bonus
     ex-dated since its last day, its session, then one Run over the month's Universe under
@@ -407,7 +478,16 @@ def run(
     rows (an account of its own), and only a paper Run can be one. ``protocol`` is the hash
     of the Protocol the Strategy version runs under, if any; ``impact`` the Slippage impact c
     ``costs`` was given in place of the Protocol's, recorded on the Run.
+
+    Without ``entries`` the Run screens nothing, so it plans no new Position: its held
+    Positions keep their exits. With ``boundary`` every Position open after the session
+    takes a Boundary Exit at the day's close, after costs, before the Run's Equity is
+    taken, and no Order is placed for the next session: the account ends with the day.
+    ``commit`` false leaves the day uncommitted, for a caller that holds the transaction
+    (Walk-Forward's grid cells, which keep only a summary).
     """
+    if boundary and entries:
+        raise ValueError("a Boundary Exit's day places no new entries; pass entries=False")
     if (mode == "backtest") != (backtest_id is not None):
         raise ValueError("a backtest id is required in backtest mode and only there")
     if dry_run and mode != "paper":
@@ -436,11 +516,15 @@ def run(
     )
     tags: queries.Account = {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run}
     next_session = _next_session(calendar, as_of)
-    candidates = strategy.screen(members, data, as_of)
+    candidates = data.screen(strategy, members) if entries else []
     plans = [strategy.plan(c) for c in candidates]
     run_id = uuid.uuid4()
-    with conn.transaction():
+    # Pipelined: the day's writes go without waiting each for its reply (#82: a backtest is
+    # bound by round trips to Postgres, not by its own work).
+    with conn.pipeline(), conn.transaction():
         fills = account.session()
+        if boundary:
+            fills += account.boundary_exits()
         held = account.open_positions()
         held_instruments = {p.instrument for p in held}
         # One Position per Instrument: a Candidate already held is skipped, not assessed.
@@ -474,14 +558,17 @@ def run(
         _insert_held_verdicts(
             conn, [p for p in plans if p.instrument in held_instruments], **tags, run_id=run_id
         )
-        placed = account.place_exits(
-            run_id=run_id, session=next_session, band=band, tick_sizes=tick_sizes
-        )
-        placed += account.place_entries(
-            [d for d in decisions if isinstance(d, Pass)], run_id=run_id, session=next_session
-        )
+        placed = 0
+        if not boundary:
+            placed = account.place_exits(
+                run_id=run_id, session=next_session, band=band, tick_sizes=tick_sizes
+            )
+            placed += account.place_entries(
+                [d for d in decisions if isinstance(d, Pass)], run_id=run_id, session=next_session
+            )
         still_open = len(account.open_positions())
-    conn.commit()
+    if commit:
+        conn.commit()
     passed = sum(isinstance(d, Pass) for d in decisions)
     result = RunResult(
         run_id,
@@ -531,6 +618,50 @@ def backtest(
     (c at zero and at twice its value, as information): every Run of such a backtest
     records the c it was priced with, so it is never read as the Protocol's result."""
     frozen = _protocol_for(conn, strategy, protocol, start=start, end=end)
+    return backtest_span(
+        conn,
+        strategy,
+        frozen,
+        start=start,
+        end=end,
+        calendar=calendar,
+        tick_sizes=tick_sizes,
+        backtest_id=uuid.uuid4(),
+        cache=SeriesCache(conn, start=start, end=end),
+        risk_engine=risk_engine,
+        fill_model=fill_model,
+        costs=costs,
+        impact=impact,
+    )
+
+
+def backtest_span(
+    conn: psycopg.Connection,
+    strategy: Strategy,
+    frozen: queries.FrozenProtocol,
+    *,
+    start: date,
+    end: date,
+    calendar: TradingCalendar,
+    tick_sizes: TickSizes,
+    backtest_id: uuid.UUID,
+    cache: SeriesCache,
+    risk_engine: RiskEngine = RISK_ENGINE,
+    fill_model: FillModel = FILL_MODEL,
+    costs: CostModel | None = None,
+    impact: Decimal | None = None,
+    entries: bool = True,
+    boundary: bool = False,
+    commit: bool = True,
+) -> list[RunResult]:
+    """``backtest``'s days from ``start`` to ``end`` in the account ``backtest_id``, which
+    may already hold the days before ``start``, reading the market through ``cache``.
+
+    Every refusal of ``backtest`` but one applies: the data snapshot is not verified here,
+    since a caller running many spans over one Protocol verifies it once
+    (``freeze.verify_snapshot``) for all of them. ``entries``, ``boundary`` (a Boundary
+    Exit on ``end``) and ``commit`` are ``run``'s."""
+    _protocol_for(conn, strategy, frozen.hash, start=start, end=end, verify=False)
     terms = frozen.protocol
     if costs is None:
         costs = terms.cost_model()
@@ -543,28 +674,47 @@ def backtest(
         )
     if impact is not None:
         costs = replace(costs, slippage=replace(costs.slippage, impact=impact))
-    results = _step(
-        conn,
-        strategy,
-        SimulatedClock(calendar, start=start, end=end),
-        mode="backtest",
-        backtest_id=uuid.uuid4(),
-        dry_run=False,
-        data_source=SeriesCache(conn, start=start, end=end).market_data,
-        calendar=calendar,
-        rule_version=terms.rule_version,
-        limits=terms.limits,
-        tick_sizes=tick_sizes,
-        costs=costs,
-        starting_equity=terms.starting_equity,
-        band=terms.band,
-        risk_engine=risk_engine,
-        fill_model=fill_model,
-        protocol=frozen.hash,
-        impact=impact,
-    )
-    if not results:
+    days = list(SimulatedClock(calendar, start=start, end=end).days())
+    if not days:
         raise ValueError(f"no trading day from {start} to {end} on the Trading Calendar")
+    terms_of_run: dict[str, Any] = {
+        "mode": "backtest",
+        "backtest_id": backtest_id,
+        "dry_run": False,
+        "data_source": cache.market_data,
+        "calendar": calendar,
+        "rule_version": terms.rule_version,
+        "limits": terms.limits,
+        "tick_sizes": tick_sizes,
+        "costs": costs,
+        "starting_equity": terms.starting_equity,
+        "band": terms.band,
+        "risk_engine": risk_engine,
+        "fill_model": fill_model,
+        "protocol": frozen.hash,
+        "impact": impact,
+        "commit": commit,
+    }
+    last = days[-1]
+    before = days[:-1] if boundary else days
+    results = []
+    if before:
+        results = _step(
+            conn,
+            strategy,
+            SimulatedClock(calendar, start=start, end=before[-1]),
+            entries=entries,
+            **terms_of_run,
+        )
+    if boundary:
+        results += _step(
+            conn,
+            strategy,
+            SimulatedClock(calendar, start=last, end=last),
+            entries=False,
+            boundary=True,
+            **terms_of_run,
+        )
     return results
 
 
@@ -658,9 +808,11 @@ def _protocol_for(
     *,
     start: date,
     end: date,
+    verify: bool = True,
 ) -> queries.FrozenProtocol:
     """The frozen Protocol a backtest of ``strategy`` from ``start`` to ``end`` may run
-    under, or the reason it may not."""
+    under, or the reason it may not; its data snapshot verified unless ``verify`` is
+    false."""
     if not name:
         raise ValueError(
             "a backtest runs under a frozen Protocol and names none;"
@@ -701,7 +853,8 @@ def _protocol_for(
         raise ValueError(
             f"{start} to {end} runs outside Protocol {short}'s {terms.first} to {terms.last}"
         )
-    verify_snapshot(conn, frozen, start=start, end=end)
+    if verify:
+        verify_snapshot(conn, frozen, start=start, end=end)
     return frozen
 
 
@@ -882,13 +1035,7 @@ class _Account:
         account's last trading day, and its last close then in the day's prices; None if
         there are none."""
         previous = _previous_session(self._calendar, self._day)
-        actions = queries.corporate_actions(
-            self._conn,
-            instrument,
-            start=previous + timedelta(days=1),
-            end=self._day,
-            as_of=self._day,
-        )
+        actions = self._data.corporate_actions(instrument, start=previous + timedelta(days=1))
         if not any(a.kind in ADJUSTED_KINDS for a in actions):
             return None
         # One bar read as of the day and as of the last trading day: the ratio of its factors
@@ -1002,6 +1149,35 @@ class _Account:
                 )
             )
         return len(self._positions)
+
+    def boundary_exits(self) -> int:
+        """Close every open Position at the day's close (the last close before it, on a day
+        its Instrument did not trade), after costs: each resting target cancelled, reason
+        ``boundary``, and a ``boundary`` sell filled at once. The number of Fills."""
+        for target in self._targets.values():
+            self._cancel(target, "boundary")
+        self._targets = {}
+        positions = self.open_positions()
+        for position in positions:
+            outcome = self._fill_model.boundary(
+                self._bar(position.instrument), last_close=self.close(position.instrument)
+            )
+            order = _Order(
+                uuid.uuid4(),
+                position.run_id,
+                None,
+                position.id,
+                position.instrument,
+                position.symbol,
+                "boundary",
+                outcome.price,
+                position.shares,
+                self._day,
+            )
+            self._place(order)
+            self._fill(order, outcome.price)
+            self._close_position(position.id, price=outcome.price, reason="boundary")
+        return len(positions)
 
     def place_entries(self, passes: Sequence[Pass], *, run_id: uuid.UUID, session: date) -> int:
         """A buy for the next session at each Pass's entry limit; the number placed."""

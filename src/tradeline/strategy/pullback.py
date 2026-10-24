@@ -48,6 +48,10 @@ class PullbackV1:
     def parameters(self) -> Mapping[str, str]:
         return {"k": str(self.k), "r": str(self.r), "n": str(self.n)}
 
+    def screen_parameters(self) -> Mapping[str, str]:
+        # k, r and n price the Plan; the screen reads none of them.
+        return {}
+
     def screen(self, universe: Sequence[Member], data: MarketData, as_of: date) -> list[Candidate]:
         found: list[tuple[Decimal, str, str, dict[str, Decimal]]] = []
         for member in universe:

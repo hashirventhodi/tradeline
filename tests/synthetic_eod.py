@@ -722,3 +722,130 @@ def two_year_market() -> Market:
             ),
         ),
     )
+
+
+# --- The Walk-Forward Market ----------------------------------------------------
+
+# Its Protocol's Windows: three, each Out-of-Sample two months with the three before
+# In-Sample, then a one-month Holdout.
+WALK_FORWARD_LAYOUT = Layout(
+    holdout_start=date(2023, 1, 1),
+    holdout_months=1,
+    windows=3,
+    out_of_sample_months=2,
+    in_sample_months=3,
+)
+# A small grid, so the fixture runs four cells a Window: k in {2, 3}, r in {2}, n in {5, 10}.
+WALK_FORWARD_GRID = {
+    "k": (Decimal("2"), Decimal("3")),
+    "r": (Decimal("2"),),
+    "n": (Decimal(5), Decimal(10)),
+}
+# The Protocol's range: the first In-Sample month to the Holdout's.
+WALK_FORWARD_RANGE = (date(2022, 4, 1), date(2023, 1, 31))
+
+
+def config_text(market: Market, extra_risk: str = "") -> str:
+    """A ``tradeline.toml`` for commands over the Market: its rule, the checked-in Trading
+    Calendar, tick sizes and cost schedule, and ``extra_risk`` lines under ``[risk]``."""
+    rule = market.rule
+    return (
+        f"[universe]\ntop_n = {rule.top_n}\nlookback_trading_days = {rule.lookback_trading_days}\n"
+        f"min_listing_trading_days = {rule.min_listing_trading_days}\n"
+        f"min_presence_percent = {rule.min_presence_percent}\n"
+        f'[integrity]\ntrading_calendar = "{REPO_ROOT / "trading_calendar.csv"}"\n'
+        f'[parity]\ntrading_calendar = "{REPO_ROOT / "trading_calendar.csv"}"\n'
+        f'[risk]\ntick_sizes = "{REPO_ROOT / "tick_sizes.csv"}"\n{extra_risk}'
+        f'[costs]\nschedule = "{REPO_ROOT / "cost_rates.csv"}"\n'
+        f'contract_notes = "{REPO_ROOT / "contract_notes.csv"}"\n'
+    )
+
+
+def walk_forward_terms() -> Terms:
+    """The spec's Terms on ``WALK_FORWARD_LAYOUT`` and ``WALK_FORWARD_GRID``, a cell eligible
+    from two in-sample trades, and no risk-free rate."""
+    return replace(
+        protocol_terms(*WALK_FORWARD_RANGE),
+        grid=WALK_FORWARD_GRID,
+        min_in_sample_trades=2,
+        layout=WALK_FORWARD_LAYOUT,
+        # Idle cash earns nothing, so at 6.5 percent a year a few trades in three months
+        # all score far below zero, ranked by how long they hold, not by what they earn.
+        risk_free_rate=Decimal(0),
+    )
+
+
+def walk_forward_market() -> Market:
+    """Three EQ stocks from 2021-03-01 to 2023-01-31 for ``walk_forward_terms``' Windows
+    (In-Sample 2022-04..06, 2022-06..08, 2022-08..10; Out-of-Sample 2022-07..08, 2022-09..10,
+    2022-11..12; Holdout 2023-01). Each rises 1.00 a day on a half range of 2.00, and each
+    pullback is a ``Dip`` of 17.00 (as in ``two_year_market``: ATR(14) 6.00, so at k = 2
+    the stop is 12.00 under the close and at r = 2 the target 24.00 over it, out of reach
+    in ten days). An entry fills at the next open, the pullback's close; a rise then
+    carries it to its time stop, so n = 10 earns about twice what n = 5 does, unless the
+    pullback is followed, seven trading days on, by a fall of 3.00 a day: n = 5 sells
+    before the fall, n = 10 into it.
+
+    - ASH (from 400): pullbacks on 2022-05-10 and 2022-07-12 (rises), 2022-09-13 (falls
+      from 2022-09-22, rising again from 2022-09-29), and 2022-12-26, three trading days
+      before the last out-of-sample day.
+    - BIRCH (from 300): 2022-08-10 (rises) and 2022-10-11 (falls from 2022-10-20, rising
+      again from 2022-10-28).
+    - CEDAR (from 200): 2022-10-27, its Position open across the Window boundary on
+      2022-10-31, and 2022-11-22.
+
+    So the In-Sample Windows close one trade (2022-04..06: too few to choose), two
+    (2022-06..08, both rises) and three (2022-08..10, two of them falls). No action is
+    ex-dated, and no Stock has a sector.
+    """
+    start = date(2021, 3, 1)
+
+    def stock(symbol: str, isin: str, price: str, *events: Event) -> Stock:
+        return Stock(
+            symbol,
+            isin,
+            start=D(price),
+            slope=D("1.00"),
+            half_range=D("2.00"),
+            volume=100_000,
+            events=events,
+        )
+
+    pullback = D("17.00")
+
+    def fall(day: date, back: date) -> tuple[Event, Event]:
+        return Trend(day, D("-3.00")), Trend(back, D("1.00"))
+
+    return Market(
+        start=start,
+        end=date(2023, 1, 31),
+        rule=BASE_RULE,
+        declaration=RuleDeclaration(start, datetime.combine(start, time(), IST)),
+        stocks=(
+            stock(
+                "ASH",
+                "INE000A01016",
+                "400.00",
+                Dip(date(2022, 5, 10), pullback),
+                Dip(date(2022, 7, 12), pullback),
+                Dip(date(2022, 9, 13), pullback),
+                *fall(date(2022, 9, 22), date(2022, 9, 29)),
+                Dip(date(2022, 12, 26), pullback),
+            ),
+            stock(
+                "BIRCH",
+                "INE000B01014",
+                "300.00",
+                Dip(date(2022, 8, 10), pullback),
+                Dip(date(2022, 10, 11), pullback),
+                *fall(date(2022, 10, 20), date(2022, 10, 28)),
+            ),
+            stock(
+                "CEDAR",
+                "INE000C01014",
+                "200.00",
+                Dip(date(2022, 10, 27), pullback),
+                Dip(date(2022, 11, 22), pullback),
+            ),
+        ),
+    )

@@ -104,6 +104,24 @@ def another_database_url(request: pytest.FixtureRequest, migrated_template: str)
     _drop_database(name)
 
 
+@pytest.fixture(scope="session")
+def clone_database() -> Iterator[Callable[[str], str]]:
+    """Copy a database as it stands (nothing may be connected to it), for runs that must
+    start from one loaded state, the same ingest runs and Protocol included. Each copy is
+    dropped at the end of the session."""
+    names: list[str] = []
+
+    def clone(url: str) -> str:
+        source = psycopg.conninfo.conninfo_to_dict(url)["dbname"]
+        assert isinstance(source, str)
+        names.append(_database_name(f"copy_{source.removeprefix('tradeline_test_')}"))
+        return _create_database(names[-1], template=source)
+
+    yield clone
+    for name in names:
+        _drop_database(name)
+
+
 @pytest.fixture
 def member_only_url(request: pytest.FixtureRequest) -> Iterator[Callable[..., str]]:
     """Make a login role that is only a member of tradeline_app and return ``url`` as that role.
