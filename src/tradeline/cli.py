@@ -545,6 +545,8 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
     (day,) = clock.days()
     with _scope(day, day), app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
         if args.mode == "paper":
+            # The same starting Equity and band a Protocol freezes from the configuration.
+            terms = ctx.config.protocol.terms()
             costs = CostModel(
                 load_cost_schedule(Path(ctx.config.costs.schedule)),
                 ctx.config.costs.slippage(),
@@ -559,6 +561,8 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
                 limits=ctx.config.risk.limits(),
                 tick_sizes=tick_sizes,
                 costs=costs,
+                starting_equity=terms.starting_equity,
+                band=terms.band,
             )
         else:
             (result,) = backtest_service(

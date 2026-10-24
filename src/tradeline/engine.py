@@ -130,11 +130,6 @@ log = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-# Equity at the start of a backtest, until the Protocol states it (#81).
-STARTING_EQUITY = Decimal("500000")
-# The protective band under the close a stop or time-stop exit is limited at, until the
-# Protocol states it (#81).
-EXIT_BAND = Decimal("0.05")
 # The trading days the Participation Cap averages traded value over.
 TRADED_VALUE_DAYS = 20
 # How far before a backtest's first day the SeriesCache loads each Instrument's rows.
@@ -462,7 +457,7 @@ def run(
     tick_sizes: TickSizes,
     costs: CostModel,
     starting_equity: Decimal,
-    band: Decimal = EXIT_BAND,
+    band: Decimal,
     backtest_id: uuid.UUID | None = None,
     dry_run: bool = False,
     data_source: MarketSource = StoredMarketData,
@@ -736,8 +731,8 @@ def paper(
     limits: Limits,
     tick_sizes: TickSizes,
     costs: CostModel,
-    starting_equity: Decimal = STARTING_EQUITY,
-    band: Decimal = EXIT_BAND,
+    starting_equity: Decimal,
+    band: Decimal,
     risk_engine: RiskEngine = RISK_ENGINE,
     fill_model: FillModel = FILL_MODEL,
 ) -> RunResult:

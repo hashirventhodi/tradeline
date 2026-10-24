@@ -60,7 +60,6 @@ import psycopg
 from tradeline.config import UniverseRule
 from tradeline.costs import CostModel, Slippage, load_cost_schedule
 from tradeline.dates import IST, calendar_days, month_of, next_month
-from tradeline.engine import EXIT_BAND, STARTING_EQUITY
 from tradeline.freeze import FreezeResult
 from tradeline.freeze import freeze_protocol as freeze
 from tradeline.ingest.corporate_actions import ingest_corporate_actions, year_chunks
@@ -88,6 +87,9 @@ def repo_calendar() -> TradingCalendar:
 # The date whose cost schedule prices a test backtest's trades, fixed so results never
 # move with the calendar.
 COSTS_AS_OF = date(2026, 10, 24)
+# The repo's [protocol] starting Equity and exit band (tradeline.toml).
+STARTING_EQUITY = Decimal("500000")
+EXIT_BAND = Decimal("0.05")
 
 
 def repo_costs(rates_as_of: date = COSTS_AS_OF) -> CostModel:
