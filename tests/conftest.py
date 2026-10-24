@@ -21,6 +21,8 @@ import pytest
 
 os.environ["TRADELINE_ENV"] = "test"
 
+from checkout import TEST_COMMIT  # noqa: E402
+from tradeline import revision  # noqa: E402
 from tradeline.db import connect  # noqa: E402
 from tradeline.migrations import apply_migrations  # noqa: E402
 
@@ -51,6 +53,16 @@ def _database_name(label: str) -> str:
     """A unique Postgres name: the label is cut to fit 63 bytes, never the random suffix."""
     prefix, suffix = "tradeline_test_", f"_{secrets.token_hex(4)}"
     return f"{prefix}{label[: 63 - len(prefix) - len(suffix)]}{suffix}".lower()
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _at_test_commit() -> Iterator[None]:
+    """Every test runs the code as if checked out clean at ``TEST_COMMIT`` (the working
+    tree is often dirty while code is written), module fixtures included; the tests of a
+    dirty tree's refusal point it at a checkout of their own (``checkout.py``)."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(revision, "running_commit", lambda: TEST_COMMIT)
+        yield
 
 
 @pytest.fixture(autouse=True)

@@ -18,6 +18,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from tradeline import revision
 from tradeline import universe as universe_service
 from tradeline.cited_actions import load_cited_actions
 from tradeline.collect import collect_daily as collect_daily_service
@@ -52,7 +53,6 @@ from tradeline.protocol import window_boundaries, windows_text
 from tradeline.protocol_report import report_protocol
 from tradeline.rebuild_instruments import rebuild_instruments as rebuild_instruments_service
 from tradeline.report import report_backtest
-from tradeline.revision import git_commit
 from tradeline.secrets import (
     DATABASE_URL,
     KITE_ACCESS_TOKEN,
@@ -521,7 +521,7 @@ def protocol(ctx: Context, args: argparse.Namespace) -> int:
             schedule=load_cost_schedule(Path(ctx.config.costs.schedule)),
             slippage=ctx.config.costs.slippage(),
             calendar=calendar,
-            commit=git_commit(),
+            commit=revision.running_commit(),
         )
     sys.stderr.write(result.text())
     log.info("protocol freeze finished", extra=result.summary())

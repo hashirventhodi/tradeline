@@ -57,6 +57,7 @@ from typing import Any
 
 import psycopg
 
+from checkout import TEST_COMMIT
 from tradeline.config import UniverseRule
 from tradeline.costs import CostModel, Slippage, load_cost_schedule
 from tradeline.dates import IST, calendar_days, month_of, next_month
@@ -66,7 +67,6 @@ from tradeline.ingest.corporate_actions import ingest_corporate_actions, year_ch
 from tradeline.ingest.eod import ingest_eod
 from tradeline.metrics import HaltLimits
 from tradeline.protocol import Gate, Layout, Terms, months_between
-from tradeline.revision import git_commit
 from tradeline.risk import Limits
 from tradeline.sectors import load_sectors
 from tradeline.sources import kite, nse
@@ -529,7 +529,8 @@ def freeze_protocol(
     """Store the Universe for the months of ``first`` to ``last`` and freeze a Protocol over
     them (``protocol_terms`` unless ``terms`` is given) for ``pullback_v1`` under the
     Market's rule, the default Limits, Halts and Slippage and the checked-in schedule as of
-    ``COSTS_AS_OF``, at the commit the tests run at unless ``commit`` is given."""
+    ``COSTS_AS_OF``, at ``TEST_COMMIT`` (the commit the tests run at) unless ``commit``
+    is given."""
     compute_universe_months(conn, market, first, last)
     return freeze(
         conn,
@@ -542,7 +543,7 @@ def freeze_protocol(
         slippage=Slippage(),
         costs_as_of_for_tests=COSTS_AS_OF,
         calendar=repo_calendar(),
-        commit=commit or git_commit(),
+        commit=commit or TEST_COMMIT,
     )
 
 

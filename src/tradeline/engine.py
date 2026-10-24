@@ -93,7 +93,7 @@ from typing import Any, Protocol, TypeVar
 
 import psycopg
 
-from tradeline import ledger, queries
+from tradeline import ledger, queries, revision
 from tradeline.adjust import ADJUSTED_KINDS, AdjustedBar, CorporateAction
 from tradeline.costs import CostModel, paisa
 from tradeline.dates import IST, month_of
@@ -107,7 +107,7 @@ from tradeline.paper_broker import (
     Unfilled,
 )
 from tradeline.queries import EngineMode
-from tradeline.revision import code_revision, git_commit
+from tradeline.revision import code_revision
 from tradeline.risk import (
     RISK_ENGINE,
     Holding,
@@ -800,12 +800,6 @@ def _step(
     ]
 
 
-@functools.cache
-def _git_commit() -> str:
-    """The commit this process runs, read once: the code a process runs cannot change."""
-    return git_commit()
-
-
 def _protocol_for(
     conn: psycopg.Connection,
     strategy: Strategy,
@@ -827,23 +821,23 @@ def _protocol_for(
     if frozen is None:
         raise ValueError(f"no Protocol {name} is frozen; `tradeline protocol freeze` freezes one")
     terms, short = frozen.protocol, frozen.hash[:12]
-    commit = _git_commit()
+    commit = revision.running_commit()
     if terms.git_commit != commit:
         raise ValueError(
             f"Protocol {short} was frozen at commit {terms.git_commit} and this is commit"
             f" {commit}; a run under it must share its commit, so freeze a new Protocol at"
             " this commit and rerun its Windows"
         )
-    revision = _code_revision(type(strategy).__module__)
+    strategy_revision = _code_revision(type(strategy).__module__)
     if (terms.family, terms.name, terms.code_revision) != (
         strategy.family,
         strategy.name,
-        revision,
+        strategy_revision,
     ):
         raise ValueError(
             f"Protocol {short} validates {terms.name} ({terms.family}) at code revision"
             f" {terms.code_revision[:12]}, not {strategy.name} ({strategy.family}) at"
-            f" {revision[:12]}"
+            f" {strategy_revision[:12]}"
         )
     parameters = strategy.parameters()
     for axis, values in terms.grid.items():
