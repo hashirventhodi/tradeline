@@ -172,7 +172,7 @@ def verify_snapshot(
         )
         if hashes != (snapshot.eod_hash, snapshot.links_hash):
             differ.append(f"Universe month {month:%Y-%m}")
-        instruments |= _members(conn, month, protocol.rule_version)
+        instruments |= run_members(conn, month, protocol.rule_version)
     series = protocol.snapshot
     for instrument in sorted(instruments):
         now = queries.adjusted_series_hash(conn, instrument, start=series.start, end=series.end)
@@ -192,7 +192,7 @@ def _data_snapshot(
     months = []
     instruments: set[str] = set()
     for month in months_between(first, last):
-        members = _members(conn, month, rule_version)
+        members = run_members(conn, month, rule_version)
         if not members:
             raise ValueError(
                 f"no Universe for {month:%Y-%m} under rule version {rule_version[:12]};"
@@ -235,7 +235,7 @@ def _data_snapshot(
     )
 
 
-def _members(conn: psycopg.Connection, month: date, rule_version: str) -> set[str]:
+def run_members(conn: psycopg.Connection, month: date, rule_version: str) -> set[str]:
     """The month's members as its Runs read them: by Instrument key, or Symbol without one."""
     return {
         m.instrument or m.symbol

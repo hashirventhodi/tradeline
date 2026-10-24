@@ -2333,3 +2333,125 @@ def walk_forward_windows(conn: psycopg.Connection, protocol: str) -> list[WalkFo
         (protocol,),
     ).fetchall()
     return [WalkForwardWindow(*row) for row in rows]
+
+
+# --- The Holdout (#83) --------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class HoldoutAttempt:
+    """One request by a Strategy version (its Protocol) to run the Holdout: ``ran``, with
+    the account it ran in, its parameters, whether it consumed the family's Holdout and the
+    earlier runs whose data has been corrected since; or ``refused``, with the reason.
+    ``consumes`` and ``independent`` are None for a refusal."""
+
+    id: uuid.UUID
+    protocol: str
+    family: str
+    attempted_at: datetime
+    outcome: str
+    backtest_id: uuid.UUID | None
+    parameters: dict[str, str] | None
+    consumes: bool | None
+    corrected_since: tuple[uuid.UUID, ...]
+    independent: bool | None
+    reason: str | None
+
+
+def holdout_attempts(
+    conn: psycopg.Connection, *, protocol: str | None = None, family: str | None = None
+) -> list[HoldoutAttempt]:
+    """Holdout attempts, under the Protocol whose full hash is ``protocol`` or in the Strategy
+    Family ``family`` when named, in the order made."""
+    rows = conn.execute(
+        "SELECT id, protocol, family, attempted_at, outcome, backtest_id, parameters, consumes,"
+        " corrected_since, independent, reason FROM holdout_attempts"
+        " WHERE (%(protocol)s::text IS NULL OR protocol = %(protocol)s)"
+        " AND (%(family)s::text IS NULL OR family = %(family)s)"
+        " ORDER BY attempted_at, id",
+        {"protocol": protocol, "family": family},
+    ).fetchall()
+    return [
+        HoldoutAttempt(
+            id=row[0],
+            protocol=row[1],
+            family=row[2],
+            attempted_at=row[3],
+            outcome=row[4],
+            backtest_id=row[5],
+            parameters=row[6],
+            consumes=row[7],
+            corrected_since=tuple(row[8] or ()),
+            independent=row[9],
+            reason=row[10],
+        )
+        for row in rows
+    ]
+
+
+@dataclass(frozen=True)
+class LineageVersion:
+    """A Strategy version in a lineage: its Protocol, Strategy and code revision, when it was
+    frozen, and its Holdout run, if it has one."""
+
+    protocol: str
+    name: str
+    code_revision: str
+    frozen_at: datetime
+    holdout: HoldoutAttempt | None
+
+
+@dataclass(frozen=True)
+class FamilyLineage:
+    """A Strategy Family's versions, in the order frozen, and the Protocol whose Holdout run
+    consumed the family's Holdout (None while none has run)."""
+
+    family: str
+    versions: tuple[LineageVersion, ...]
+    consumed_by: str | None
+
+
+@dataclass(frozen=True)
+class Lineage:
+    """A version's lineage (ADR 0007): its own family's versions, and every other family with
+    a version frozen before it, the ones it was frozen beside, each with those versions. The
+    family is the one its Protocol states, recorded when it was frozen, so a version
+    relabelled as a new family shows the family it was frozen beside."""
+
+    protocol: str
+    frozen_at: datetime
+    family: FamilyLineage
+    beside: tuple[FamilyLineage, ...]
+
+
+def lineage(conn: psycopg.Connection, protocol: str) -> Lineage:
+    """The lineage of the version under the Protocol whose full hash is ``protocol``."""
+    frozen = protocols(conn)
+    own = next((p for p in frozen if p.hash == protocol), None)
+    if own is None:
+        raise ValueError(f"no Protocol {protocol} is frozen")
+    attempts = [a for a in holdout_attempts(conn) if a.outcome == "ran"]
+    ran = {a.protocol: a for a in attempts}
+
+    def family(name: str, versions: list[FrozenProtocol]) -> FamilyLineage:
+        consumer = [a.protocol for a in attempts if a.family == name and a.consumes]
+        return FamilyLineage(
+            name,
+            tuple(
+                LineageVersion(
+                    v.hash, v.protocol.name, v.protocol.code_revision, v.frozen_at, ran.get(v.hash)
+                )
+                for v in versions
+            ),
+            consumer[0] if consumer else None,
+        )
+
+    name = own.protocol.family
+    earlier = [p for p in frozen if (p.frozen_at, p.hash) < (own.frozen_at, own.hash)]
+    beside = sorted({p.protocol.family for p in earlier} - {name})
+    return Lineage(
+        protocol,
+        own.frozen_at,
+        family(name, [p for p in frozen if p.protocol.family == name]),
+        tuple(family(f, [p for p in earlier if p.protocol.family == f]) for f in beside),
+    )
