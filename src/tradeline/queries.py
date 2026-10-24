@@ -34,7 +34,14 @@ from tradeline.adjust import (
 )
 from tradeline.costs import Charges
 from tradeline.dates import IST, month_end
-from tradeline.instruments import Anomaly, Interval, KeyFrom, Link, LinkCandidate
+from tradeline.instruments import (
+    LISTING_SERIES,
+    Anomaly,
+    Interval,
+    KeyFrom,
+    Link,
+    LinkCandidate,
+)
 from tradeline.paper_broker import ExitReason, OrderPurpose
 from tradeline.protocol import Protocol
 from tradeline.sources.nse import Delisting, SymbolChange
@@ -108,8 +115,11 @@ def end_of_day(
     ``instrument`` is an Instrument key, or a Symbol read as the Instrument it
     named on ``as_of`` (``end`` when not given; see ``_owned``). The rows are
     those of every Symbol the Instrument had, each under the Symbol it was
-    published under. All series are returned unless one is named; an
-    Instrument that moved between series inside the range has rows under each.
+    published under. Every equity listing series (``LISTING_SERIES``) is returned
+    unless one is named; an Instrument that moved between series inside the range
+    has rows under each. Rows in any other series under its Symbols (a block deal,
+    BL, or the issuer's bonds, preference or partly paid shares) are not the
+    Instrument's and are never returned, so naming one of those gives no rows.
     """
     owned = _owned(conn, instrument, as_of=end if as_of is None else as_of)
     return _end_of_day(conn, owned, start=start, end=end, series=series)
@@ -125,9 +135,16 @@ def _end_of_day(
         " AND (o.since IS NULL OR e.trade_date >= o.since)"
         " AND (o.until IS NULL OR e.trade_date < o.until)"
         " WHERE e.trade_date BETWEEN %(start)s AND %(end)s"
+        " AND e.series = ANY(%(listing_series)s)"
         " AND (%(series)s::text IS NULL OR e.series = %(series)s)"
         " ORDER BY e.trade_date, e.series, e.symbol",
-        {**owned.params(), "start": start, "end": end, "series": series},
+        {
+            **owned.params(),
+            "start": start,
+            "end": end,
+            "listing_series": list(LISTING_SERIES),
+            "series": series,
+        },
     ).fetchall()
     return [EndOfDayRow(*row) for row in rows]
 
@@ -379,8 +396,9 @@ def adjusted_daily_candles(
     """The Adjusted Series of an Instrument from ``start`` to ``end`` as it stood on ``as_of``.
 
     ``instrument`` is an Instrument key, or a Symbol read as the Instrument it
-    named on ``as_of``. The Raw Series is NSE's end-of-day rows of every Symbol
-    the Instrument had, each bar under the Symbol it was published under: the
+    named on ``as_of``. The Raw Series is NSE's end-of-day rows, in the equity
+    listing series (``LISTING_SERIES``), of every Symbol the Instrument had, each bar
+    under the Symbol it was published under: the
     official unadjusted prices (``end_of_day``). Kite's candles are already
     adjusted by Kite's rules and are not the input here. The adjustment is
     computed on every read from the raw rows and the stored factors
