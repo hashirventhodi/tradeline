@@ -24,6 +24,7 @@ from tradeline.config import Config, default_config_path, load_config
 from tradeline.conformance import check_conformance
 from tradeline.dates import IST, month_end, month_of, next_month, parse_month
 from tradeline.db import NotAppRoleMember, app_connection, connect
+from tradeline.engine import backtest as backtest_service
 from tradeline.environment import Environment
 from tradeline.ingest.announcements import ingest_announcements
 from tradeline.ingest.candles import CurrentUniverse, ingest_candles
@@ -57,6 +58,8 @@ from tradeline.sources.kite import (
     KiteSession,
     login_url,
 )
+from tradeline.strategy.pullback import PullbackV1
+from tradeline.trading_calendar import load_trading_calendar
 from tradeline.transport import (
     PlaybackTransport,
     RecordingTransport,
@@ -480,6 +483,23 @@ def integrity(ctx: Context, args: argparse.Namespace) -> int:
     return 0 if report.passed else 1
 
 
+def run(ctx: Context, args: argparse.Namespace) -> int:
+    """One Run of ``pullback_v1`` as of ``--date`` under the configured Universe Rule, written
+    to the Ledger. In backtest mode it is a backtest of that one day."""
+    calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
+    with _scope(args.day, args.day), app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        (result,) = backtest_service(
+            conn,
+            PullbackV1(),
+            start=args.day,
+            end=args.day,
+            calendar=calendar,
+            rule_version=ctx.config.universe.version,
+        )
+    log.info("run finished", extra=result.summary())
+    return 0
+
+
 Command = Callable[[Context, argparse.Namespace], int]
 
 COMMANDS: dict[str, Command] = {
@@ -498,6 +518,7 @@ COMMANDS: dict[str, Command] = {
     "check-universe": check_universe,
     "collect-daily": collect_daily,
     "integrity": integrity,
+    "run": run,
 }
 
 
@@ -757,6 +778,15 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[date_range],
         help="check NSE's end-of-day files against the Trading Calendar, never a broker;"
         " exit 1 unless every check passes",
+    )
+    run_parser = subparsers.add_parser(
+        "run",
+        help="one Run of the Strategy as of a day over stored data, written to the Ledger",
+    )
+    # Paper mode is #80's.
+    run_parser.add_argument("--mode", choices=["backtest"], required=True)
+    run_parser.add_argument(
+        "--date", dest="day", metavar="DATE", type=date.fromisoformat, required=True
     )
     return parser
 

@@ -1545,3 +1545,128 @@ def sectors(
         {"as_of": as_of, "symbols": symbols},
     ).fetchall()
     return [Sector(*row) for row in rows]
+
+
+# --- The Ledger (ADR 0019) --------------------------------------------------
+
+EngineMode = Literal["backtest", "paper", "live"]
+
+
+@dataclass(frozen=True)
+class LedgerStrategy:
+    """A Strategy version as the Ledger records it for one mode (and backtest)."""
+
+    id: uuid.UUID
+    mode: EngineMode
+    backtest_id: uuid.UUID | None
+    family: str
+    name: str
+    code_revision: str
+    # The Protocol it ran under; None before Protocols exist (#81).
+    protocol: str | None
+    ranking: str
+
+
+@dataclass(frozen=True)
+class LedgerRun:
+    id: uuid.UUID
+    mode: EngineMode
+    backtest_id: uuid.UUID | None
+    strategy: LedgerStrategy
+    as_of: date
+    universe_month: date
+    universe_rule_version: str
+    universe_size: int
+    parameters: dict[str, str]
+    recorded_at: datetime
+
+
+@dataclass(frozen=True)
+class LedgerCandidate:
+    run_id: uuid.UUID
+    rank: int
+    instrument: str
+    symbol: str
+    # What the Strategy ranked by (its ``ranking`` says how).
+    score: Decimal
+    facts: dict[str, Decimal]
+
+
+@dataclass(frozen=True)
+class LedgerPlan:
+    run_id: uuid.UUID
+    rank: int
+    instrument: str
+    symbol: str
+    entry: Decimal
+    stop: Decimal
+    target: Decimal
+    time_stop_days: int
+    facts: dict[str, Decimal]
+
+
+def runs(
+    conn: psycopg.Connection,
+    *,
+    mode: EngineMode | None = None,
+    backtest_id: uuid.UUID | None = None,
+    as_of: date | None = None,
+) -> list[LedgerRun]:
+    """Runs in the Ledger, filtered by whichever of mode, backtest and day are given;
+    in day order, then in the order they were recorded."""
+    rows = conn.execute(
+        "SELECT r.id, r.mode, r.backtest_id, s.id, s.mode, s.backtest_id, s.family, s.name,"
+        " s.code_revision, s.protocol, s.ranking, r.as_of, r.universe_month,"
+        " r.universe_rule_version, r.universe_size, r.parameters, r.recorded_at"
+        " FROM runs r JOIN strategies s ON (s.mode, s.id) = (r.mode, r.strategy_id)"
+        " WHERE (%(mode)s::text IS NULL OR r.mode = %(mode)s)"
+        " AND (%(backtest_id)s::uuid IS NULL OR r.backtest_id = %(backtest_id)s)"
+        " AND (%(as_of)s::date IS NULL OR r.as_of = %(as_of)s)"
+        " ORDER BY r.as_of, r.recorded_at, r.id",
+        {"mode": mode, "backtest_id": backtest_id, "as_of": as_of},
+    ).fetchall()
+    return [
+        LedgerRun(
+            id=row[0],
+            mode=row[1],
+            backtest_id=row[2],
+            strategy=LedgerStrategy(*row[3:11]),
+            as_of=row[11],
+            universe_month=row[12],
+            universe_rule_version=row[13],
+            universe_size=row[14],
+            parameters=row[15],
+            recorded_at=row[16],
+        )
+        for row in rows
+    ]
+
+
+def _decimals(facts: dict[str, str]) -> dict[str, Decimal]:
+    return {name: Decimal(value) for name, value in facts.items()}
+
+
+def candidates(conn: psycopg.Connection, run_id: uuid.UUID) -> list[LedgerCandidate]:
+    """A Run's Candidates, best rank first."""
+    rows = conn.execute(
+        "SELECT run_id, rank, instrument, symbol, score, facts FROM candidates"
+        " WHERE run_id = %s ORDER BY rank",
+        (run_id,),
+    ).fetchall()
+    return [
+        LedgerCandidate(run, rank, instrument, symbol, score, _decimals(facts))
+        for run, rank, instrument, symbol, score, facts in rows
+    ]
+
+
+def plans(conn: psycopg.Connection, run_id: uuid.UUID) -> list[LedgerPlan]:
+    """A Run's Plans, in its Candidates' rank order."""
+    rows = conn.execute(
+        "SELECT run_id, rank, instrument, symbol, entry, stop, target, time_stop_days, facts"
+        " FROM plans WHERE run_id = %s ORDER BY rank",
+        (run_id,),
+    ).fetchall()
+    return [
+        LedgerPlan(run, rank, instrument, symbol, entry, stop, target, days, _decimals(facts))
+        for run, rank, instrument, symbol, entry, stop, target, days, facts in rows
+    ]
