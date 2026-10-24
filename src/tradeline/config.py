@@ -19,6 +19,7 @@ from typing import Any, Literal, get_args, get_origin, get_type_hints
 
 from tradeline.costs import Slippage
 from tradeline.dates import parse_month
+from tradeline.metrics import HaltLimits
 from tradeline.protocol import Gate, Layout, Terms
 from tradeline.risk import Limits
 
@@ -171,6 +172,10 @@ class Config:
         min_order_value: int = 5000
         max_new_entries: int = 4
         min_reward_to_risk: float = 1.5
+        # The Halts a backtest reports and never applies: a day's loss on the day before's
+        # Equity, and the fall from the Equity peak.
+        daily_loss_halt: float = 0.03
+        drawdown_halt: float = 0.10
         # The checked-in dated table of NSE tick sizes (``tradeline.tick_sizes``),
         # relative to the working directory.
         tick_sizes: str = "tick_sizes.csv"
@@ -186,6 +191,12 @@ class Config:
                 min_order_value=Decimal(self.min_order_value),
                 max_new_entries=self.max_new_entries,
                 min_reward_to_risk=Decimal(str(self.min_reward_to_risk)),
+            )
+
+        def halts(self) -> HaltLimits:
+            return HaltLimits(
+                daily_loss=Decimal(str(self.daily_loss_halt)),
+                drawdown=Decimal(str(self.drawdown_halt)),
             )
 
     @dataclass(frozen=True)

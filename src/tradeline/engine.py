@@ -30,11 +30,14 @@ requires.
 In backtest mode the clock is simulated: ``SimulatedClock`` steps one trading
 day at a time over the Trading Calendar, and each step is one Run as of that
 day. The data source, ``StoredMarketData``, is bound to the Run's As-Of Date and
-refuses any read past it. What the Risk Engine reads about each Plan's
-Instrument comes through it too, none of it after the As-Of Date: the close
-NSE fixes the month's tick by (the last close of the month before), and the
-20-day average daily traded value. The sector is the load in force, or the
-earliest load for a day before it (``queries.sectors_for_run``).
+refuses any read past it. A backtest loads each Instrument's rows once
+(``SeriesCache``) and re-adjusts them only when an action's Ex-Date passes, the
+only day its Adjusted Series changes; each read is still as of the Run's day.
+What the Risk Engine reads about each Plan's Instrument comes through it too,
+none of it after the As-Of Date: the close NSE fixes the month's tick by (the
+last close of the month before), and the 20-day average daily traded value.
+The sector is the load in force, or the earliest load for a day before it
+(``queries.sectors_for_run``).
 
 In paper mode the clock is the wall clock (``WallClock``, one step: today in
 IST or a named day, never a later one) and the data source is
@@ -124,6 +127,8 @@ STARTING_EQUITY = Decimal("500000")
 EXIT_BAND = Decimal("0.05")
 # The trading days the Participation Cap averages traded value over.
 TRADED_VALUE_DAYS = 20
+# How far before a backtest's first day the SeriesCache loads each Instrument's rows.
+SERIES_LOOKBACK = timedelta(days=730)
 # How far before the month the close that fixes the tick is looked for.
 REFERENCE_LOOKBACK = timedelta(days=31)
 
@@ -161,13 +166,69 @@ class WallClock:
         yield day
 
 
-class StoredMarketData:
-    """The Adjusted Series as it stood on ``as_of``, read from stored end-of-day rows."""
+class SeriesCache:
+    """Each Instrument's Raw Series over a backtest's span, loaded once from the query layer
+    (``queries.adjusted_series_span``) and read as the Adjusted Series as of each day; it
+    holds the span's later rows and never returns them. A Symbol is read as what it names
+    on the day (``queries.instrument_key``). The span starts ``SERIES_LOOKBACK`` before the
+    backtest, enough for any Strategy's lookback; a read from earlier goes to the query
+    layer instead."""
 
-    def __init__(self, conn: psycopg.Connection, calendar: TradingCalendar, *, as_of: date) -> None:
+    def __init__(self, conn: psycopg.Connection, *, start: date, end: date) -> None:
+        self._conn = conn
+        self._start, self._end = start - SERIES_LOOKBACK, end
+        self._spans: dict[str, queries.AdjustedSeriesSpan] = {}
+        # Symbols read as of one day: what each reads as then.
+        self._resolved: dict[str, str] = {}
+        self._resolved_on: date | None = None
+
+    def bars(self, instrument: str, *, start: date, end: date, as_of: date) -> list[AdjustedBar]:
+        if start < self._start or as_of > self._end:
+            return queries.adjusted_daily_candles(
+                self._conn, instrument, start=start, end=end, as_of=as_of
+            )
+        owner = self._owner(instrument, as_of)
+        span = self._spans.get(owner)
+        if span is None:
+            span = queries.adjusted_series_span(self._conn, owner, start=self._start, end=self._end)
+            self._spans[owner] = span
+        return span.bars(start=start, end=end, as_of=as_of)
+
+    def _owner(self, instrument: str, as_of: date) -> str:
+        """An Instrument key as it is; a Symbol as what it reads as on ``as_of``."""
+        if "@" in instrument:
+            return instrument
+        if self._resolved_on != as_of:
+            self._resolved, self._resolved_on = {}, as_of
+        if instrument not in self._resolved:
+            self._resolved[instrument] = queries.instrument_key(self._conn, instrument, as_of=as_of)
+        return self._resolved[instrument]
+
+    def market_data(
+        self, conn: psycopg.Connection, calendar: TradingCalendar, *, as_of: date
+    ) -> StoredMarketData:
+        """The backtest's data source (a ``MarketSource``): the market as of a day, through
+        this cache."""
+        return StoredMarketData(conn, calendar, as_of=as_of, cache=self)
+
+
+class StoredMarketData:
+    """The Adjusted Series as it stood on ``as_of``, read from stored end-of-day rows, through
+    a backtest's ``SeriesCache`` when it has one."""
+
+    def __init__(
+        self,
+        conn: psycopg.Connection,
+        calendar: TradingCalendar,
+        *,
+        as_of: date,
+        cache: SeriesCache | None = None,
+    ) -> None:
         self._conn = conn
         self._calendar = calendar
         self._as_of = as_of
+        self._cache = cache
+        self._days: list[date] | None = None
 
     @property
     def as_of(self) -> date:
@@ -175,6 +236,8 @@ class StoredMarketData:
 
     def bars(self, instrument: str, *, start: date, end: date) -> list[AdjustedBar]:
         """Refused when ``end`` is after the As-Of Date: no Run may see a later bar."""
+        if self._cache is not None:
+            return self._cache.bars(instrument, start=start, end=end, as_of=self._as_of)
         return queries.adjusted_daily_candles(
             self._conn, instrument, start=start, end=end, as_of=self._as_of
         )
@@ -219,10 +282,15 @@ class StoredMarketData:
 
     def _last_days(self, count: int) -> list[date]:
         """The last ``count`` trading days up to and including ``as_of``."""
-        # Twice the span in calendar days covers ``count`` trading days at any holiday density.
-        days = list(
-            self._calendar.trading_days(self._as_of - timedelta(days=2 * count + 14), self._as_of)
-        )
+        if self._days is None or len(self._days) < count:
+            # Twice the span in calendar days covers ``count`` trading days at any holiday
+            # density.
+            self._days = list(
+                self._calendar.trading_days(
+                    self._as_of - timedelta(days=2 * count + 14), self._as_of
+                )
+            )
+        days = self._days
         if len(days) < count:
             raise ValueError(
                 f"the Trading Calendar has fewer than {count} days before {self._as_of}"
@@ -325,6 +393,7 @@ def run(
     risk_engine: RiskEngine = RISK_ENGINE,
     fill_model: FillModel = FILL_MODEL,
     protocol: str | None = None,
+    impact: Decimal | None = None,
 ) -> RunResult:
     """The day ``as_of`` in one account: its held Positions restated for any split or bonus
     ex-dated since its last day, its session, then one Run over the month's Universe under
@@ -336,7 +405,8 @@ def run(
     ``costs`` and ``fill_model`` are used as given, whatever the mode. A backtest id is
     required in backtest mode and refused in any other; ``dry_run`` marks a paper dry-run's
     rows (an account of its own), and only a paper Run can be one. ``protocol`` is the hash
-    of the Protocol the Strategy version runs under, if any.
+    of the Protocol the Strategy version runs under, if any; ``impact`` the Slippage impact c
+    ``costs`` was given in place of the Protocol's, recorded on the Run.
     """
     if (mode == "backtest") != (backtest_id is not None):
         raise ValueError("a backtest id is required in backtest mode and only there")
@@ -396,6 +466,7 @@ def run(
             universe_size=len(members),
             cash=cash,
             equity=equity,
+            impact=impact,
         )
         _insert_candidates(conn, candidates, **tags, run_id=run_id)
         _insert_plans(conn, plans, **tags, run_id=run_id)
@@ -445,6 +516,7 @@ def backtest(
     risk_engine: RiskEngine = RISK_ENGINE,
     fill_model: FillModel = FILL_MODEL,
     costs: CostModel | None = None,
+    impact: Decimal | None = None,
 ) -> list[RunResult]:
     """A backtest under the frozen Protocol ``protocol`` (its hash, or 12 or more characters
     of it) from ``start`` to ``end``: one day per step of the simulated clock, each filling
@@ -453,7 +525,11 @@ def backtest(
     date, and every Run under its Universe Rule version, Limits and band.
 
     ``costs`` is the cost model to price with when the caller holds one (the same object a
-    paper account uses); it is refused unless it prices as the Protocol states."""
+    paper account uses); it is refused unless it prices as the Protocol states.
+
+    ``impact`` replaces the Protocol's Slippage impact c, for the report's c sensitivity
+    (c at zero and at twice its value, as information): every Run of such a backtest
+    records the c it was priced with, so it is never read as the Protocol's result."""
     frozen = _protocol_for(conn, strategy, protocol, start=start, end=end)
     terms = frozen.protocol
     if costs is None:
@@ -465,6 +541,8 @@ def backtest(
             f"the cost model does not price as Protocol {frozen.hash[:12]} states: its"
             f" schedule as of {terms.costs_as_of} with Slippage {terms.slippage}"
         )
+    if impact is not None:
+        costs = replace(costs, slippage=replace(costs.slippage, impact=impact))
     results = _step(
         conn,
         strategy,
@@ -472,7 +550,7 @@ def backtest(
         mode="backtest",
         backtest_id=uuid.uuid4(),
         dry_run=False,
-        data_source=StoredMarketData,
+        data_source=SeriesCache(conn, start=start, end=end).market_data,
         calendar=calendar,
         rule_version=terms.rule_version,
         limits=terms.limits,
@@ -483,6 +561,7 @@ def backtest(
         risk_engine=risk_engine,
         fill_model=fill_model,
         protocol=frozen.hash,
+        impact=impact,
     )
     if not results:
         raise ValueError(f"no trading day from {start} to {end} on the Trading Calendar")
@@ -1244,11 +1323,12 @@ def _insert_run(
     universe_size: int,
     cash: Decimal,
     equity: Decimal,
+    impact: Decimal | None,
 ) -> None:
     conn.execute(
         "INSERT INTO runs (id, mode, backtest_id, dry_run, strategy_id, as_of, universe_month,"
-        " universe_rule_version, universe_size, parameters, cash, equity)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        " universe_rule_version, universe_size, parameters, cash, equity, impact)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (
             run_id,
             mode,
@@ -1262,6 +1342,7 @@ def _insert_run(
             json.dumps(dict(strategy.parameters()), sort_keys=True),
             cash,
             equity,
+            impact,
         ),
     )
 

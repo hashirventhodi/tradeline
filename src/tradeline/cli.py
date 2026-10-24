@@ -24,7 +24,7 @@ from tradeline.collect import collect_daily as collect_daily_service
 from tradeline.compare_adjusted import compare_adjusted as compare_adjusted_service
 from tradeline.config import Config, default_config_path, load_config
 from tradeline.conformance import check_conformance
-from tradeline.costs import CostModel, load_cost_schedule
+from tradeline.costs import CostModel, load_contract_notes, load_cost_schedule
 from tradeline.dates import IST, month_end, month_of, next_month, parse_month
 from tradeline.db import NotAppRoleMember, app_connection, connect
 from tradeline.engine import WallClock
@@ -49,6 +49,7 @@ from tradeline.migrations import PendingMigrations, UnreadableMigrations, apply_
 from tradeline.parity import parity as parity_service
 from tradeline.protocol import window_boundaries, windows_text
 from tradeline.rebuild_instruments import rebuild_instruments as rebuild_instruments_service
+from tradeline.report import report_backtest
 from tradeline.revision import git_commit
 from tradeline.secrets import (
     DATABASE_URL,
@@ -570,9 +571,14 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
 
 
 def backtest(ctx: Context, args: argparse.Namespace) -> int:
-    """A backtest of ``pullback_v1`` at fixed parameters from ``--from`` to ``--to`` under the
-    Protocol ``--protocol`` names: one Run a trading day under its Universe Rule, Limits and
-    costs, the Paper Broker filling each day's Orders against the next day's bar."""
+    """A backtest of ``pullback_v1`` at fixed parameters from ``--from`` to ``--to``: one Run a
+    trading day under the Protocol ``--protocol`` names (its Universe Rule, Limits and
+    costs), the Paper Broker filling each day's Orders against the next day's bar.
+    ``backtest report`` reports one."""
+    if args.backtest_command == "report":
+        return backtest_report(ctx, args)
+    if args.start is None:
+        raise ValueError("backtest needs --from")
     end = args.end or args.start
     calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
     tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
@@ -600,6 +606,32 @@ def backtest(ctx: Context, args: argparse.Namespace) -> int:
             "equity": str(results[-1].equity),
         },
     )
+    return 0
+
+
+def backtest_report(ctx: Context, args: argparse.Namespace) -> int:
+    """The single-run report: the cell backtested from ``--from`` to ``--to`` under the
+    Protocol ``--protocol`` names, and again with its Slippage impact at zero and at twice
+    its value, scored and written as JSON to ``--out``."""
+    end = args.end or args.start
+    calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
+    tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
+    strategy = PullbackV1(k=Decimal(args.k), r=Decimal(args.r), n=args.n)
+    notes = load_contract_notes(Path(ctx.config.costs.contract_notes))
+    with _scope(args.start, end), app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = report_backtest(
+            conn,
+            strategy,
+            protocol=args.protocol,
+            start=args.start,
+            end=end,
+            calendar=calendar,
+            tick_sizes=tick_sizes,
+            halts=ctx.config.risk.halts(),
+            contract_notes=len(notes),
+        )
+    args.out.write_text(result.report.text())
+    log.info("backtest report finished", extra={**result.summary(), "out": str(args.out)})
     return 0
 
 
@@ -916,23 +948,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="paper mode: price every Fill on the cost schedule in force on DATE (default each"
         " Fill's own day); a backtest's date is its Protocol's",
     )
+    # One cell: the Strategy at fixed parameters, under a frozen Protocol.
+    cell = argparse.ArgumentParser(add_help=False)
+    defaults = PullbackV1()
+    cell.add_argument(
+        "--k", default=str(defaults.k), help="stop distance in ATRs (default %(default)s)"
+    )
+    cell.add_argument(
+        "--r", default=str(defaults.r), help="target in multiples of the risk (default %(default)s)"
+    )
+    cell.add_argument(
+        "--n", type=int, default=defaults.n, help="time stop in trading days (default %(default)s)"
+    )
+    cell.add_argument(*PROTOCOL[0], **PROTOCOL[1])
     backtest_parser = subparsers.add_parser(
         "backtest",
-        parents=[date_range],
+        parents=[cell],
         help="backtest the Strategy at fixed parameters over stored data, one Run a trading"
         " day, written to the Ledger with its Orders, Fills and Positions",
     )
-    defaults = PullbackV1()
+    # Not required here, so ``backtest report --from`` parses; ``backtest`` refuses its absence.
+    backtest_parser.add_argument("--from", dest="start", metavar="DATE", type=date.fromisoformat)
     backtest_parser.add_argument(
-        "--k", default=str(defaults.k), help="stop distance in ATRs (default %(default)s)"
+        "--to", dest="end", metavar="DATE", type=date.fromisoformat, help="inclusive"
     )
-    backtest_parser.add_argument(
-        "--r", default=str(defaults.r), help="target in multiples of the risk (default %(default)s)"
+    reports = backtest_parser.add_subparsers(dest="backtest_command")
+    report_parser = reports.add_parser(
+        "report",
+        parents=[date_range, cell],
+        help="backtest one cell, and again with the impact c at zero and at twice its value,"
+        " and write the report's JSON",
     )
-    backtest_parser.add_argument(
-        "--n", type=int, default=defaults.n, help="time stop in trading days (default %(default)s)"
+    report_parser.add_argument(
+        "--out", metavar="FILE", type=Path, required=True, help="where the JSON is written"
     )
-    backtest_parser.add_argument(*PROTOCOL[0], **PROTOCOL[1])
     protocol_parser = subparsers.add_parser(
         "protocol", help="the Protocol a Strategy version is validated under (ADR 0007)"
     )
