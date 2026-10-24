@@ -1,7 +1,21 @@
 ---
 status: accepted
 date: 2026-10-21
+amended: 2026-10-24
 ---
 # The final two years are a locked Holdout, run once per Strategy version
 
 Validation is Walk-Forward on the earlier history. The most recent two years are locked: a Strategy version runs on them exactly once, the result is written to the Ledger permanently, and running again requires a new Strategy version. Once a holdout has been looked at it is no longer out of sample; this rule makes that cost explicit and prevents the quiet iteration that turns a holdout into a training set.
+
+## Amendment (2026-10-24, #72): the Protocol, the family, and the Fresh Period
+
+Running the Holdout once is not enough if what is run on it was shaped by looking at it, or if the grid and the objective can be adjusted after the result is seen. So:
+
+- **The Protocol is frozen before any run.** One append-only Ledger row, keyed by its content hash, states the parameter grid, the objective (in-sample Sharpe after costs, averaged with each cell's grid neighbours along every axis, so a lone spike loses to a plateau; a cell with fewer than 30 in-sample trades is ineligible), the tie-break order, the Window boundaries as trading days generated from the Trading Calendar and printed for independent checking, the cost and Slippage parameters, the exit band, the Participation Cap, the starting Equity and risk-free rate, the Gate thresholds, the Universe Rule version and the data snapshot. The engine refuses a backtest naming no frozen Protocol. A Strategy version is its code revision run under one Protocol; a different grid or objective is a new version.
+- **The Holdout is fixed, month-aligned, and never extended:** 2024-10-01 to 2026-09-30. Walk-Forward Windows are anchored back from it: five Out-of-Sample Windows in October-to-September years, 2019-10 to 2024-09, each with the two years before as its In-Sample Window. Positions keep their exits across Window boundaries; the Stitched Curve is one account. Every Position closes at the Holdout boundary (ADR 0003 amendment), and the Holdout starts the account again.
+- **The Holdout is consumed for the whole Strategy Family.** Family membership is recorded at freeze, so relabelling a version as a new family to reset the lock is visible in the lineage the Gate report shows. For a single Operator, visibility is enough; no rule polices what counts as a rule shape.
+- **A later version's Holdout run is Not Independent**, recorded as such, and passes the Backtest Gate only together with a Fresh Period: trading days after both the consumed Holdout's end and that version's own Protocol freeze. Data from October 2026 onward is not untouched just because no backtest ran on it; the Operator watches the market and the first version's paper results and can shape the next version around them, so only days after its freeze are data its design could not have used. The Fresh Period must be at least twelve months long and meet the same thresholds, its trade count reported but not required. This is cheaper and repeatable beside paper trading alone, and does not freeze the family for two years. It also sets the cadence: a later version waits a year after its freeze before it can pass.
+- **A second Holdout run by the same version is refused** by the engine and recorded in the Ledger as an attempt.
+- **The Backtest Gate scores both** the Stitched Curve and the Holdout (`docs/risk-controls.md`, Gates); either failing fails.
+
+Alternatives rejected: letting a later version advance only by the Paper Gate (slower and not repeatable); declaring a new two-year Holdout when enough data exists (freezes the family for two years); counting the Fresh Period from the consumed Holdout's end alone (the Operator has seen those days).

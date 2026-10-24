@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-10-21
-amended: 2026-10-21
+amended: 2026-10-24
 ---
 # The Universe is a point-in-time liquidity rule, not an index constituent list
 
@@ -26,3 +26,15 @@ Backtests need the Universe for past months under a rule chosen later. Phase 2 d
 4. **The mode**: a *recorded* Universe (a version that was in force and recorded at the time) versus a *reconstructed* historical Universe (a later version applied to past months).
 
 A reconstructed Universe must use only inputs available at the historical date (the data cutoff above, end-of-day files as first loaded, the instrument master as of then), and it must be reproducible byte for byte. Every backtest stores the rule version, the data provenance (end-of-day ingest runs and their files), and the mode it used. Where no valid version exists for a query, the result is an explicit empty result or a domain-level outcome, never a silent substitution of today's Universe.
+
+## Amendment (2026-10-24, #72): how a reconstructed Universe is recorded
+
+The deferred design above is settled as follows.
+
+- **Rule Validity is declared, not inferred.** An append-only `universe_rule_validity` table holds (rule version, in force from, declared at), written by an Operator command. `recorded_at` stays what it is: when the version was first computed.
+- **The mode is derived.** A month's Universe is a Recorded Universe when its rule version was in force and recorded before the month's first trading day; otherwise it is a Reconstructed Universe. Every one of the 120 stored months is reconstructed today, and says so.
+- **Every month build is recorded with its inputs.** An append-only `universe_month_builds` row per (month, rule version) stores the Data Cutoff (the last end-of-day date used), the ids of the end-of-day ingest runs and the Instruments rebuild it read, and a SHA-256 of the end-of-day rows in its window and of the Instrument links. Run ids say which ingests a build read; the hash says what the rows contained, and does not rely on append-only enforcement never having been bypassed. Months stored before this table existed get their cutoff from `ingest_runs` history or are marked cutoff-inferred. Each month hashes only its own window, about six months of rows, in seconds.
+- **A backtest names its rule version and verifies its inputs.** The Protocol's data snapshot lists the build ids of every month the backtest reads and their modes; before running, the engine recomputes the hashes and refuses to run if any differs, so Phase 1's byte-identical membership stays true after re-ingests.
+- **An unversioned query stays empty** for a month with no valid version, as the first amendment says. Nothing substitutes today's Universe.
+
+Alternatives rejected: a hash alone (cannot say which ingest to re-run); run ids alone (trusts that the rows those runs wrote are the rows there now); marking every month reconstructed with no cutoff or provenance (the ADR's four distinctions would be documented, not stored).

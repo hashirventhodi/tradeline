@@ -106,7 +106,7 @@ Postgres, plain tables, partitioned where volume justifies it. Append-only table
 - `orders`, `fills`, `positions`, `approvals`: append-only event rows; the current Position state is a view.
 - `halts`, `config_changes`, `prompt_versions`: append-only.
 - `gate_evaluations`: every Gate check, inputs and result.
-- `backtest_runs`, `backtest_trades`: same schema as live trades so the comparison in the Paper Gate is a join.
+- There are no separate backtest tables. Every Ledger row carries the Engine Mode and, when it has one, a backtest id, so the Paper Gate's comparison is a filter (ADR 0019). `protocols`, `holdout_attempts`, `universe_rule_validity` and `universe_month_builds` arrive with Phase 2 (#72).
 
 ## Engine modes
 
