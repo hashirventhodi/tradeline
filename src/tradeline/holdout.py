@@ -109,7 +109,7 @@ def run_holdout(
     span = terms.holdout
     parameters = _last_parameters(conn, frozen)
     days = list(calendar.trading_days(span.first, span.last))
-    attempt = _ran(conn, frozen.hash)
+    attempt = holdout_run(conn, frozen.hash)
     start = span.first
     if attempt is not None:
         assert attempt.backtest_id is not None
@@ -151,6 +151,49 @@ def run_holdout(
     result = HoldoutResult(attempt, len(results), time.monotonic() - began)
     log.info("holdout finished", extra=result.summary())
     return result
+
+
+def rerun_holdout(
+    conn: psycopg.Connection,
+    strategy: StrategyFactory,
+    frozen: queries.FrozenProtocol,
+    *,
+    backtest_id: uuid.UUID,
+    impact: Decimal,
+    calendar: TradingCalendar,
+    tick_sizes: TickSizes,
+    risk_engine: RiskEngine = RISK_ENGINE,
+    fill_model: FillModel = FILL_MODEL,
+) -> None:
+    """The version's Holdout run written again in the account ``backtest_id`` with the
+    Slippage impact c at ``impact``, at the parameters it ran at, from a fresh account:
+    the report's c sensitivity, information and never a Holdout run, so it is not an
+    attempt. Resumed from the account's last Run. The caller verifies the data snapshot."""
+    attempt = holdout_run(conn, frozen.hash)
+    if attempt is None or attempt.parameters is None:
+        raise ValueError(f"Protocol {frozen.hash[:12]} has not run the Holdout")
+    span = frozen.protocol.holdout
+    start = span.first
+    runs = queries.runs(conn, mode="backtest", backtest_id=backtest_id)
+    if runs:
+        rest = [d for d in calendar.trading_days(span.first, span.last) if d > runs[-1].as_of]
+        if not rest:
+            return
+        start = rest[0]
+    backtest_span(
+        conn,
+        strategy({a: Decimal(v) for a, v in attempt.parameters.items()}),
+        frozen,
+        start=start,
+        end=span.last,
+        calendar=calendar,
+        tick_sizes=tick_sizes,
+        backtest_id=backtest_id,
+        cache=SeriesCache(conn, start=start, end=span.last),
+        risk_engine=risk_engine,
+        fill_model=fill_model,
+        impact=impact,
+    )
 
 
 def _last_parameters(conn: psycopg.Connection, frozen: queries.FrozenProtocol) -> dict[str, str]:
@@ -235,7 +278,7 @@ def standing(
 ) -> HoldoutStanding:
     """The standing of the Holdout run by the version under the Protocol whose full hash is
     ``protocol``; refused if it has not run the Holdout."""
-    attempt = _ran(conn, protocol)
+    attempt = holdout_run(conn, protocol)
     if attempt is None:
         raise ValueError(f"Protocol {protocol[:12]} has not run the Holdout")
     if attempt.independent:
@@ -339,7 +382,8 @@ def _corrected_since(
     return tuple(corrected)
 
 
-def _ran(conn: psycopg.Connection, protocol: str) -> queries.HoldoutAttempt | None:
+def holdout_run(conn: psycopg.Connection, protocol: str) -> queries.HoldoutAttempt | None:
+    """The version's Holdout run (its ``ran`` attempt), if it has one, finished or not."""
     ran = [a for a in queries.holdout_attempts(conn, protocol=protocol) if a.outcome == "ran"]
     return ran[0] if ran else None
 

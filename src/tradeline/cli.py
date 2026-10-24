@@ -49,6 +49,7 @@ from tradeline.manual_links import load_manual_links
 from tradeline.migrations import PendingMigrations, UnreadableMigrations, apply_migrations
 from tradeline.parity import parity as parity_service
 from tradeline.protocol import window_boundaries, windows_text
+from tradeline.protocol_report import report_protocol
 from tradeline.rebuild_instruments import rebuild_instruments as rebuild_instruments_service
 from tradeline.report import report_backtest
 from tradeline.revision import git_commit
@@ -579,7 +580,7 @@ def backtest(ctx: Context, args: argparse.Namespace) -> int:
     costs), the Paper Broker filling each day's Orders against the next day's bar.
     Without ``--from``, the whole Protocol: Walk-Forward over its Windows, resumed where
     an interrupted run stopped, its report's JSON written to ``--out`` if given.
-    ``backtest report`` reports one cell."""
+    ``backtest report`` reports the Protocol (or one cell)."""
     if args.backtest_command == "report":
         return backtest_report(ctx, args)
     if args.backtest_command == "holdout":
@@ -653,7 +654,12 @@ def _pullback(parameters: Mapping[str, Decimal]) -> PullbackV1:
 def backtest_report(ctx: Context, args: argparse.Namespace) -> int:
     """The single-run report: the cell backtested from ``--from`` to ``--to`` under the
     Protocol ``--protocol`` names, and again with its Slippage impact at zero and at twice
-    its value, scored and written as JSON to ``--out``."""
+    its value, scored and written as JSON to ``--out``. Without ``--from``, the full report
+    on the Protocol (``protocol_report``)."""
+    if args.start is None:
+        return protocol_report(ctx, args)
+    if args.markdown is not None:
+        raise ValueError("--markdown is the full report's; leave out --from to write it")
     end = args.end or args.start
     calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
     tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
@@ -671,6 +677,31 @@ def backtest_report(ctx: Context, args: argparse.Namespace) -> int:
             contract_notes=len(notes),
         )
     args.out.write_text(result.report.text())
+    log.info("backtest report finished", extra={**result.summary(), "out": str(args.out)})
+    return 0
+
+
+def protocol_report(ctx: Context, args: argparse.Namespace) -> int:
+    """The full report on the Protocol ``--protocol`` names, once its Walk-Forward and Holdout
+    have run: the c sensitivity written if missing, the Backtest Gate evaluated and recorded,
+    the report's JSON written to ``--out`` and its Markdown to ``--markdown`` if given."""
+    if args.end is not None:
+        raise ValueError("--to needs --from; without either, the report is the whole Protocol's")
+    calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
+    tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
+    notes = load_contract_notes(Path(ctx.config.costs.contract_notes))
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = report_protocol(
+            conn,
+            _pullback,
+            protocol=args.protocol,
+            calendar=calendar,
+            tick_sizes=tick_sizes,
+            contract_notes=len(notes),
+        )
+    args.out.write_text(result.report.text())
+    if args.markdown is not None:
+        args.markdown.write_text(result.report.markdown())
     log.info("backtest report finished", extra={**result.summary(), "out": str(args.out)})
     return 0
 
@@ -1021,12 +1052,29 @@ def build_parser() -> argparse.ArgumentParser:
     reports = backtest_parser.add_subparsers(dest="backtest_command")
     report_parser = reports.add_parser(
         "report",
-        parents=[date_range, cell],
-        help="backtest one cell, and again with the impact c at zero and at twice its value,"
-        " and write the report's JSON",
+        parents=[cell],
+        help="the full report: evaluate and record the Backtest Gate on the Protocol's"
+        " Stitched Curve and Holdout, with the c sensitivity, and write its JSON and Markdown;"
+        " with --from, backtest one cell and again with c at zero and at twice its value",
+    )
+    report_parser.add_argument(
+        "--from",
+        dest="start",
+        metavar="DATE",
+        type=date.fromisoformat,
+        help="report one cell from DATE instead of the whole Protocol",
+    )
+    report_parser.add_argument(
+        "--to", dest="end", metavar="DATE", type=date.fromisoformat, help="inclusive"
     )
     report_parser.add_argument(
         "--out", metavar="FILE", type=Path, required=True, help="where the JSON is written"
+    )
+    report_parser.add_argument(
+        "--markdown",
+        metavar="FILE",
+        type=Path,
+        help="the full report: where its Markdown is written",
     )
     holdout_parser = reports.add_parser(
         "holdout",

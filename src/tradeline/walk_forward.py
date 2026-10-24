@@ -159,7 +159,7 @@ class WalkForwardReport:
             },
             "min_in_sample_trades": terms.min_in_sample_trades,
             "windows": [
-                _window_json(number, window, found, terms)
+                window_json(number, window, found, terms)
                 for number, (window, found) in enumerate(
                     zip(terms.windows, self.windows, strict=True), start=1
                 )
@@ -194,7 +194,7 @@ class WalkForwardReport:
         return json.dumps(self.as_json(), indent=2) + "\n"
 
 
-def _window_json(
+def window_json(
     number: int, window: Window, found: queries.WalkForwardWindow, terms: Protocol
 ) -> dict[str, Any]:
     selection: dict[str, Any] | None = None
@@ -331,6 +331,51 @@ def walk_forward(
     return result
 
 
+def restitch(
+    conn: psycopg.Connection,
+    strategy: StrategyFactory,
+    frozen: queries.FrozenProtocol,
+    *,
+    backtest_id: uuid.UUID,
+    impact: Decimal,
+    calendar: TradingCalendar,
+    tick_sizes: TickSizes,
+    risk_engine: RiskEngine = RISK_ENGINE,
+    fill_model: FillModel = FILL_MODEL,
+) -> None:
+    """The finished Walk-Forward's Stitched Curve written again in the account
+    ``backtest_id`` with the Slippage impact c at ``impact``: each Window's Out-of-Sample
+    days at the parameters it chose (nothing new planned where it chose none, as the
+    Stitched Curve runs), no cell run again and nothing chosen again, so the c sensitivity
+    differs from the Stitched Curve in its costs alone. Resumed from the account's last
+    Run. The caller verifies the data snapshot."""
+    terms = frozen.protocol
+    windows = queries.walk_forward_windows(conn, frozen.hash)
+    if len(windows) < len(terms.windows):
+        raise ValueError(
+            f"the Walk-Forward under Protocol {frozen.hash[:12]} has finished"
+            f" {len(windows)} of {len(terms.windows)} Windows"
+        )
+    run = _Runner(conn, strategy, frozen, calendar, tick_sizes, risk_engine, fill_model)
+    chosen: Mapping[str, Decimal] | None = None
+    for number, (window, found) in enumerate(zip(terms.windows, windows, strict=True), start=1):
+        entries = found.parameters is not None
+        if found.parameters is not None:
+            chosen = {a: Decimal(v) for a, v in found.parameters.items()}
+        if chosen is None:
+            continue
+        cache = SeriesCache(conn, start=window.out_of_sample.first, end=window.out_of_sample.last)
+        run.out_of_sample(
+            backtest_id,
+            window,
+            cache,
+            chosen,
+            entries=entries,
+            last=number == len(terms.windows),
+            impact=impact,
+        )
+
+
 class _Runner:
     """The cells and Out-of-Sample stretches of one Protocol's Walk-Forward."""
 
@@ -443,10 +488,11 @@ class _Runner:
         *,
         entries: bool,
         last: bool,
+        impact: Decimal | None = None,
     ) -> None:
         """The Window's Out-of-Sample days on the Stitched Curve from the day after the
         account's last Run, each committed as it is written; a Boundary Exit on its last day
-        when it is the last Window's."""
+        when it is the last Window's. ``impact`` is ``engine.backtest``'s."""
         conn = self._conn
         span = window.out_of_sample
         runs = queries.runs(conn, mode="backtest", backtest_id=backtest_id)
@@ -471,6 +517,7 @@ class _Runner:
             cache=cache,
             entries=entries,
             boundary=last,
+            impact=impact,
             **self._span,
         )
         log.info(
