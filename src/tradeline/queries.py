@@ -1948,7 +1948,7 @@ class LedgerOrder:
     instrument: str
     symbol: str
     side: str
-    # ``entry``, ``target``, ``stop`` or ``time``.
+    # ``entry``, ``target``, ``stop``, ``time`` or ``boundary``.
     purpose: str
     limit_price: Decimal
     shares: int
@@ -2007,7 +2007,7 @@ class LedgerPosition:
     time_stop_days: int
     # The day of its latest event: the day it closed, once closed.
     as_of: date
-    # ``stop``, ``target`` or ``time``; None while open.
+    # ``stop``, ``target``, ``time`` or ``boundary``; None while open.
     exit_reason: str | None
     exit_price: Decimal | None
 
@@ -2252,3 +2252,84 @@ def protocol(conn: psycopg.Connection, name: str) -> FrozenProtocol | None:
         return None
     ((found, frozen_at, content),) = rows
     return FrozenProtocol(found, frozen_at, Protocol.from_content(json.loads(content)))
+
+
+# --- Walk-Forward (#82) -------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class WalkForward:
+    """A Protocol's Walk-Forward: the backtest id its Stitched Curve is written under."""
+
+    protocol: str
+    backtest_id: uuid.UUID
+    started_at: datetime
+
+
+@dataclass(frozen=True)
+class WalkForwardCell:
+    """One grid cell's In-Sample run in a Window, kept as a summary only."""
+
+    protocol: str
+    window: int
+    parameters: dict[str, str]
+    runs: int
+    trades: int
+    sharpe: Decimal | None
+    max_drawdown: Decimal
+    ending_equity: Decimal
+
+
+@dataclass(frozen=True)
+class WalkForwardWindow:
+    """One Window's selection and its out-of-sample result on the Stitched Curve.
+    ``parameters`` and the in-sample figures are None when no cell was eligible."""
+
+    protocol: str
+    window: int
+    cells: int
+    eligible_cells: int
+    parameters: dict[str, str] | None
+    objective: Decimal | None
+    in_sample_sharpe: Decimal | None
+    in_sample_trades: int | None
+    out_of_sample_runs: int
+    out_of_sample_trades: int
+    start_equity: Decimal | None
+    end_equity: Decimal | None
+
+
+def walk_forward(conn: psycopg.Connection, protocol: str) -> WalkForward | None:
+    """The Walk-Forward under the Protocol whose full hash is ``protocol``, if one started."""
+    row = conn.execute(
+        "SELECT protocol, backtest_id, started_at FROM walk_forwards WHERE protocol = %s",
+        (protocol,),
+    ).fetchone()
+    return None if row is None else WalkForward(*row)
+
+
+def walk_forward_cells(
+    conn: psycopg.Connection, protocol: str, *, window: int | None = None
+) -> list[WalkForwardCell]:
+    """The grid cells run under the Protocol, in a Window if one is named, in the order
+    recorded."""
+    rows = conn.execute(
+        "SELECT protocol, window_number, parameters, runs, trades, sharpe, max_drawdown,"
+        " ending_equity FROM walk_forward_cells WHERE protocol = %s"
+        " AND (%s::integer IS NULL OR window_number = %s)"
+        " ORDER BY window_number, recorded_at, parameters",
+        (protocol, window, window),
+    ).fetchall()
+    return [WalkForwardCell(*row) for row in rows]
+
+
+def walk_forward_windows(conn: psycopg.Connection, protocol: str) -> list[WalkForwardWindow]:
+    """The Windows the Walk-Forward under the Protocol has finished, in order."""
+    rows = conn.execute(
+        "SELECT protocol, window_number, cells, eligible_cells, parameters, objective,"
+        " in_sample_sharpe, in_sample_trades, out_of_sample_runs, out_of_sample_trades,"
+        " start_equity, end_equity FROM walk_forward_windows WHERE protocol = %s"
+        " ORDER BY window_number",
+        (protocol,),
+    ).fetchall()
+    return [WalkForwardWindow(*row) for row in rows]

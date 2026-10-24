@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -77,6 +77,7 @@ from tradeline.transport import (
     transport_for,
 )
 from tradeline.verify_universe import verify_universe as verify_universe_service
+from tradeline.walk_forward import walk_forward as walk_forward_service
 
 log = logging.getLogger(__name__)
 
@@ -574,11 +575,13 @@ def backtest(ctx: Context, args: argparse.Namespace) -> int:
     """A backtest of ``pullback_v1`` at fixed parameters from ``--from`` to ``--to``: one Run a
     trading day under the Protocol ``--protocol`` names (its Universe Rule, Limits and
     costs), the Paper Broker filling each day's Orders against the next day's bar.
-    ``backtest report`` reports one."""
+    Without ``--from``, the whole Protocol: Walk-Forward over its Windows, resumed where
+    an interrupted run stopped, its report's JSON written to ``--out`` if given.
+    ``backtest report`` reports one cell."""
     if args.backtest_command == "report":
         return backtest_report(ctx, args)
     if args.start is None:
-        raise ValueError("backtest needs --from")
+        return walk_forward(ctx, args)
     end = args.end or args.start
     calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
     tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
@@ -606,6 +609,26 @@ def backtest(ctx: Context, args: argparse.Namespace) -> int:
             "equity": str(results[-1].equity),
         },
     )
+    return 0
+
+
+def walk_forward(ctx: Context, args: argparse.Namespace) -> int:
+    """Walk-Forward over the Protocol ``--protocol`` names, for ``pullback_v1``."""
+    if args.end is not None:
+        raise ValueError("--to needs --from; without either, backtest runs the whole Protocol")
+    calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
+    tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
+
+    def strategy(parameters: Mapping[str, Decimal]) -> PullbackV1:
+        return PullbackV1(k=parameters["k"], r=parameters["r"], n=int(parameters["n"]))
+
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = walk_forward_service(
+            conn, strategy, protocol=args.protocol, calendar=calendar, tick_sizes=tick_sizes
+        )
+    if args.out is not None:
+        args.out.write_text(result.report.text())
+    log.info("walk-forward finished", extra=result.summary())
     return 0
 
 
@@ -971,6 +994,12 @@ def build_parser() -> argparse.ArgumentParser:
     backtest_parser.add_argument("--from", dest="start", metavar="DATE", type=date.fromisoformat)
     backtest_parser.add_argument(
         "--to", dest="end", metavar="DATE", type=date.fromisoformat, help="inclusive"
+    )
+    backtest_parser.add_argument(
+        "--out",
+        metavar="FILE",
+        type=Path,
+        help="without --from (the whole Protocol): where the Walk-Forward report's JSON is written",
     )
     reports = backtest_parser.add_subparsers(dest="backtest_command")
     report_parser = reports.add_parser(

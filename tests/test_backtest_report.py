@@ -55,11 +55,11 @@ from typing import Any
 import pytest
 
 from synthetic_eod import (
-    REPO_ROOT,
     RUN_DAY,
     TWO_YEARS,
     Market,
     base_market,
+    config_text,
     freeze_protocol,
     load_market,
     repo_calendar,
@@ -80,20 +80,6 @@ D = Decimal
 FIXTURE_BUDGET_SECONDS = 20.0
 # The short reports' Protocol: In-Sample April, Out-of-Sample May, Holdout June 2023.
 QUARTER = (date(2023, 4, 1), date(2023, 6, 30))
-
-
-def config_text(market: Market, extra_risk: str = "") -> str:
-    rule = market.rule
-    return (
-        f"[universe]\ntop_n = {rule.top_n}\nlookback_trading_days = {rule.lookback_trading_days}\n"
-        f"min_listing_trading_days = {rule.min_listing_trading_days}\n"
-        f"min_presence_percent = {rule.min_presence_percent}\n"
-        f'[integrity]\ntrading_calendar = "{REPO_ROOT / "trading_calendar.csv"}"\n'
-        f'[parity]\ntrading_calendar = "{REPO_ROOT / "trading_calendar.csv"}"\n'
-        f'[risk]\ntick_sizes = "{REPO_ROOT / "tick_sizes.csv"}"\n{extra_risk}'
-        f'[costs]\nschedule = "{REPO_ROOT / "cost_rates.csv"}"\n'
-        f'contract_notes = "{REPO_ROOT / "contract_notes.csv"}"\n'
-    )
 
 
 def report_over(

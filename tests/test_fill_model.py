@@ -15,6 +15,7 @@ from tradeline.paper_broker import (
     Unfilled,
     exit_limit,
     exit_trigger,
+    fill_boundary,
     fill_entry,
     fill_exit,
     fill_target,
@@ -124,3 +125,19 @@ def test_a_day_the_instrument_did_not_trade_fills_nothing() -> None:
     assert fill_entry(D("100.00"), None) == Unfilled("no_bar")
     assert fill_exit(D("94.05"), None) == Unfilled("no_bar")
     assert fill_target(TARGET, None, stop=STOP) == Unfilled("no_bar")
+
+
+@pytest.mark.parametrize(
+    ("day", "close"),
+    [
+        (bar("101", "103", "98", "102.35"), D("102.35")),
+        (bar("90", "90", "90", "90"), D("90")),
+        (None, D("97.15")),
+    ],
+    ids=["traded", "circuit-lock", "no-bar-last-close"],
+)
+def test_a_boundary_exit_fills_at_the_close_whatever_the_day(
+    day: Bar | None, close: Decimal
+) -> None:
+    # The last close before the day is 97.15; a day without a bar closes the Position there.
+    assert fill_boundary(day, last_close=D("97.15")) == Filled(close)
