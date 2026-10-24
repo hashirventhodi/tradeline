@@ -59,6 +59,7 @@ from tradeline.sources.kite import (
     login_url,
 )
 from tradeline.strategy.pullback import PullbackV1
+from tradeline.tick_sizes import load_tick_sizes
 from tradeline.trading_calendar import load_trading_calendar
 from tradeline.transport import (
     PlaybackTransport,
@@ -485,8 +486,10 @@ def integrity(ctx: Context, args: argparse.Namespace) -> int:
 
 def run(ctx: Context, args: argparse.Namespace) -> int:
     """One Run of ``pullback_v1`` as of ``--date`` under the configured Universe Rule, written
-    to the Ledger. In backtest mode it is a backtest of that one day."""
+    to the Ledger with a Verdict on each Candidate under the configured Limits. In backtest
+    mode it is a backtest of that one day."""
     calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
+    tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
     with _scope(args.day, args.day), app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
         (result,) = backtest_service(
             conn,
@@ -495,6 +498,8 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
             end=args.day,
             calendar=calendar,
             rule_version=ctx.config.universe.version,
+            limits=ctx.config.risk.limits(),
+            tick_sizes=tick_sizes,
         )
     log.info("run finished", extra=result.summary())
     return 0

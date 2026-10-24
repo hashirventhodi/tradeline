@@ -2,8 +2,10 @@
 
 The code revision is a SHA-256 over the parsed code of the ``tradeline.strategy``
 modules a Strategy's module imports, directly or through one another, with the
-package's own ``__init__`` always included. Each module is parsed and dumped
-with location information left out and docstrings removed, so a comment, a
+package's own ``__init__`` and Plan pricing (``strategy.pricing``, which every
+Strategy's Plans go through on their way to the Risk Engine) always included.
+Each module is parsed and dumped with location information left out and
+docstrings removed, so a comment, a
 docstring, or a formatting change does not change the revision, while any
 change to code does. Imports outside the package (``tradeline.queries``,
 ``tradeline.adjust``) are not followed: a change there is not a new Strategy
@@ -25,12 +27,14 @@ import tradeline.strategy
 
 PACKAGE = "tradeline.strategy"
 PACKAGE_DIR = Path(tradeline.strategy.__file__).parent
+# In every revision, whatever the Strategy imports.
+ALWAYS = (PACKAGE, f"{PACKAGE}.pricing")
 
 
 def code_revision(module: str, *, package_dir: Path = PACKAGE_DIR) -> str:
     """The code revision of the Strategy defined in ``module`` (a ``tradeline.strategy``
     module), read from the package's source files under ``package_dir``."""
-    pending, seen = [PACKAGE, module], set[str]()
+    pending, seen = [*ALWAYS, module], set[str]()
     while pending:
         name = pending.pop()
         if name in seen:

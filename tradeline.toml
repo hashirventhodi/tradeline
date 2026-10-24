@@ -64,3 +64,19 @@ trading_calendar = "trading_calendar.csv"
 large_moves = "large_moves.csv"
 # A close more than this many times the previous close, either way, is a Large Move.
 large_move_ratio = 1.5
+
+# The Risk Engine's Limits (docs/risk-controls.md), fractions of Equity where
+# they are. Every Plan of a Run is checked against them in Plan order.
+[risk]
+risk_per_trade = 0.01       # Equity at risk at the stop
+max_open_positions = 8      # held Positions plus this Run's Passes
+max_position = 0.15         # notional at entry
+max_sector = 0.30           # NSE's sector; Unclassified counts as one
+max_gross = 1.0             # no leverage, ever
+participation_cap = 0.01    # of the 20-day average daily traded value
+min_order_value = 5000      # rupees
+max_new_entries = 4         # Passes per Run
+min_reward_to_risk = 1.5    # after rounding to the tick
+# The checked-in dated table of NSE tick sizes, each band citing NSE's circular
+# (see the file's header).
+tick_sizes = "tick_sizes.csv"

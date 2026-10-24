@@ -9,7 +9,7 @@ import pytest
 
 from tradeline.db import app_connection
 
-LEDGER_TABLES = ("strategies", "runs", "candidates", "plans")
+LEDGER_TABLES = ("strategies", "runs", "candidates", "plans", "passes", "blocks", "verdicts")
 INSERTS = {
     "strategies": "INSERT INTO strategies (mode, backtest_id, family, name, code_revision,"
     " ranking) VALUES (%s, %s, 'pullback', 'pullback_v1', 'r', 'by return')",
@@ -21,6 +21,14 @@ INSERTS = {
     "plans": "INSERT INTO plans (mode, backtest_id, run_id, rank, instrument, symbol, entry,"
     " stop, target, time_stop_days, facts)"
     " VALUES (%s, %s, gen_random_uuid(), 1, 'A', 'A', 100, 94, 112, 10, '{}')",
+    "passes": "INSERT INTO passes (mode, backtest_id, run_id, rank, plan_hash, entry, stop,"
+    " target, time_stop_days, shares, sector, facts)"
+    " VALUES (%s, %s, gen_random_uuid(), 1, 'h', 100, 94, 112, 10, 50, 'unclassified', '{}')",
+    "blocks": "INSERT INTO blocks (mode, backtest_id, run_id, rank, limit_name, entry, stop,"
+    " target, time_stop_days, shares, sector, facts)"
+    " VALUES (%s, %s, gen_random_uuid(), 1, 'max_gross', 100, 94, 112, 10, 0, 's', '{}')",
+    "verdicts": "INSERT INTO verdicts (mode, backtest_id, run_id, rank, verdict, reason)"
+    " VALUES (%s, %s, gen_random_uuid(), 1, 'SKIP', 'max_gross')",
 }
 
 

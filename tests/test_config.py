@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from tradeline.config import Config, ConfigError, UniverseRule, load_config
+from tradeline.risk import Limits
 
 
 def test_loads_settings_from_the_toml_file(tmp_path: Path) -> None:
@@ -251,3 +252,10 @@ def test_a_config_whose_two_trading_calendars_differ_is_refused_naming_both(
         r" and integrity.trading_calendar \(data/calendar.csv\)",
     ):
         load_config(path)
+
+
+def test_the_committed_config_states_the_default_limits_and_the_tick_table() -> None:
+    config = load_config(Path(__file__).resolve().parents[1] / "tradeline.toml")
+
+    assert config.risk.limits() == Limits()
+    assert config.risk.tick_sizes == "tick_sizes.csv"

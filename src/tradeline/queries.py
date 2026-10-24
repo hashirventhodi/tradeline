@@ -1522,29 +1522,54 @@ def sector(conn: psycopg.Connection, symbol: str, *, as_of: date) -> Sector | No
 
 
 def sectors(
-    conn: psycopg.Connection, *, as_of: date, symbols: list[str] | None = None
+    conn: psycopg.Connection,
+    *,
+    as_of: date,
+    symbols: list[str] | None = None,
+    classified_on: date | None = None,
 ) -> list[Sector]:
     """The sector in force on ``as_of`` for each Symbol named that has one, found through its
-    Instrument as for ``sector``; with none named, for every Symbol a sector is recorded under."""
+    Instrument as for ``sector``; with none named, for every Symbol a sector is recorded under.
+
+    ``classified_on`` reads the classification in force on that day instead, the Symbols
+    still resolved to their Instruments on ``as_of``: the Risk Engine reads the first load
+    for a day before it (``sectors_for_run``)."""
     rows = conn.execute(
         "WITH asked AS ("
         "  SELECT DISTINCT unnest(coalesce(%(symbols)s::text[], ARRAY("
-        "    SELECT symbol FROM sectors WHERE effective_from <= %(as_of)s))) AS symbol"
+        "    SELECT symbol FROM sectors WHERE effective_from <= %(classified_on)s))) AS symbol"
         "), target AS ("
         f"  SELECT a.symbol, ({_named_by('a.symbol', '%(as_of)s')}) AS instrument_key"
         "  FROM asked a"
         "), recorded AS ("
         "  SELECT s.symbol, s.sector, s.effective_from,"
         f"  ({_named_by('s.symbol', 's.effective_from')}) AS instrument_key"
-        "  FROM sectors s WHERE s.effective_from <= %(as_of)s"
+        "  FROM sectors s WHERE s.effective_from <= %(classified_on)s"
         ")"
         " SELECT DISTINCT ON (t.symbol) t.symbol, r.sector, r.effective_from, r.symbol"
         " FROM target t JOIN recorded r ON r.instrument_key = t.instrument_key"
         "  OR (r.symbol = t.symbol AND (t.instrument_key IS NULL OR r.instrument_key IS NULL))"
         " ORDER BY t.symbol, r.effective_from DESC, r.symbol <> t.symbol, r.symbol",
-        {"as_of": as_of, "symbols": symbols},
+        {
+            "as_of": as_of,
+            "symbols": symbols,
+            "classified_on": as_of if classified_on is None else classified_on,
+        },
     ).fetchall()
     return [Sector(*row) for row in rows]
+
+
+def sectors_for_run(conn: psycopg.Connection, symbols: list[str], *, as_of: date) -> list[Sector]:
+    """The sector the Risk Engine reads for each Symbol named, in a Run as of ``as_of``.
+
+    NSE publishes only its current classification, so a Run on a day before the
+    first load reads the earliest load (#72; a backtest borrows it, and the report
+    says so); on or after it, the load in force on ``as_of``, as ``sectors``. A Symbol
+    without one is Unclassified, which the caller decides."""
+    row = conn.execute("SELECT min(effective_from) FROM sectors").fetchone()
+    first: date | None = None if row is None else row[0]
+    classified_on = as_of if first is None or first <= as_of else first
+    return sectors(conn, as_of=as_of, symbols=symbols, classified_on=classified_on)
 
 
 # --- The Ledger (ADR 0019) --------------------------------------------------
@@ -1670,3 +1695,96 @@ def plans(conn: psycopg.Connection, run_id: uuid.UUID) -> list[LedgerPlan]:
         LedgerPlan(run, rank, instrument, symbol, entry, stop, target, days, _decimals(facts))
         for run, rank, instrument, symbol, entry, stop, target, days, facts in rows
     ]
+
+
+@dataclass(frozen=True)
+class LedgerPass:
+    """The Risk Engine's Pass for one Plan: the Plan priced on the tick and sized, and the
+    hash of that Plan the Pass is bound to (``tradeline.risk``)."""
+
+    run_id: uuid.UUID
+    rank: int
+    instrument: str
+    symbol: str
+    plan_hash: str
+    entry: Decimal
+    stop: Decimal
+    target: Decimal
+    time_stop_days: int
+    shares: int
+    # The sector the sector Limit read; ``unclassified`` when none was recorded.
+    sector: str
+    # Equity, the tick, the 20-day average traded value, and the shares each sizing
+    # Limit allowed.
+    facts: dict[str, Decimal]
+
+
+@dataclass(frozen=True)
+class LedgerBlock:
+    """The Risk Engine's Block of one Plan, naming the Limit, with the Plan as far as it
+    was priced and sized."""
+
+    run_id: uuid.UUID
+    rank: int
+    instrument: str
+    symbol: str
+    limit: str
+    entry: Decimal
+    stop: Decimal
+    target: Decimal
+    time_stop_days: int
+    shares: int
+    sector: str
+    facts: dict[str, Decimal]
+
+
+@dataclass(frozen=True)
+class LedgerVerdict:
+    run_id: uuid.UUID
+    rank: int
+    instrument: str
+    symbol: str
+    # BUY or SKIP (WAIT and EXIT are later phases').
+    verdict: str
+    # ``pass``, or the Limit that Blocked the Plan.
+    reason: str
+
+
+def passes(conn: psycopg.Connection, run_id: uuid.UUID) -> list[LedgerPass]:
+    """A Run's Passes, in Plan order."""
+    rows = conn.execute(
+        "SELECT x.run_id, x.rank, p.instrument, p.symbol, x.plan_hash, x.entry, x.stop,"
+        " x.target, x.time_stop_days, x.shares, x.sector, x.facts"
+        " FROM passes x JOIN plans p USING (mode, run_id, rank)"
+        " WHERE x.run_id = %s ORDER BY x.rank",
+        (run_id,),
+    ).fetchall()
+    return [LedgerPass(*_with_facts(row)) for row in rows]
+
+
+def blocks(conn: psycopg.Connection, run_id: uuid.UUID) -> list[LedgerBlock]:
+    """A Run's Blocks, in Plan order."""
+    rows = conn.execute(
+        "SELECT x.run_id, x.rank, p.instrument, p.symbol, x.limit_name, x.entry, x.stop,"
+        " x.target, x.time_stop_days, x.shares, x.sector, x.facts"
+        " FROM blocks x JOIN plans p USING (mode, run_id, rank)"
+        " WHERE x.run_id = %s ORDER BY x.rank",
+        (run_id,),
+    ).fetchall()
+    return [LedgerBlock(*_with_facts(row)) for row in rows]
+
+
+def _with_facts(row: tuple[Any, ...]) -> list[Any]:
+    """A row whose last column is a jsonb of Decimal strings, read as Decimals."""
+    return [*row[:-1], _decimals(row[-1])]
+
+
+def verdicts(conn: psycopg.Connection, run_id: uuid.UUID) -> list[LedgerVerdict]:
+    """A Run's Verdicts, one per Candidate, best rank first."""
+    rows = conn.execute(
+        "SELECT v.run_id, v.rank, c.instrument, c.symbol, v.verdict, v.reason"
+        " FROM verdicts v JOIN candidates c USING (mode, run_id, rank)"
+        " WHERE v.run_id = %s ORDER BY v.rank",
+        (run_id,),
+    ).fetchall()
+    return [LedgerVerdict(*row) for row in rows]
