@@ -81,7 +81,6 @@ single day, ``run``, and the paper dry-run take their terms from their caller.
 from __future__ import annotations
 
 import functools
-import json
 import logging
 import math
 import uuid
@@ -94,7 +93,7 @@ from typing import Any, Protocol, TypeVar
 
 import psycopg
 
-from tradeline import queries
+from tradeline import ledger, queries
 from tradeline.adjust import ADJUSTED_KINDS, AdjustedBar, CorporateAction
 from tradeline.costs import CostModel, paisa
 from tradeline.dates import IST, month_of
@@ -105,14 +104,12 @@ from tradeline.paper_broker import (
     ExitReason,
     ExitTrigger,
     FillModel,
-    OrderPurpose,
     Unfilled,
 )
 from tradeline.queries import EngineMode
 from tradeline.revision import code_revision, git_commit
 from tradeline.risk import (
     RISK_ENGINE,
-    Decision,
     Holding,
     Limits,
     Pass,
@@ -539,10 +536,15 @@ def run(
         equity = cash + sum((h.value for h in holdings), Decimal(0))
         portfolio = Portfolio(equity, holdings)
         decisions = risk_engine.assess(proposals, portfolio=portfolio, limits=limits, run_id=run_id)
-        strategy_id = _strategy_row(
-            conn, strategy, mode=mode, backtest_id=backtest_id, protocol=protocol
+        strategy_id = ledger.strategy_row(
+            conn,
+            strategy,
+            mode=mode,
+            backtest_id=backtest_id,
+            protocol=protocol,
+            code_revision=_code_revision(type(strategy).__module__),
         )
-        _insert_run(
+        ledger.insert_run(
             conn,
             strategy,
             run_id=run_id,
@@ -555,10 +557,10 @@ def run(
             equity=equity,
             impact=impact,
         )
-        _insert_candidates(conn, candidates, **tags, run_id=run_id)
-        _insert_plans(conn, plans, **tags, run_id=run_id)
-        _insert_decisions(conn, decisions, proposals, equity=equity, **tags)
-        _insert_held_verdicts(
+        ledger.insert_candidates(conn, candidates, **tags, run_id=run_id)
+        ledger.insert_plans(conn, plans, **tags, run_id=run_id)
+        ledger.insert_decisions(conn, decisions, proposals, equity=equity, **tags)
+        ledger.insert_held_verdicts(
             conn, [p for p in plans if p.instrument in held_instruments], **tags, run_id=run_id
         )
         placed = 0
@@ -880,24 +882,6 @@ def _previous_session(calendar: TradingCalendar, as_of: date) -> date:
     return earlier[-1]
 
 
-@dataclass(frozen=True)
-class _Order:
-    id: uuid.UUID
-    run_id: uuid.UUID
-    rank: int | None
-    position_id: uuid.UUID
-    instrument: str
-    symbol: str
-    purpose: OrderPurpose
-    limit_price: Decimal
-    shares: int
-    session: date
-
-    @property
-    def side(self) -> str:
-        return "buy" if self.purpose == "entry" else "sell"
-
-
 class _Account:
     """One account's Orders, Fills and Positions on one day (``data.as_of``), each change
     written to the Ledger as an event in the order it happened.
@@ -926,19 +910,21 @@ class _Account:
         fill_model: FillModel,
     ) -> None:
         self._conn = conn
-        self._dry_run = dry_run
+        self._account: queries.Account = {
+            "mode": mode,
+            "backtest_id": backtest_id,
+            "dry_run": dry_run,
+        }
         self._fill_model = fill_model
         self._data = data
         self._calendar = calendar
-        self._mode = mode
-        self._backtest_id = backtest_id
         self._costs = costs
         self._tick_sizes = tick_sizes
         self._day = data.as_of
         self._seq = 0
         self._positions: dict[uuid.UUID, queries.LedgerPosition] = {}
         # Each open Position's open target Order.
-        self._targets: dict[uuid.UUID, _Order] = {}
+        self._targets: dict[uuid.UUID, ledger.Order] = {}
         # Exits that met the session and did not fill, to be sent again.
         self._exits_due: dict[uuid.UUID, ExitTrigger] = {}
         self._bars: dict[str, Bar | None] = {}
@@ -948,11 +934,7 @@ class _Account:
 
     def session(self) -> int:
         """Fill the Orders open for the day against its bar; the number of Fills."""
-        account: queries.Account = {
-            "mode": self._mode,
-            "backtest_id": self._backtest_id,
-            "dry_run": self._dry_run,
-        }
+        account = self._account
         open_orders = queries.orders(self._conn, **account, open_only=True)
         stale = sorted({o.session for o in open_orders if o.session != self._day})
         if stale:
@@ -964,7 +946,7 @@ class _Account:
             p.id: p for p in queries.positions(self._conn, **account, open_only=True)
         }
         ordered = [
-            _Order(
+            ledger.Order(
                 found.id,
                 found.run_id,
                 found.rank,
@@ -990,7 +972,7 @@ class _Account:
             fills += self._meet_target(target)
         return fills
 
-    def _restate(self, orders: list[_Order]) -> list[_Order]:
+    def _restate(self, orders: list[ledger.Order]) -> list[ledger.Order]:
         """Restate each held Position whose Instrument has a split or bonus ex-dated since the
         account's last trading day, and its Orders open for the day; the Orders that remain
         open, in their order."""
@@ -1127,7 +1109,7 @@ class _Account:
                     self.close(position.instrument), band=band, tick=tick
                 )
             self._place(
-                _Order(
+                ledger.Order(
                     uuid.uuid4(),
                     run_id,
                     None,
@@ -1154,7 +1136,7 @@ class _Account:
             outcome = self._fill_model.boundary(
                 self._bar(position.instrument), last_close=self.close(position.instrument)
             )
-            order = _Order(
+            order = ledger.Order(
                 uuid.uuid4(),
                 position.run_id,
                 None,
@@ -1177,7 +1159,7 @@ class _Account:
             verify_pass(granted, granted.plan, run_id=run_id)
             plan = granted.plan
             self._place(
-                _Order(
+                ledger.Order(
                     uuid.uuid4(),
                     run_id,
                     plan.rank,
@@ -1204,7 +1186,7 @@ class _Account:
                     self._bars[instrument] = Bar(o, h, low, c)
         return self._bars[instrument]
 
-    def _meet_entry(self, order: _Order) -> int:
+    def _meet_entry(self, order: ledger.Order) -> int:
         outcome = self._fill_model.entry(order.limit_price, self._bar(order.instrument))
         if isinstance(outcome, Unfilled):
             self._cancel(order, outcome.reason)
@@ -1238,7 +1220,7 @@ class _Account:
         self._targets[position.id] = target
         return 1
 
-    def _meet_exit(self, order: _Order) -> int:
+    def _meet_exit(self, order: ledger.Order) -> int:
         """A stop or time-stop exit against the open (a Boundary Exit never rests)."""
         purpose = order.purpose
         if purpose != "stop" and purpose != "time":
@@ -1252,7 +1234,7 @@ class _Account:
         self._close_position(order.position_id, price=outcome.price, reason=purpose)
         return 1
 
-    def _meet_target(self, order: _Order) -> int:
+    def _meet_target(self, order: ledger.Order) -> int:
         position = self._positions[order.position_id]
         outcome = self._fill_model.target(
             order.limit_price, self._bar(order.instrument), stop=position.stop
@@ -1279,40 +1261,24 @@ class _Account:
         self._seq += 1
         return self._seq
 
-    def _write_order(self, order: _Order, *, event: str, reason: str | None) -> None:
-        self._conn.execute(
-            "INSERT INTO orders (mode, backtest_id, dry_run, id, event, day, seq, reason, run_id,"
-            " rank, position_id, instrument, symbol, side, purpose, limit_price, shares, session)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (
-                self._mode,
-                self._backtest_id,
-                self._dry_run,
-                order.id,
-                event,
-                self._day,
-                self._next_seq(),
-                reason,
-                order.run_id,
-                order.rank,
-                order.position_id,
-                order.instrument,
-                order.symbol,
-                order.side,
-                order.purpose,
-                order.limit_price,
-                order.shares,
-                order.session,
-            ),
+    def _write_order(self, order: ledger.Order, *, event: str, reason: str | None) -> None:
+        ledger.insert_order(
+            self._conn,
+            self._account,
+            order,
+            event=event,
+            day=self._day,
+            seq=self._next_seq(),
+            reason=reason,
         )
 
-    def _place(self, order: _Order) -> None:
+    def _place(self, order: ledger.Order) -> None:
         self._write_order(order, event="placed", reason=None)
 
-    def _cancel(self, order: _Order, reason: str) -> None:
+    def _cancel(self, order: ledger.Order, reason: str) -> None:
         self._write_order(order, event="cancelled", reason=reason)
 
-    def _fill(self, order: _Order, price: Decimal) -> None:
+    def _fill(self, order: ledger.Order, price: Decimal) -> None:
         """The Fill, with its charges and Slippage from the cost model; the Order's share of
         traded value is of the 20 trading days to the Fill's."""
         charges = self._costs.charges(
@@ -1324,28 +1290,14 @@ class _Account:
                 order.instrument, TRADED_VALUE_DAYS
             ),
         )
-        self._conn.execute(
-            "INSERT INTO fills (mode, backtest_id, dry_run, order_id, day, seq, position_id,"
-            " instrument, symbol, side, price, shares, "
-            + ", ".join(charges.items())
-            + ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s"
-            + ", %s" * len(charges.items())
-            + ")",
-            (
-                self._mode,
-                self._backtest_id,
-                self._dry_run,
-                order.id,
-                self._day,
-                self._next_seq(),
-                order.position_id,
-                order.instrument,
-                order.symbol,
-                order.side,
-                price,
-                order.shares,
-                *charges.items().values(),
-            ),
+        ledger.insert_fill(
+            self._conn,
+            self._account,
+            order,
+            price=price,
+            charges=charges,
+            day=self._day,
+            seq=self._next_seq(),
         )
 
     def _write_position(
@@ -1356,37 +1308,15 @@ class _Account:
         factor: Fraction | None = None,
         cash_in_lieu: Decimal | None = None,
     ) -> None:
-        """The Position's state after an event: ``opened`` or ``closed`` by its exit unless
-        ``event`` says otherwise."""
-        self._conn.execute(
-            "INSERT INTO positions (mode, backtest_id, dry_run, position_id, event, day, seq,"
-            " run_id, rank, instrument, symbol, opened_on, shares, entry, stop, target,"
-            " time_stop_days, exit_price, exit_reason, factor, cash_in_lieu)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
-            " %s, %s, %s)",
-            (
-                self._mode,
-                self._backtest_id,
-                self._dry_run,
-                position.id,
-                event or ("opened" if position.exit_reason is None else "closed"),
-                self._day,
-                self._next_seq(),
-                position.run_id,
-                position.rank,
-                position.instrument,
-                position.symbol,
-                position.opened_on,
-                position.shares,
-                position.entry,
-                position.stop,
-                position.target,
-                position.time_stop_days,
-                position.exit_price,
-                position.exit_reason,
-                None if factor is None else f"{factor.numerator}/{factor.denominator}",
-                cash_in_lieu,
-            ),
+        ledger.insert_position(
+            self._conn,
+            self._account,
+            position,
+            day=self._day,
+            seq=self._next_seq(),
+            event=event,
+            factor=factor,
+            cash_in_lieu=cash_in_lieu,
         )
 
 
@@ -1399,24 +1329,6 @@ def _holdings(
         Holding(p.instrument, sectors.get(p.symbol), p.shares * account.close(p.instrument))
         for p in held
     )
-
-
-def _insert_held_verdicts(
-    conn: psycopg.Connection,
-    plans: Sequence[Plan],
-    *,
-    mode: EngineMode,
-    backtest_id: uuid.UUID | None,
-    dry_run: bool,
-    run_id: uuid.UUID,
-) -> None:
-    """SKIP, reason ``held``, for each Candidate whose Instrument the account already holds."""
-    with conn.cursor() as cursor:
-        cursor.executemany(
-            "INSERT INTO verdicts (mode, backtest_id, dry_run, run_id, rank, verdict, reason)"
-            " VALUES (%s, %s, %s, %s, %s, 'SKIP', 'held')",
-            [(mode, backtest_id, dry_run, run_id, p.rank) for p in plans],
-        )
 
 
 def _proposals(
@@ -1444,216 +1356,3 @@ def _code_revision(module: str) -> str:
     """The code revision, hashed once a process: a backtest records it every Run, and the
     code a process runs cannot change under it."""
     return code_revision(module)
-
-
-def _strategy_row(
-    conn: psycopg.Connection,
-    strategy: Strategy,
-    *,
-    mode: EngineMode,
-    backtest_id: uuid.UUID | None,
-    protocol: str | None,
-) -> uuid.UUID:
-    revision = _code_revision(type(strategy).__module__)
-    key = {
-        "mode": mode,
-        "backtest_id": backtest_id,
-        "family": strategy.family,
-        "name": strategy.name,
-        "code_revision": revision,
-        "protocol": protocol,
-        "ranking": strategy.ranking,
-    }
-    conn.execute(
-        "INSERT INTO strategies (mode, backtest_id, family, name, code_revision, protocol,"
-        " ranking) VALUES (%(mode)s, %(backtest_id)s, %(family)s, %(name)s,"
-        " %(code_revision)s, %(protocol)s, %(ranking)s)"
-        " ON CONFLICT DO NOTHING",
-        key,
-    )
-    row = conn.execute(
-        "SELECT id FROM strategies WHERE mode = %(mode)s"
-        " AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s AND name = %(name)s"
-        " AND code_revision = %(code_revision)s"
-        " AND protocol IS NOT DISTINCT FROM %(protocol)s",
-        key,
-    ).fetchone()
-    assert row is not None
-    found: uuid.UUID = row[0]
-    return found
-
-
-def _insert_run(
-    conn: psycopg.Connection,
-    strategy: Strategy,
-    *,
-    run_id: uuid.UUID,
-    mode: EngineMode,
-    backtest_id: uuid.UUID | None,
-    dry_run: bool,
-    strategy_id: uuid.UUID,
-    as_of: date,
-    rule_version: str,
-    universe_size: int,
-    cash: Decimal,
-    equity: Decimal,
-    impact: Decimal | None,
-) -> None:
-    conn.execute(
-        "INSERT INTO runs (id, mode, backtest_id, dry_run, strategy_id, as_of, universe_month,"
-        " universe_rule_version, universe_size, parameters, cash, equity, impact)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (
-            run_id,
-            mode,
-            backtest_id,
-            dry_run,
-            strategy_id,
-            as_of,
-            month_of(as_of),
-            rule_version,
-            universe_size,
-            json.dumps(dict(strategy.parameters()), sort_keys=True),
-            cash,
-            equity,
-            impact,
-        ),
-    )
-
-
-def _facts(values: Any) -> str:
-    return json.dumps({name: str(value) for name, value in values.items()}, sort_keys=True)
-
-
-def _insert_candidates(
-    conn: psycopg.Connection,
-    candidates: Sequence[Candidate],
-    *,
-    mode: EngineMode,
-    backtest_id: uuid.UUID | None,
-    dry_run: bool,
-    run_id: uuid.UUID,
-) -> None:
-    with conn.cursor() as cursor:
-        cursor.executemany(
-            "INSERT INTO candidates (mode, backtest_id, dry_run, run_id, rank, instrument,"
-            " symbol, score, facts) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            [
-                (
-                    mode,
-                    backtest_id,
-                    dry_run,
-                    run_id,
-                    c.rank,
-                    c.instrument,
-                    c.symbol,
-                    c.score,
-                    _facts(c.facts),
-                )
-                for c in candidates
-            ],
-        )
-
-
-def _insert_plans(
-    conn: psycopg.Connection,
-    plans: Sequence[Plan],
-    *,
-    mode: EngineMode,
-    backtest_id: uuid.UUID | None,
-    dry_run: bool,
-    run_id: uuid.UUID,
-) -> None:
-    with conn.cursor() as cursor:
-        cursor.executemany(
-            "INSERT INTO plans (mode, backtest_id, dry_run, run_id, rank, instrument, symbol,"
-            " entry, stop, target, time_stop_days, facts)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            [
-                (
-                    mode,
-                    backtest_id,
-                    dry_run,
-                    run_id,
-                    p.rank,
-                    p.instrument,
-                    p.symbol,
-                    p.entry,
-                    p.stop,
-                    p.target,
-                    p.time_stop_days,
-                    _facts(p.facts),
-                )
-                for p in plans
-            ],
-        )
-
-
-def _insert_decisions(
-    conn: psycopg.Connection,
-    decisions: Sequence[Decision],
-    proposals: Sequence[Proposal],
-    *,
-    equity: Decimal,
-    mode: EngineMode,
-    backtest_id: uuid.UUID | None,
-    dry_run: bool,
-) -> None:
-    """Each Pass or Block, with what it read, and the Verdict it makes."""
-    with conn.cursor() as cursor:
-        for decision, proposal in zip(decisions, proposals, strict=True):
-            plan = decision.plan
-            facts = _facts(
-                {
-                    "equity": equity,
-                    "tick": proposal.tick,
-                    "average_traded_value": proposal.average_traded_value,
-                    **{f"allowed_{name}": shares for name, shares in decision.allowed.items()},
-                }
-            )
-            priced = (
-                plan.entry,
-                plan.stop,
-                plan.target,
-                plan.time_stop_days,
-                plan.shares,
-                decision.sector,
-                facts,
-            )
-            if isinstance(decision, Pass):
-                cursor.execute(
-                    "INSERT INTO passes (mode, backtest_id, dry_run, run_id, rank, plan_hash,"
-                    " entry, stop, target, time_stop_days, shares, sector, facts)"
-                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                    (
-                        mode,
-                        backtest_id,
-                        dry_run,
-                        decision.run_id,
-                        plan.rank,
-                        decision.plan_hash,
-                        *priced,
-                    ),
-                )
-                verdict, reason = "BUY", "pass"
-            else:
-                cursor.execute(
-                    "INSERT INTO blocks (mode, backtest_id, dry_run, run_id, rank, limit_name,"
-                    " entry, stop, target, time_stop_days, shares, sector, facts)"
-                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                    (
-                        mode,
-                        backtest_id,
-                        dry_run,
-                        decision.run_id,
-                        plan.rank,
-                        decision.limit,
-                        *priced,
-                    ),
-                )
-                verdict, reason = "SKIP", decision.limit
-            cursor.execute(
-                "INSERT INTO verdicts (mode, backtest_id, dry_run, run_id, rank, verdict,"
-                " reason) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                (mode, backtest_id, dry_run, decision.run_id, plan.rank, verdict, reason),
-            )
