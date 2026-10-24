@@ -73,7 +73,10 @@ from tradeline.risk import Limits
 
 D = Decimal
 # The stated CI budget for the fixture backtest: two years (494 trading days) of three
-# Universe members, one cell, its Runs, Orders, Fills and Positions written to the Ledger.
+# Universe members, one cell, its Runs, Orders, Fills and Positions written to the Ledger,
+# the Protocol's snapshot verified first; not the load or the two c variants. It took 6.8 s
+# on the laptop (2026-10-24, with the Compose Postgres, alongside other test runs, load
+# average about 4), so the budget leaves CI's slower runners about three times that.
 FIXTURE_BUDGET_SECONDS = 20.0
 # The short reports' Protocol: In-Sample April, Out-of-Sample May, Holdout June 2023.
 QUARTER = (date(2023, 4, 1), date(2023, 6, 30))
