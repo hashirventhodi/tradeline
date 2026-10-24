@@ -69,6 +69,7 @@ from tradeline import queries
 from tradeline.cli import main
 from tradeline.db import app_connection
 from tradeline.metrics import HaltLimits
+from tradeline.report import Scores
 from tradeline.risk import Limits
 
 D = Decimal
@@ -145,7 +146,7 @@ def test_the_report_states_the_metrics_of_the_fixture_backtest_as_worked_by_hand
         "ending_equity": "502503.59",
         "open_positions": 0,
     }
-    assert [t["net_pnl"] for t in report["closed_trades"]] == [
+    assert [t["net_pnl"] for t in report["closed_positions"]] == [
         "945.79",
         "2553.64",
         "3776.42",
@@ -163,12 +164,13 @@ def test_sharpe_is_the_daily_excess_return_of_the_runs_equity_over_its_deviation
     report, finished, database_url = two_years
     with app_connection(database_url) as conn:
         runs = queries.runs(conn, mode="backtest", backtest_id=uuid.UUID(finished["backtest_id"]))
-    curve = [float(r.equity or 0) for r in runs]
+    # From the starting Equity, so the first day's return counts.
+    curve = [500000.0] + [float(r.equity or 0) for r in runs]
     excess = [b / a - 1 - 0.065 / 252 for a, b in zip(curve, curve[1:], strict=False)]
 
     expected = statistics.mean(excess) / statistics.stdev(excess) * 252**0.5
 
-    assert len(curve) == 494
+    assert len(curve) == 1 + 494
     assert float(report["metrics"]["sharpe"]) == pytest.approx(expected, abs=0.0001)
     assert report["risk_free_rate"] == "0.065000"
 
@@ -276,7 +278,7 @@ def test_open_positions_at_the_end_are_marked_and_listed_and_unclassified_blocks
     )
 
     assert report["metrics"]["trades"] == 0
-    assert report["closed_trades"] == []
+    assert report["closed_positions"] == []
     assert [
         (p["symbol"], p["opened_on"], p["shares"], p["entry"]) for p in report["open_positions"]
     ] == [("ALPHA", "2023-06-16", 267, "280.00"), ("GAMMA", "2023-06-16", 133, "560.00")]
@@ -302,3 +304,18 @@ def test_the_report_counts_the_candidates_beyond_the_passes(
     assert report["candidates_beyond_passes"] == 2
     assert report["unclassified_blocks"] == 0
     assert report["blocks_by_limit"] == {"max_new_entries": 2}
+
+
+def test_an_unbounded_profit_factor_reads_as_infinity_in_the_report() -> None:
+    scores = Scores(
+        trades=2,
+        sharpe=None,
+        max_drawdown=D(0),
+        profit_factor=D("Infinity"),
+        expectancy_rupees=D(150),
+        expectancy_fraction=D("0.0003"),
+        ending_equity=D(500300),
+        open_positions=0,
+    )
+
+    assert scores.as_json()["profit_factor"] == "∞"

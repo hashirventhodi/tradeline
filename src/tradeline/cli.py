@@ -18,6 +18,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from tradeline import revision
 from tradeline import universe as universe_service
 from tradeline.cited_actions import load_cited_actions
 from tradeline.collect import collect_daily as collect_daily_service
@@ -32,7 +33,7 @@ from tradeline.engine import backtest as backtest_service
 from tradeline.engine import paper as paper_service
 from tradeline.environment import Environment
 from tradeline.freeze import freeze_protocol
-from tradeline.holdout import run_holdout
+from tradeline.holdout import run_fresh_period, run_holdout
 from tradeline.ingest.announcements import ingest_announcements
 from tradeline.ingest.candles import CurrentUniverse, ingest_candles
 from tradeline.ingest.cited_actions import ingest_cited_actions
@@ -52,7 +53,6 @@ from tradeline.protocol import window_boundaries, windows_text
 from tradeline.protocol_report import report_protocol
 from tradeline.rebuild_instruments import rebuild_instruments as rebuild_instruments_service
 from tradeline.report import report_backtest
-from tradeline.revision import git_commit
 from tradeline.secrets import (
     DATABASE_URL,
     KITE_ACCESS_TOKEN,
@@ -520,9 +520,8 @@ def protocol(ctx: Context, args: argparse.Namespace) -> int:
             halts=ctx.config.risk.halts(),
             schedule=load_cost_schedule(Path(ctx.config.costs.schedule)),
             slippage=ctx.config.costs.slippage(),
-            costs_as_of=args.costs_as_of or datetime.now(IST).date(),
             calendar=calendar,
-            commit=git_commit(),
+            commit=revision.running_commit(),
         )
     sys.stderr.write(result.text())
     log.info("protocol freeze finished", extra=result.summary())
@@ -545,6 +544,8 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
     (day,) = clock.days()
     with _scope(day, day), app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
         if args.mode == "paper":
+            # The same starting Equity and band a Protocol freezes from the configuration.
+            terms = ctx.config.protocol.terms()
             costs = CostModel(
                 load_cost_schedule(Path(ctx.config.costs.schedule)),
                 ctx.config.costs.slippage(),
@@ -559,6 +560,8 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
                 limits=ctx.config.risk.limits(),
                 tick_sizes=tick_sizes,
                 costs=costs,
+                starting_equity=terms.starting_equity,
+                band=terms.band,
             )
         else:
             (result,) = backtest_service(
@@ -585,6 +588,8 @@ def backtest(ctx: Context, args: argparse.Namespace) -> int:
         return backtest_report(ctx, args)
     if args.backtest_command == "holdout":
         return holdout(ctx, args)
+    if args.backtest_command == "fresh":
+        return fresh_period(ctx, args)
     if args.start is None:
         return walk_forward(ctx, args)
     end = args.end or args.start
@@ -643,6 +648,20 @@ def holdout(ctx: Context, args: argparse.Namespace) -> int:
             conn, _pullback, protocol=args.protocol, calendar=calendar, tick_sizes=tick_sizes
         )
     log.info("holdout finished", extra=result.summary())
+    return 0
+
+
+def fresh_period(ctx: Context, args: argparse.Namespace) -> int:
+    """The Fresh Period of the version the Protocol ``--protocol`` names, whose Holdout run
+    is Not Independent: its Holdout's parameters in a fresh account over the trading days
+    after the Holdout and the freeze, to the last day with data (ADR 0007)."""
+    calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
+    tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = run_fresh_period(
+            conn, _pullback, protocol=args.protocol, calendar=calendar, tick_sizes=tick_sizes
+        )
+    log.info("fresh period finished", extra=result.summary())
     return 0
 
 
@@ -1082,21 +1101,20 @@ def build_parser() -> argparse.ArgumentParser:
         " parameters; a second run by the same version is refused and recorded",
     )
     holdout_parser.add_argument(*PROTOCOL[0], **PROTOCOL[1])
+    fresh_parser = reports.add_parser(
+        "fresh",
+        help="run a Not Independent version's Fresh Period under its Holdout's parameters,"
+        " from a fresh account to the last day with data, for the Backtest Gate to score",
+    )
+    fresh_parser.add_argument(*PROTOCOL[0], **PROTOCOL[1])
     protocol_parser = subparsers.add_parser(
         "protocol", help="the Protocol a Strategy version is validated under (ADR 0007)"
     )
     protocol_actions = protocol_parser.add_subparsers(dest="action", required=True)
-    freeze = protocol_actions.add_parser(
+    protocol_actions.add_parser(
         "freeze",
-        help="freeze the configured Protocol with the data snapshot read now, at this commit,"
-        " and print its Window boundaries as trading days",
-    )
-    freeze.add_argument(
-        "--costs-as-of",
-        metavar="DATE",
-        type=date.fromisoformat,
-        default=None,
-        help="price every trade on the cost schedule in force on DATE (default today)",
+        help="freeze the configured Protocol with the data snapshot and the cost schedule as of"
+        " now, at this commit, and print its Window boundaries as trading days",
     )
     protocol_actions.add_parser(
         "windows",

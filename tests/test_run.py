@@ -33,8 +33,10 @@ import psycopg
 import pytest
 
 from synthetic_eod import (
+    EXIT_BAND,
     REPO_ROOT,
     RUN_DAY,
+    STARTING_EQUITY,
     Gap,
     Split,
     base_market,
@@ -48,7 +50,7 @@ from synthetic_eod import (
 from tradeline import queries
 from tradeline.cli import main
 from tradeline.db import app_connection
-from tradeline.engine import STARTING_EQUITY, StoredMarketData, run
+from tradeline.engine import StoredMarketData, run
 from tradeline.risk import Limits
 from tradeline.strategy.pullback import PullbackV1
 from tradeline.tick_sizes import load_tick_sizes
@@ -59,6 +61,7 @@ RISK: dict[str, Any] = {
     "limits": Limits(),
     "tick_sizes": load_tick_sizes(REPO_ROOT / "tick_sizes.csv"),
     "starting_equity": STARTING_EQUITY,
+    "band": EXIT_BAND,
     "costs": repo_costs(),
 }
 
@@ -118,7 +121,10 @@ def test_run_in_backtest_mode_writes_one_run_with_its_ranked_candidates_and_plan
     assert run.universe_rule_version == MARKET.rule.version
     assert (
         queries.universe_month_mode(
-            conn, run.universe_month, rule_version=run.universe_rule_version
+            conn,
+            run.universe_month,
+            rule_version=run.universe_rule_version,
+            calendar=repo_calendar(),
         )
         == "recorded"
     )

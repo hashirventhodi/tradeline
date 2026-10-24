@@ -13,7 +13,9 @@ stop); time stop n trading days from the Fill. The SMA lengths are fixed; k, r
 and n are the free parameters a Protocol's grid searches.
 
 An Instrument without every bar the screen needs up to and including the Run's
-day (one listed too recently, or that did not trade that day) is not screened.
+day is dropped from the screen: one listed too recently, one with a trading day
+missing anywhere in its lookback (a suspension, say), or one that did not trade
+that day.
 """
 
 from __future__ import annotations

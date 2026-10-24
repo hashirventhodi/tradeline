@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from tradeline.revision import code_revision, docstring_reads
+from checkout import committed_checkout, dirty_checkout, git
+from tradeline.revision import code_revision, docstring_reads, git_commit
 
 SOURCE = Path(__file__).resolve().parents[1] / "src" / "tradeline"
 PULLBACK = "tradeline.strategy.pullback"
@@ -42,7 +43,7 @@ def test_the_revision_of_a_copy_is_the_revision_of_the_package(tree: Path) -> No
         ("pullback.py", "FAST = 20", "FAST = 21"),
         ("indicators.py", "abs(bar.low - previous_close))", "abs(bar.low - bar.low))"),
         ("__init__.py", "    rank: int\n", "    rank: int\n    note: str = ''\n"),
-        ("pricing.py", "rounding=ROUND_FLOOR) * tick", "rounding=ROUND_FLOOR) * tick * 1"),
+        ("pricing.py", "Fraction(tick)) * tick", "Fraction(tick)) * tick * 1"),
     ],
     ids=["the-strategy", "an-imported-module", "the-interface", "plan-pricing"],
 )
@@ -109,3 +110,25 @@ def test_the_docstring_lint_fails_on_strategy_code_that_reads_a_docstring(
 
     last_line = len(pullback.read_text().splitlines())
     assert docstring_reads(tree / "strategy") == [f"strategy/pullback.py:{last_line}"]
+
+
+def test_the_git_commit_of_a_clean_checkout_is_its_head(tmp_path: Path) -> None:
+    checkout = committed_checkout(tmp_path / "checkout")
+
+    assert git_commit(checkout) == git(checkout, "rev-parse", "HEAD").strip()
+
+
+def test_an_untracked_file_leaves_a_checkout_clean(tmp_path: Path) -> None:
+    checkout = committed_checkout(tmp_path / "checkout")
+    (checkout / "notes.txt").write_text("not code\n")
+
+    assert git_commit(checkout) == git(checkout, "rev-parse", "HEAD").strip()
+
+
+def test_a_checkout_with_a_changed_tracked_file_has_no_commit_to_freeze_or_run_at(
+    tmp_path: Path,
+) -> None:
+    checkout = dirty_checkout(tmp_path / "checkout")
+
+    with pytest.raises(ValueError, match="uncommitted changes"):
+        git_commit(checkout)

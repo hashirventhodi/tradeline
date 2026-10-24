@@ -163,6 +163,7 @@ def test_a_participation_cap_block_and_the_earliest_sector_load_read_before_it(
             limits=Limits(),
             tick_sizes=load_tick_sizes(REPO_ROOT / "tick_sizes.csv"),
             starting_equity=D("500000"),
+            band=D("0.05"),
             costs=repo_costs(),
         )
         verdicts = queries.verdicts(conn, result.run_id)

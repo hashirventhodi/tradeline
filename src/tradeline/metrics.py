@@ -1,8 +1,8 @@
 """The metrics a backtest is scored by, as the Backtest Gate will score it (ADR 0015).
 
-Pure arithmetic over the daily marked Equity curve (each Run's Equity: cash plus
-the open Positions at the day's close) and the closed trades' net P&L after
-costs (``docs/risk-controls.md``, Gates):
+Pure arithmetic over the daily marked Equity curve (the starting Equity, then
+each Run's Equity: cash plus the open Positions at the day's close) and the
+closed trades' net P&L after costs (``docs/risk-controls.md``, Gates):
 
 - Sharpe: the mean of the curve's daily excess returns over the risk-free rate
   (a yearly rate taken as rate / 252 a trading day; idle cash earns nothing),
@@ -10,7 +10,8 @@ costs (``docs/risk-controls.md``, Gates):
 - Max drawdown: the largest peak-to-trough fall of the curve, as a fraction of
   the peak.
 - Profit factor: gross profit of the winning trades over gross loss of the
-  losing ones.
+  losing ones; unbounded (``Decimal("Infinity")``) when some win and none
+  lose, undefined (None) when none win or lose.
 - Expectancy: the mean net rupee P&L per closed trade, and the mean of each
   trade's P&L as a fraction of the Equity it was sized against.
 
@@ -29,14 +30,18 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, localcontext
+from typing import Literal
 
 TRADING_DAYS_A_YEAR = 252
 
+# The Limits that Halt (``docs/risk-controls.md``), by name.
+HaltLimit = Literal["daily_loss", "drawdown"]
+
 
 @dataclass(frozen=True)
-class Trade:
-    """A closed trade as the metrics read it: its net P&L after every charge and Slippage,
-    and the Equity its Plan was sized against."""
+class PositionResult:
+    """A closed Position as the metrics read it: its net P&L after every charge and
+    Slippage, and the Equity its Plan was sized against."""
 
     net_pnl: Decimal
     equity_at_entry: Decimal
@@ -53,8 +58,8 @@ class HaltLimits:
     """The Limits that Halt live (``docs/risk-controls.md``): a day's loss on the day
     before's Equity, and the fall from the Equity peak, as fractions."""
 
-    daily_loss: Decimal = Decimal("0.03")
-    drawdown: Decimal = Decimal("0.10")
+    daily_loss: Decimal
+    drawdown: Decimal
 
 
 @dataclass(frozen=True)
@@ -63,7 +68,7 @@ class HaltDay:
     the day before's Equity (negative for a gain), and the drawdown from the peak so far."""
 
     day: date
-    limits: tuple[str, ...]
+    limits: tuple[HaltLimit, ...]
     daily_loss: Decimal
     drawdown: Decimal
 
@@ -103,13 +108,15 @@ def max_drawdown(curve: Sequence[Decimal]) -> Decimal:
 
 
 def profit_factor(pnls: Sequence[Decimal]) -> Decimal | None:
-    """None when no trade lost."""
+    """Infinity when some trades won and none lost; None when none won or lost."""
     profit = sum((p for p in pnls if p > 0), Decimal(0))
     loss = -sum((p for p in pnls if p < 0), Decimal(0))
-    return None if loss == 0 else profit / loss
+    if loss == 0:
+        return None if profit == 0 else Decimal("Infinity")
+    return profit / loss
 
 
-def expectancy(trades: Sequence[Trade]) -> Expectancy | None:
+def expectancy(trades: Sequence[PositionResult]) -> Expectancy | None:
     """None without a closed trade."""
     if not trades:
         return None
@@ -122,14 +129,18 @@ def expectancy(trades: Sequence[Trade]) -> Expectancy | None:
 def halt_days(
     days: Sequence[date], curve: Sequence[Decimal], *, daily_loss: Decimal, drawdown: Decimal
 ) -> list[HaltDay]:
-    """Every day of the curve either Halt Limit would have fired on."""
-    if len(days) != len(curve):
-        raise ValueError("the curve needs one Equity a day")
+    """Every day either Halt Limit would have fired on, of a curve that starts at the
+    starting Equity and then holds one Equity for each of ``days``."""
+    if len(curve) != len(days) + 1:
+        raise ValueError("the curve needs its starting Equity, then one Equity a day")
     found = []
-    falls = drawdowns(curve)
-    for i, (day, equity, fall) in enumerate(zip(days, curve, falls, strict=True)):
-        loss = Decimal(0) if i == 0 else (curve[i - 1] - equity) / curve[i - 1]
-        checks = (("daily_loss", loss, daily_loss), ("drawdown", fall, drawdown))
+    falls = drawdowns(curve)[1:]
+    for i, (day, equity, fall) in enumerate(zip(days, curve[1:], falls, strict=True)):
+        loss = (curve[i] - equity) / curve[i]
+        checks: tuple[tuple[HaltLimit, Decimal, Decimal], ...] = (
+            ("daily_loss", loss, daily_loss),
+            ("drawdown", fall, drawdown),
+        )
         limits = tuple(name for name, value, limit in checks if value >= limit)
         if limits:
             found.append(HaltDay(day, limits, loss, fall))

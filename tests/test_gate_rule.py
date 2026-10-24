@@ -54,7 +54,7 @@ def test_the_gate_passes_when_every_threshold_holds_on_both_curves_however_few_h
         ("holdout", {"sharpe": D("0.99")}),
         ("holdout", {"max_drawdown": D("0.2")}),
         ("holdout", {"profit_factor": D("1.29")}),
-        # A metric the curve does not give (no varying return, no losing trade) is not
+        # A metric the curve does not give (no varying return, no closed Position) is not
         # established, so it does not clear its threshold.
         ("stitched", {"sharpe": None}),
         ("holdout", {"profit_factor": None}),
@@ -74,6 +74,12 @@ def test_one_threshold_missed_on_either_curve_fails_the_gate(
     (missed,) = [c for c in found.checks if not c.passed]
     assert missed.curve == ("stitched_curve" if curve == "stitched" else "holdout")
     assert missed.metric in found.reason
+
+
+def test_an_unbounded_profit_factor_with_no_losing_position_clears_its_threshold() -> None:
+    unbounded = replace(GOOD, profit_factor=D("Infinity"))
+
+    assert independent(unbounded, replace(unbounded, trades=3)) == "pass"
 
 
 def test_the_holdout_trade_count_never_changes_the_outcome() -> None:

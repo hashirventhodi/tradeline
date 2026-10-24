@@ -12,7 +12,7 @@ from decimal import Decimal
 
 from tradeline.metrics import (
     HaltDay,
-    Trade,
+    PositionResult,
     expectancy,
     halt_days,
     max_drawdown,
@@ -40,13 +40,21 @@ def test_max_drawdown_is_the_largest_fall_from_a_peak_as_a_fraction_of_it() -> N
     assert max_drawdown([D(100), D(101), D(102)]) == D(0)
 
 
-def test_profit_factor_is_gross_profit_over_gross_loss_and_undefined_without_a_loser() -> None:
+def test_profit_factor_is_gross_profit_over_gross_loss() -> None:
     assert profit_factor([D(300), D(-100), D(200), D(-50)]) == D(500) / D(150)
-    assert profit_factor([D(300), D(0)]) is None
+
+
+def test_profit_factor_with_winners_and_no_loser_is_unbounded() -> None:
+    assert profit_factor([D(300), D(0)]) == D("Infinity")
+
+
+def test_profit_factor_is_undefined_without_a_closed_position_or_a_winner_or_loser() -> None:
+    assert profit_factor([]) is None
+    assert profit_factor([D(0), D(0)]) is None
 
 
 def test_expectancy_is_the_mean_net_pnl_per_trade_in_rupees_and_as_a_fraction_of_equity() -> None:
-    trades = [Trade(D(300), D(100000)), Trade(D(-100), D(50000))]
+    trades = [PositionResult(D(300), D(100000)), PositionResult(D(-100), D(50000))]
 
     found = expectancy(trades)
 
@@ -55,10 +63,20 @@ def test_expectancy_is_the_mean_net_pnl_per_trade_in_rupees_and_as_a_fraction_of
     assert expectancy([]) is None
 
 
+def test_the_first_day_of_a_curve_halts_on_its_loss_on_the_starting_equity() -> None:
+    days = [date(2024, 1, 1), date(2024, 1, 2)]
+    curve = [D(100), D(97), D(98)]
+
+    found = halt_days(days, curve, daily_loss=D("0.03"), drawdown=D("0.10"))
+
+    assert found == [HaltDay(date(2024, 1, 1), ("daily_loss",), D("0.03"), D("0.03"))]
+
+
 def test_a_halt_day_is_one_whose_loss_on_the_day_before_or_drawdown_reaches_its_limit() -> None:
     days = [date(2024, 1, d) for d in (1, 2, 3, 4, 5)]
-    # Peak 100 on day 2; day 3 loses 3% of 100; day 4 is 10% under the peak; day 5 recovers.
-    curve = [D(98), D(100), D(97), D(90), D(95)]
+    # From a starting 98: peak 100 on day 2; day 3 loses 3% of 100; day 4 is 10% under the
+    # peak; day 5 recovers.
+    curve = [D(98), D(98), D(100), D(97), D(90), D(95)]
 
     found = halt_days(days, curve, daily_loss=D("0.03"), drawdown=D("0.10"))
 

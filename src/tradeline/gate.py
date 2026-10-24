@@ -5,8 +5,9 @@ threshold and the profit factor above its threshold on both the Stitched Curve
 and the Holdout, and the Stitched Curve closed at least the minimum number of
 trades; the Holdout's trades are reported, never gated. Either curve failing
 fails it. A metric a curve does not give (Sharpe on a curve whose returns do
-not vary, the profit factor with no losing trade) is not established, so it
-does not clear its threshold. The thresholds are the Protocol's.
+not vary, the profit factor with no closed trade) is not established, so it
+does not clear its threshold; a profit factor with winners and no loser is
+unbounded, and clears it. The thresholds are the Protocol's.
 
 A Not Independent Holdout run (ADR 0007) cannot pass on its metrics alone: it
 passes only together with a Fresh Period of at least twelve months that clears
@@ -95,11 +96,18 @@ def evaluate(
         outcome, reason = "cannot pass", standing
     elif not independent and fresh_period is None:
         outcome = "cannot pass"
-        reason = f"{standing}; the Fresh Period has not been scored"
+        reason = (
+            f"{standing}; the Fresh Period has not been run over twelve months"
+            " (`tradeline backtest fresh` runs it)"
+        )
     elif missed:
         outcome, reason = "fail", "missed: " + ", ".join(missed)
     else:
-        outcome, reason = "pass", "every threshold holds on both curves"
+        outcome, reason = (
+            "pass",
+            "every threshold holds on both curves"
+            + ("" if independent else " and on the Fresh Period"),
+        )
     return GateOutcome(
         outcome,
         tuple(checks),

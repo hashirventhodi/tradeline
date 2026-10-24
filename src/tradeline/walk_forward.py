@@ -53,7 +53,7 @@ from tradeline.freeze import verify_snapshot
 from tradeline.metrics import max_drawdown, sharpe
 from tradeline.paper_broker import FILL_MODEL, FillModel
 from tradeline.protocol import TIE_BREAK, Protocol, Window
-from tradeline.report import FRACTION, RATIO, RUPEE, Account, read_account
+from tradeline.report import FRACTION, RATIO, RUPEE, Account, read_account, rounded
 from tradeline.risk import RISK_ENGINE, RiskEngine
 from tradeline.strategy import Strategy
 from tradeline.tick_sizes import TickSizes
@@ -172,21 +172,7 @@ class WalkForwardReport:
                 "trading_days": len(stitched.days),
                 "metrics": stitched.scores(risk_free_rate=terms.risk_free_rate).as_json(),
                 "boundary_exits": sum(t.exit_reason == "boundary" for t in stitched.closed),
-                "closed_trades": [
-                    {
-                        "symbol": t.symbol,
-                        "opened_on": t.opened_on.isoformat(),
-                        "closed_on": t.closed_on.isoformat(),
-                        "shares": t.shares,
-                        "entry": _text(t.entry, RUPEE),
-                        "stop": _text(t.stop, RUPEE),
-                        "target": _text(t.target, RUPEE),
-                        "exit_price": _text(t.exit_price, RUPEE),
-                        "exit_reason": t.exit_reason,
-                        "net_pnl": _text(t.net_pnl, RUPEE),
-                    }
-                    for t in stitched.closed
-                ],
+                "closed_positions": [t.as_json() for t in stitched.closed],
             },
         }
 
@@ -201,8 +187,8 @@ def window_json(
     if found.parameters is not None:
         selection = {
             "parameters": dict(sorted(found.parameters.items())),
-            "objective": _text(found.objective, RATIO),
-            "in_sample_sharpe": _text(found.in_sample_sharpe, RATIO),
+            "objective": rounded(found.objective, RATIO),
+            "in_sample_sharpe": rounded(found.in_sample_sharpe, RATIO),
             "in_sample_trades": found.in_sample_trades,
         }
     return {
@@ -221,11 +207,11 @@ def window_json(
         "out_of_sample_result": {
             "runs": found.out_of_sample_runs,
             "trades": found.out_of_sample_trades,
-            "start_equity": _text(found.start_equity, RUPEE),
-            "end_equity": _text(found.end_equity, RUPEE),
+            "start_equity": rounded(found.start_equity, RUPEE),
+            "end_equity": rounded(found.end_equity, RUPEE),
             "return": None
             if found.start_equity is None or found.end_equity is None
-            else _text(found.end_equity / found.start_equity - 1, FRACTION),
+            else rounded(found.end_equity / found.start_equity - 1, FRACTION),
         },
     }
 
@@ -439,7 +425,8 @@ class _Runner:
                 p.exit_reason is not None
                 for p in queries.positions(conn, mode="backtest", backtest_id=backtest_id)
             )
-        curve = [r.equity for r in results]
+        # From the starting Equity, as the report reads a curve (``report.Account``).
+        curve = [terms.starting_equity, *(r.equity for r in results)]
         cell = queries.WalkForwardCell(
             protocol=self._frozen.hash,
             window=number,
@@ -605,7 +592,3 @@ def _strings(parameters: Mapping[str, Decimal]) -> dict[str, str]:
 
 def _cell_key(parameters: Mapping[str, str]) -> tuple[tuple[str, Decimal], ...]:
     return tuple(sorted((name, Decimal(value)) for name, value in parameters.items()))
-
-
-def _text(value: Decimal | None, places: Decimal) -> str | None:
-    return None if value is None else str(value.quantize(places))

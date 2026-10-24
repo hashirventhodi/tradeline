@@ -34,8 +34,10 @@ import psycopg
 import pytest
 
 from synthetic_eod import (
+    EXIT_BAND,
     REPO_ROOT,
     RUN_DAY,
+    STARTING_EQUITY,
     Gap,
     base_market,
     compute_universe_months,
@@ -46,7 +48,7 @@ from synthetic_eod import (
     repo_costs,
     write_fixtures,
 )
-from tradeline import engine, queries
+from tradeline import queries
 from tradeline.cli import main
 from tradeline.costs import CostModel
 from tradeline.db import app_connection
@@ -169,7 +171,14 @@ def both_modes(loaded: str) -> BothModes:
         backtest(conn, strategy, protocol=frozen.hash, start=DAYS[0], end=DAYS[-1], **unversioned)
         in_backtest = {name: len(spy.call_args_list) for name, spy in spies.items()}
         for day in DAYS:
-            paper(conn, strategy, clock=on(day), **shared)
+            paper(
+                conn,
+                strategy,
+                clock=on(day),
+                starting_equity=STARTING_EQUITY,
+                band=EXIT_BAND,
+                **shared,
+            )
         called_on = {
             name: (
                 [c.args[0] for c in spy.call_args_list[: in_backtest[name]]],
@@ -255,6 +264,8 @@ def test_a_paper_run_is_refused_for_a_day_collect_daily_has_not_loaded(
             limits=LIMITS,
             tick_sizes=TICK_SIZES,
             costs=repo_costs(),
+            starting_equity=STARTING_EQUITY,
+            band=EXIT_BAND,
         )
 
 
@@ -284,7 +295,14 @@ def test_an_unclassified_member_in_a_paper_run_raises_the_stale_sector_map_alert
         assert not [r for r in caplog.records if r.getMessage() == "stale sector map"]
 
         with caplog.at_level(logging.WARNING, logger="tradeline.engine"):
-            paper(conn, PullbackV1(), clock=on(RUN_DAY), **shared)
+            paper(
+                conn,
+                PullbackV1(),
+                clock=on(RUN_DAY),
+                starting_equity=STARTING_EQUITY,
+                band=EXIT_BAND,
+                **shared,
+            )
 
     (alert,) = [r for r in caplog.records if r.getMessage() == "stale sector map"]
     assert alert.levelno == logging.WARNING
@@ -318,7 +336,8 @@ def test_the_paper_gate_counts_paper_trades_and_never_a_dry_runs(
         "limits": LIMITS,
         "tick_sizes": TICK_SIZES,
         "costs": repo_costs(),
-        "starting_equity": engine.STARTING_EQUITY,
+        "starting_equity": STARTING_EQUITY,
+        "band": EXIT_BAND,
     }
     with app_connection(fresh_database_url) as conn:
         load_market(conn, fixtures, market)

@@ -20,6 +20,7 @@ there are none.
 from __future__ import annotations
 
 import ast
+import functools
 import hashlib
 import subprocess
 from pathlib import Path
@@ -52,8 +53,9 @@ def code_revision(module: str, *, package_dir: Path = PACKAGE_DIR) -> str:
 
 def git_commit(directory: Path = PACKAGE_DIR) -> str:
     """The git commit the code under ``directory`` is checked out at, the one a Protocol is
-    frozen at and every run under it must share (ADR 0007), with ``-dirty`` added when a
-    tracked file differs from it."""
+    frozen at and every run under it must share (ADR 0007). Refused when a tracked file
+    differs from it: code with uncommitted changes is at no commit, so it can neither be
+    frozen nor pass for the commit a Protocol names."""
     try:
         head = _git(directory, "rev-parse", "HEAD").strip()
         changed = _git(directory, "status", "--porcelain", "--untracked-files=no").strip()
@@ -62,7 +64,20 @@ def git_commit(directory: Path = PACKAGE_DIR) -> str:
             f"cannot read the git commit of {directory}: {error}; a Protocol needs the code"
             " run from a git checkout"
         ) from error
-    return f"{head}-dirty" if changed else head
+    if changed:
+        raise ValueError(
+            f"the checkout at {directory} has uncommitted changes to tracked files (at"
+            f" {head[:12]}); commit or discard them before freezing a Protocol or running"
+            " under one"
+        )
+    return head
+
+
+@functools.cache
+def running_commit() -> str:
+    """The commit this process runs (``git_commit``), read once: the code a process runs
+    cannot change under it."""
+    return git_commit()
 
 
 def _git(directory: Path, *arguments: str) -> str:

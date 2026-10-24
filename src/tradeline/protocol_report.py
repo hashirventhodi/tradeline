@@ -47,10 +47,18 @@ from tradeline import queries
 from tradeline.dates import IST
 from tradeline.freeze import verify_snapshot
 from tradeline.gate import CurveMetrics, GateOutcome, evaluate
-from tradeline.holdout import holdout_run, rerun_holdout, standing
+from tradeline.holdout import FreshPeriod, holdout_run, rerun_holdout, standing
 from tradeline.metrics import HaltDay
 from tradeline.paper_broker import FILL_MODEL, FillModel
-from tradeline.report import FRACTION, RATIO, RUPEE, Account, Scores, halt_days_json, read_account
+from tradeline.report import (
+    FRACTION,
+    RATIO,
+    Account,
+    Scores,
+    halt_days_json,
+    read_account,
+    rounded,
+)
 from tradeline.risk import RISK_ENGINE, RiskEngine
 from tradeline.tick_sizes import TickSizes
 from tradeline.trading_calendar import TradingCalendar
@@ -121,6 +129,7 @@ class ProtocolReport:
                 },
                 "checks": [_check_json(c) for c in evaluation.checks],
                 "holdout_trades": evaluation.inputs["holdout"]["trades"],
+                "fresh_period_trades": evaluation.inputs.get("fresh_period", {}).get("trades"),
                 "standing": {
                     name: evaluation.standing[name]
                     for name in (
@@ -134,8 +143,8 @@ class ProtocolReport:
                 },
             },
             "halt_would_have_fired": {
-                "daily_loss_limit": _text(terms.halts.daily_loss, FRACTION),
-                "drawdown_limit": _text(terms.halts.drawdown, FRACTION),
+                "daily_loss_limit": rounded(terms.halts.daily_loss, FRACTION),
+                "drawdown_limit": rounded(terms.halts.drawdown, FRACTION),
                 **{curve: halt_days_json(days) for curve, days in halts.items()},
             },
             "windows": [
@@ -153,17 +162,7 @@ class ProtocolReport:
                 **_span_json(self.holdout),
                 "parameters": dict(sorted((self.attempt.parameters or {}).items())),
                 "metrics": self.holdout.scores(risk_free_rate=rate).as_json(),
-                "open_positions": [
-                    {
-                        "symbol": p.symbol,
-                        "opened_on": p.opened_on.isoformat(),
-                        "shares": p.shares,
-                        "entry": _text(p.entry, RUPEE),
-                        "close": _text(p.close, RUPEE),
-                        "unrealised": _text(p.unrealised, RUPEE),
-                    }
-                    for p in self.holdout.open
-                ],
+                "open_positions": [p.as_json() for p in self.holdout.open],
             },
             "gapped_stops": {c: a.gapped_stops_json() for c, a in accounts.items()},
             "limits": {c: a.limits_json() for c, a in accounts.items()},
@@ -187,23 +186,7 @@ class ProtocolReport:
             ],
             "lineage": _lineage_json(self.lineage),
             "contract_notes": _contract_notes_json(evaluation.contract_notes),
-            "closed_trades": {
-                c: [
-                    {
-                        "symbol": t.symbol,
-                        "opened_on": t.opened_on.isoformat(),
-                        "closed_on": t.closed_on.isoformat(),
-                        "shares": t.shares,
-                        "entry": _text(t.entry, RUPEE),
-                        "exit_price": _text(t.exit_price, RUPEE),
-                        "exit_reason": t.exit_reason,
-                        "net_pnl": _text(t.net_pnl, RUPEE),
-                        "sector": t.sector,
-                    }
-                    for t in a.closed
-                ]
-                for c, a in accounts.items()
-            },
+            "closed_positions": {c: [t.as_json() for t in a.closed] for c, a in accounts.items()},
         }
 
     def text(self) -> str:
@@ -362,6 +345,10 @@ def _evaluate(
         "holdout": _metrics(read_account(conn, attempt.backtest_id), terms.risk_free_rate),
     }
     found = standing(conn, frozen.hash, calendar=calendar)
+    period = found.fresh_period
+    fresh = _fresh_period_metrics(conn, frozen, period, calendar) if found.may_pass else None
+    if fresh is not None:
+        curves["fresh_period"] = fresh
     outcome = evaluate(
         terms.gate,
         stitched=curves["stitched_curve"],
@@ -369,8 +356,8 @@ def _evaluate(
         independent=bool(attempt.independent),
         may_pass=found.may_pass,
         standing=found.reason,
+        fresh_period=fresh,
     )
-    period = found.fresh_period
     standing_json = {
         "independent": attempt.independent,
         "consumes": attempt.consumes,
@@ -430,6 +417,24 @@ def _evaluate(
         )
     conn.commit()
     return outcome
+
+
+def _fresh_period_metrics(
+    conn: psycopg.Connection,
+    frozen: queries.FrozenProtocol,
+    period: FreshPeriod | None,
+    calendar: TradingCalendar,
+) -> CurveMetrics | None:
+    """The version's Fresh Period account scored, once it has run its first twelve months;
+    None before (or for an independent run, which has none)."""
+    run = queries.fresh_period_run(conn, frozen.hash)
+    if run is None or period is None or period.twelve_months_to is None:
+        return None
+    due = list(calendar.trading_days(run.first, period.twelve_months_to))
+    runs = queries.runs(conn, mode="backtest", backtest_id=run.backtest_id)
+    if not due or not runs or runs[-1].as_of < due[-1]:
+        return None
+    return _metrics(read_account(conn, run.backtest_id), frozen.protocol.risk_free_rate)
 
 
 def _metrics(account: Account, rate: Decimal) -> CurveMetrics:
@@ -516,7 +521,7 @@ def _check_json(check: dict[str, Any]) -> dict[str, Any]:
     value = check["value"]
     if value is not None and check["metric"] != "trades":
         places = FRACTION if check["metric"] == "max_drawdown" else RATIO
-        value = _text(Decimal(value), places)
+        value = rounded(Decimal(value), places)
     elif value is not None:
         value = int(value)
     threshold = check["threshold"]
@@ -577,10 +582,6 @@ def _contract_notes_json(count: int) -> dict[str, Any]:
     }
 
 
-def _text(value: Decimal | None, places: Decimal) -> str | None:
-    return None if value is None else str(value.quantize(places))
-
-
 class _Markdown:
     """The report rendered for posting on the Phase 2 issue: the Gate and the Halt days at
     the top, then every section in the JSON's order, then the runtime."""
@@ -635,6 +636,11 @@ class _Markdown:
             f" {thresholds['profit_factor_above']} on both curves; at least"
             f" {thresholds['min_stitched_trades']} trades on the Stitched Curve. The Holdout's"
             f" {gate['holdout_trades']} trades are reported, not gated."
+            + (
+                ""
+                if gate["fresh_period_trades"] is None
+                else f" The Fresh Period closed {gate['fresh_period_trades']} trades."
+            )
         )
         self._table(
             ["Curve", "Metric", "Value", "Rule", "Holds"],
@@ -663,7 +669,7 @@ class _Markdown:
         rows = []
         accounts = self._report._accounts()
         for curve, days in self._report._halts().items():
-            for first, last, stretch in _stretches(accounts[curve].days, days):
+            for first, last, stretch in _consecutive(accounts[curve].days, days):
                 rows.append(
                     [
                         CURVE_NAMES[curve],
@@ -814,16 +820,18 @@ class _Markdown:
             " chosen again) and the Holdout run again with c at zero and at twice its value:"
         )
         data = self._json
-        scores: dict[str, dict[str, Any]] = {}
-        for variant in sensitivity["variants"]:
-            for curve in CURVES:
-                scores[f"{CURVE_NAMES[curve]}, c = {variant['impact']}"] = variant[curve]
-        for curve in CURVES:
-            scores[f"{CURVE_NAMES[curve]}, c = {sensitivity['impact']}"] = data[curve]["metrics"]
-        ordered = sorted(
-            scores, key=lambda n: (not n.startswith("Stitched"), Decimal(n.split()[-1]))
+        # (curve, c, scores): each curve's runs at every c, the Stitched Curve's first.
+        columns = [
+            (curve, Decimal(sensitivity["impact"]), data[curve]["metrics"]) for curve in CURVES
+        ] + [
+            (curve, Decimal(variant["impact"]), variant[curve])
+            for variant in sensitivity["variants"]
+            for curve in CURVES
+        ]
+        columns.sort(key=lambda column: (CURVES.index(column[0]), column[1]))
+        self._scores_table(
+            {f"{CURVE_NAMES[curve]}, c = {impact}": scores for curve, impact, scores in columns}
         )
-        self._scores_table({n: scores[n] for n in ordered})
 
     def _months(self) -> None:
         months = self._json["universe_months"]
@@ -893,8 +901,8 @@ def _cell(value: Any) -> str:
     return "n/a" if value is None else str(value)
 
 
-def _stretches(days: Sequence[Any], halts: list[HaltDay]) -> list[tuple[Any, Any, list[HaltDay]]]:
-    """The Halt days in runs of consecutive trading days of the curve."""
+def _consecutive(days: Sequence[Any], halts: list[HaltDay]) -> list[tuple[Any, Any, list[HaltDay]]]:
+    """The Halt days grouped where they fall on consecutive trading days of the curve."""
     index = {day: i for i, day in enumerate(days)}
     found: list[tuple[Any, Any, list[HaltDay]]] = []
     for halt in halts:

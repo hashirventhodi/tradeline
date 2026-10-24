@@ -27,6 +27,7 @@ from tradeline.dates import IST
 from tradeline.db import app_connection
 from tradeline.ingest.eod import ingest_eod
 from tradeline.rebuild_instruments import rebuild_instruments
+from tradeline.trading_calendar import load_trading_calendar
 from tradeline.transport import PlaybackTransport
 from tradeline.universe import (
     backfill_universe_builds,
@@ -48,6 +49,13 @@ RULE = UniverseRule(
 
 def ist(year: int, month: int, day: int) -> datetime:
     return datetime(year, month, day, 12, tzinfo=IST)
+
+
+CALENDAR = load_trading_calendar(Path(__file__).parents[1] / "trading_calendar.csv")
+
+
+def mode(conn: psycopg.Connection, month: date, rule_version: str) -> str:
+    return queries.universe_month_mode(conn, month, rule_version=rule_version, calendar=CALENDAR)
 
 
 def load(conn: psycopg.Connection, start: date = date(2024, 7, 1), end: date = JULY_31) -> None:
@@ -177,7 +185,7 @@ def test_a_month_is_reconstructed_when_its_version_was_declared_in_force_only_la
         conn, RULE.version, in_force_from=date(2024, 1, 1), declared_at=datetime.now(IST)
     )
 
-    assert queries.universe_month_mode(conn, AUGUST, rule_version=RULE.version) == ("reconstructed")
+    assert mode(conn, AUGUST, RULE.version) == ("reconstructed")
     [validity] = queries.universe_rule_validity(conn)
     assert (validity.rule_version, validity.in_force_from) == (RULE.version, date(2024, 1, 1))
 
@@ -194,7 +202,30 @@ def test_a_month_is_recorded_when_its_version_was_in_force_and_recorded_before_i
     )
     compute_universe(conn, RULE, month=AUGUST)
 
-    assert queries.universe_month_mode(conn, AUGUST, rule_version=RULE.version) == "recorded"
+    assert mode(conn, AUGUST, RULE.version) == "recorded"
+
+
+def test_a_declaration_between_the_first_and_the_first_trading_day_is_recorded_in_time(
+    conn: psycopg.Connection,
+) -> None:
+    # 1 September 2024 is a Sunday: the month's first trading day is Monday the 2nd.
+    september = date(2024, 9, 1)
+    declare_rule_validity(
+        conn, RULE.version, in_force_from=september, declared_at=ist(2024, 9, 1), rule=RULE
+    )
+
+    assert mode(conn, september, RULE.version) == "recorded"
+
+
+def test_a_declaration_on_the_first_trading_day_is_too_late_to_record_the_month(
+    conn: psycopg.Connection,
+) -> None:
+    september = date(2024, 9, 1)
+    declare_rule_validity(
+        conn, RULE.version, in_force_from=september, declared_at=ist(2024, 9, 2), rule=RULE
+    )
+
+    assert mode(conn, september, RULE.version) == "reconstructed"
 
 
 def test_a_month_before_its_version_came_into_force_is_reconstructed(
@@ -209,7 +240,7 @@ def test_a_month_before_its_version_came_into_force_is_reconstructed(
     )
     compute_universe(conn, RULE, month=AUGUST)
 
-    assert queries.universe_month_mode(conn, AUGUST, rule_version=RULE.version) == ("reconstructed")
+    assert mode(conn, AUGUST, RULE.version) == ("reconstructed")
 
 
 def test_a_version_superseded_before_the_month_began_is_not_the_one_in_force(
@@ -229,11 +260,9 @@ def test_a_version_superseded_before_the_month_began_is_not_the_one_in_force(
     compute_universe(conn, RULE, month=AUGUST)
     compute_universe(conn, newer, month=AUGUST)
 
-    assert queries.universe_month_mode(conn, AUGUST, rule_version=RULE.version) == ("reconstructed")
-    assert queries.universe_month_mode(conn, AUGUST, rule_version=newer.version) == "recorded"
-    assert queries.universe_month_mode(conn, date(2024, 7, 1), rule_version=RULE.version) == (
-        "recorded"
-    )
+    assert mode(conn, AUGUST, RULE.version) == ("reconstructed")
+    assert mode(conn, AUGUST, newer.version) == "recorded"
+    assert mode(conn, date(2024, 7, 1), RULE.version) == ("recorded")
 
 
 def test_a_version_never_recorded_cannot_be_declared_in_force(conn: psycopg.Connection) -> None:

@@ -4,7 +4,8 @@
 range, then again with the Slippage impact c at zero and at twice its value, and
 reads all three back from the Ledger (``tradeline.queries``); the report is that
 reading and nothing else. Its metrics are ``tradeline.metrics`` over the daily
-marked Equity curve (each Run's Equity) and the closed trades.
+marked Equity curve (the starting Equity, then each Run's Equity) and the closed
+trades.
 
 A closed trade is a Position the backtest closed; its net P&L is what its Fills
 moved into cash after every charge and Slippage, plus any cash paid in lieu of a
@@ -44,13 +45,14 @@ from tradeline.engine import backtest
 from tradeline.metrics import (
     HaltDay,
     HaltLimits,
-    Trade,
+    PositionResult,
     expectancy,
     halt_days,
     max_drawdown,
     profit_factor,
     sharpe,
 )
+from tradeline.paper_broker import ExitReason
 from tradeline.risk import UNCLASSIFIED
 from tradeline.strategy import Strategy
 from tradeline.tick_sizes import TickSizes
@@ -64,7 +66,7 @@ MARK_LOOKBACK = timedelta(days=31)
 
 
 @dataclass(frozen=True)
-class ClosedTrade:
+class ClosedPosition:
     symbol: str
     instrument: str
     opened_on: date
@@ -74,7 +76,7 @@ class ClosedTrade:
     stop: Decimal
     target: Decimal
     exit_price: Decimal
-    exit_reason: str
+    exit_reason: ExitReason
     net_pnl: Decimal
     equity_at_entry: Decimal
     # The sector its Pass was held to; ``unclassified`` when none was recorded.
@@ -88,6 +90,23 @@ class ClosedTrade:
     @property
     def planned_risk(self) -> Decimal:
         return self.shares * (self.entry - self.stop)
+
+    def as_json(self) -> dict[str, Any]:
+        """The closed Position as every report lists it."""
+        return {
+            "symbol": self.symbol,
+            "opened_on": self.opened_on.isoformat(),
+            "closed_on": self.closed_on.isoformat(),
+            "shares": self.shares,
+            "entry": rounded(self.entry, RUPEE),
+            "stop": rounded(self.stop, RUPEE),
+            "target": rounded(self.target, RUPEE),
+            "exit_price": rounded(self.exit_price, RUPEE),
+            "exit_reason": self.exit_reason,
+            "net_pnl": rounded(self.net_pnl, RUPEE),
+            "equity_at_entry": rounded(self.equity_at_entry, RUPEE),
+            "sector": self.sector,
+        }
 
 
 @dataclass(frozen=True)
@@ -110,6 +129,20 @@ class OpenPosition:
     def unrealised(self) -> Decimal:
         return self.shares * (self.close - self.entry)
 
+    def as_json(self) -> dict[str, Any]:
+        """The open Position as every report lists it, marked at the last day's close."""
+        return {
+            "symbol": self.symbol,
+            "opened_on": self.opened_on.isoformat(),
+            "shares": self.shares,
+            "entry": rounded(self.entry, RUPEE),
+            "stop": rounded(self.stop, RUPEE),
+            "target": rounded(self.target, RUPEE),
+            "close": rounded(self.close, RUPEE),
+            "value": rounded(self.value, RUPEE),
+            "unrealised": rounded(self.unrealised, RUPEE),
+        }
+
 
 @dataclass(frozen=True)
 class Scores:
@@ -127,14 +160,14 @@ class Scores:
     def as_json(self) -> dict[str, Any]:
         return {
             "trades": self.trades,
-            "sharpe": _text(self.sharpe, RATIO),
-            "max_drawdown": _text(self.max_drawdown, FRACTION),
-            "profit_factor": _text(self.profit_factor, RATIO),
+            "sharpe": rounded(self.sharpe, RATIO),
+            "max_drawdown": rounded(self.max_drawdown, FRACTION),
+            "profit_factor": rounded(self.profit_factor, RATIO),
             "expectancy": {
-                "rupees": _text(self.expectancy_rupees, RUPEE),
-                "fraction_of_equity": _text(self.expectancy_fraction, FRACTION),
+                "rupees": rounded(self.expectancy_rupees, RUPEE),
+                "fraction_of_equity": rounded(self.expectancy_fraction, FRACTION),
             },
-            "ending_equity": _text(self.ending_equity, RUPEE),
+            "ending_equity": rounded(self.ending_equity, RUPEE),
             "open_positions": self.open_positions,
         }
 
@@ -142,11 +175,13 @@ class Scores:
 @dataclass(frozen=True)
 class Account:
     """One backtest read back from the Ledger: its daily curve, its closed trades, its open
-    Positions marked at the last close, its Passes and its Blocks."""
+    Positions marked at the last close, its Passes and its Blocks. The curve starts at the
+    account's starting Equity, the day before ``days[0]``, then holds each day's Equity,
+    so the first day's return counts."""
 
     days: tuple[date, ...]
     curve: tuple[Decimal, ...]
-    closed: tuple[ClosedTrade, ...]
+    closed: tuple[ClosedPosition, ...]
     open: tuple[OpenPosition, ...]
     blocks: tuple[queries.LedgerBlock, ...]
     passes: tuple[queries.LedgerPass, ...] = ()
@@ -178,11 +213,11 @@ class Account:
                 "opened_on": t.opened_on.isoformat(),
                 "closed_on": t.closed_on.isoformat(),
                 "shares": t.shares,
-                "entry": _text(t.entry, RUPEE),
-                "stop": _text(t.stop, RUPEE),
-                "exit_price": _text(t.exit_price, RUPEE),
-                "planned_risk": _text(t.planned_risk, RUPEE),
-                "realised_loss": _text(-t.net_pnl, RUPEE),
+                "entry": rounded(t.entry, RUPEE),
+                "stop": rounded(t.stop, RUPEE),
+                "exit_price": rounded(t.exit_price, RUPEE),
+                "planned_risk": rounded(t.planned_risk, RUPEE),
+                "realised_loss": rounded(-t.net_pnl, RUPEE),
             }
             for t in self.closed
             if t.gapped
@@ -195,7 +230,7 @@ class Account:
 
     def scores(self, *, risk_free_rate: Decimal) -> Scores:
         pnls = [t.net_pnl for t in self.closed]
-        found = expectancy([Trade(t.net_pnl, t.equity_at_entry) for t in self.closed])
+        found = expectancy([PositionResult(t.net_pnl, t.equity_at_entry) for t in self.closed])
         return Scores(
             trades=len(self.closed),
             sharpe=sharpe(self.curve, risk_free_rate=risk_free_rate),
@@ -213,7 +248,11 @@ def read_account(conn: psycopg.Connection, backtest_id: uuid.UUID) -> Account:
     runs = queries.runs(conn, mode="backtest", backtest_id=backtest_id)
     if not runs:
         raise ValueError(f"no backtest {backtest_id} in the Ledger")
-    curve = []
+    protocol = runs[0].strategy.protocol
+    frozen = None if protocol is None else queries.protocol(conn, protocol)
+    if frozen is None:
+        raise ValueError(f"backtest {backtest_id} names no frozen Protocol to start it from")
+    curve = [frozen.protocol.starting_equity]
     for ran in runs:
         if ran.equity is None:
             raise ValueError(f"the Run on {ran.as_of} records no Equity; backtest it again")
@@ -237,7 +276,7 @@ def read_account(conn: psycopg.Connection, backtest_id: uuid.UUID) -> Account:
             continue
         granted = passes[position.run_id][position.rank]
         closed.append(
-            ClosedTrade(
+            ClosedPosition(
                 symbol=position.symbol,
                 instrument=position.instrument,
                 opened_on=position.opened_on,
@@ -340,13 +379,13 @@ class BacktestReport:
             "to": self.end.isoformat(),
             "trading_days": len(account.days),
             "halt_would_have_fired": {
-                "daily_loss_limit": _text(self.halts.daily_loss, FRACTION),
-                "drawdown_limit": _text(self.halts.drawdown, FRACTION),
+                "daily_loss_limit": rounded(self.halts.daily_loss, FRACTION),
+                "drawdown_limit": rounded(self.halts.drawdown, FRACTION),
                 "days": halt_days_json(self.halt_days),
             },
             "metrics": self.scores.as_json(),
-            "starting_equity": _text(self.starting_equity, RUPEE),
-            "risk_free_rate": _text(self.risk_free_rate, FRACTION),
+            "starting_equity": rounded(self.starting_equity, RUPEE),
+            "risk_free_rate": rounded(self.risk_free_rate, FRACTION),
             "costs": {
                 "rates_as_of": None
                 if self.costs.rates_as_of is None
@@ -366,36 +405,8 @@ class BacktestReport:
             "contract_notes": "none available"
             if self.contract_notes == 0
             else f"{self.contract_notes} checked against the rates on their dates",
-            "closed_trades": [
-                {
-                    "symbol": t.symbol,
-                    "opened_on": t.opened_on.isoformat(),
-                    "closed_on": t.closed_on.isoformat(),
-                    "shares": t.shares,
-                    "entry": _text(t.entry, RUPEE),
-                    "stop": _text(t.stop, RUPEE),
-                    "target": _text(t.target, RUPEE),
-                    "exit_price": _text(t.exit_price, RUPEE),
-                    "exit_reason": t.exit_reason,
-                    "net_pnl": _text(t.net_pnl, RUPEE),
-                    "equity_at_entry": _text(t.equity_at_entry, RUPEE),
-                }
-                for t in account.closed
-            ],
-            "open_positions": [
-                {
-                    "symbol": p.symbol,
-                    "opened_on": p.opened_on.isoformat(),
-                    "shares": p.shares,
-                    "entry": _text(p.entry, RUPEE),
-                    "stop": _text(p.stop, RUPEE),
-                    "target": _text(p.target, RUPEE),
-                    "close": _text(p.close, RUPEE),
-                    "value": _text(p.value, RUPEE),
-                    "unrealised": _text(p.unrealised, RUPEE),
-                }
-                for p in account.open
-            ],
+            "closed_positions": [t.as_json() for t in account.closed],
+            "open_positions": [p.as_json() for p in account.open],
         }
 
     def text(self) -> str:
@@ -495,12 +506,18 @@ def halt_days_json(days: list[HaltDay]) -> list[dict[str, Any]]:
         {
             "day": h.day.isoformat(),
             "limits": list(h.limits),
-            "daily_loss": _text(h.daily_loss, FRACTION),
-            "drawdown": _text(h.drawdown, FRACTION),
+            "daily_loss": rounded(h.daily_loss, FRACTION),
+            "drawdown": rounded(h.drawdown, FRACTION),
         }
         for h in days
     ]
 
 
-def _text(value: Decimal | None, places: Decimal) -> str | None:
-    return None if value is None else str(value.quantize(places))
+def rounded(value: Decimal | None, places: Decimal) -> str | None:
+    """``value`` as the reports print it: quantized to ``places`` (half-even), an unbounded
+    value (a profit factor with no losing trade) as ``∞``, None as is."""
+    if value is None:
+        return None
+    if value.is_infinite():
+        return "∞" if value > 0 else "-∞"
+    return str(value.quantize(places))

@@ -33,10 +33,12 @@ from tradeline.adjust import (
     superseded,
 )
 from tradeline.costs import Charges
-from tradeline.dates import IST
+from tradeline.dates import IST, month_end
 from tradeline.instruments import Anomaly, Interval, KeyFrom, Link, LinkCandidate
+from tradeline.paper_broker import ExitReason, OrderPurpose
 from tradeline.protocol import Protocol
 from tradeline.sources.nse import Delisting, SymbolChange
+from tradeline.trading_calendar import TradingCalendar
 
 
 @dataclass(frozen=True)
@@ -730,27 +732,28 @@ UniverseMode = Literal["recorded", "reconstructed"]
 
 
 def universe_month_mode(
-    conn: psycopg.Connection, month: date, *, rule_version: str
+    conn: psycopg.Connection, month: date, *, rule_version: str, calendar: TradingCalendar
 ) -> UniverseMode:
     """Whether the month's Universe under ``rule_version`` is a Recorded or a Reconstructed one.
 
-    Recorded when, by what was declared before the month began, the version
-    was the one in force on the month's first day (the declaration with the
-    latest ``in_force_from`` on or before it), and the version was recorded
-    before the month began too; reconstructed otherwise. "Before the month
-    began" is before the start of its first calendar day in India, never later
-    than its first trading day's, so no month is called recorded that was not.
+    Recorded when, by what was declared before the month's first trading day
+    (on ``calendar``) began in India, the version was the one in force on that
+    day (the declaration with the latest ``in_force_from`` on or before it), and
+    the version was recorded before then too; reconstructed otherwise.
     """
     if month.day != 1:
         raise ValueError(f"a Universe month is given by its first day, not {month}")
-    began = datetime.combine(month, time(), IST)
+    first = next(iter(calendar.trading_days(month, month_end(month))), None)
+    if first is None:
+        raise ValueError(f"the Trading Calendar has no trading day in {month:%Y-%m}")
+    began = datetime.combine(first, time(), IST)
     row = conn.execute(
         "SELECT EXISTS (SELECT 1 FROM universe_rule_versions"
         "  WHERE version = %(version)s AND recorded_at < %(began)s)"
         " AND %(version)s IS NOT DISTINCT FROM (SELECT rule_version FROM universe_rule_validity"
-        "  WHERE declared_at < %(began)s AND in_force_from <= %(month)s"
+        "  WHERE declared_at < %(began)s AND in_force_from <= %(first)s"
         "  ORDER BY in_force_from DESC, declared_at DESC LIMIT 1)",
-        {"version": rule_version, "began": began, "month": month},
+        {"version": rule_version, "began": began, "first": first},
     ).fetchone()
     return "recorded" if row is not None and row[0] else "reconstructed"
 
@@ -1949,7 +1952,7 @@ class LedgerOrder:
     symbol: str
     side: str
     # ``entry``, ``target``, ``stop``, ``time`` or ``boundary``.
-    purpose: str
+    purpose: OrderPurpose
     limit_price: Decimal
     shares: int
     # The trading day it can fill on.
@@ -2008,7 +2011,7 @@ class LedgerPosition:
     # The day of its latest event: the day it closed, once closed.
     as_of: date
     # ``stop``, ``target``, ``time`` or ``boundary``; None while open.
-    exit_reason: str | None
+    exit_reason: ExitReason | None
     exit_price: Decimal | None
 
     @property
@@ -2137,7 +2140,7 @@ class LedgerPositionEvent:
     factor: Fraction | None
     cash_in_lieu: Decimal | None
     exit_price: Decimal | None
-    exit_reason: str | None
+    exit_reason: ExitReason | None
 
 
 def position_events(
@@ -2389,6 +2392,29 @@ def holdout_attempts(
         )
         for row in rows
     ]
+
+
+@dataclass(frozen=True)
+class FreshPeriodRun:
+    """A Not Independent version's Fresh Period account: from ``first``, at the parameters
+    its Holdout ran at, in the account ``backtest_id`` (its Runs are the Ledger's)."""
+
+    protocol: str
+    backtest_id: uuid.UUID
+    first: date
+    parameters: dict[str, str]
+    started_at: datetime
+
+
+def fresh_period_run(conn: psycopg.Connection, protocol: str) -> FreshPeriodRun | None:
+    """The Fresh Period account of the version under the Protocol whose full hash is
+    ``protocol``, if one was started."""
+    row = conn.execute(
+        "SELECT protocol, backtest_id, first, parameters, started_at FROM fresh_periods"
+        " WHERE protocol = %s",
+        (protocol,),
+    ).fetchone()
+    return None if row is None else FreshPeriodRun(*row)
 
 
 @dataclass(frozen=True)

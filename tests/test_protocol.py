@@ -26,6 +26,7 @@ from pathlib import Path
 import psycopg
 import pytest
 
+from checkout import TEST_COMMIT, dirty_checkout
 from synthetic_eod import (
     COSTS_AS_OF,
     GRID,
@@ -38,14 +39,15 @@ from synthetic_eod import (
     repo_calendar,
     write_fixtures,
 )
-from tradeline import queries
+from tradeline import queries, revision
 from tradeline.cli import main
 from tradeline.costs import CostModel, Slippage, load_cost_schedule
+from tradeline.dates import IST
 from tradeline.db import app_connection
 from tradeline.engine import backtest
 from tradeline.metrics import HaltLimits
 from tradeline.protocol import TIE_BREAK, Gate, Span, Window, content_hash
-from tradeline.revision import code_revision, git_commit
+from tradeline.revision import code_revision
 from tradeline.risk import Limits
 from tradeline.strategy.pullback import PullbackV1
 from tradeline.tick_sizes import load_tick_sizes
@@ -104,7 +106,7 @@ def config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, loaded: str) -> Path
 
 
 def freeze_cli() -> list[str]:
-    return ["protocol", "freeze", "--costs-as-of", COSTS_AS_OF.isoformat()]
+    return ["protocol", "freeze"]
 
 
 def test_protocol_freeze_writes_the_protocol_once_and_prints_its_window_boundaries(
@@ -121,11 +123,24 @@ def test_protocol_freeze_writes_the_protocol_once_and_prints_its_window_boundari
     assert frozen.protocol.holdout == HOLDOUT
     # The configured Halts, so the days a report lists are the frozen ones.
     assert frozen.protocol.halts == HaltLimits(daily_loss=D("0.02"), drawdown=D("0.08"))
+    # The cost schedule as of the freeze: the day it was frozen, in India.
+    assert frozen.protocol.costs_as_of == frozen.frozen_at.astimezone(IST).date()
 
     assert main(freeze_cli()) == 0
 
     assert "already frozen, nothing written" in capsys.readouterr().err
     assert queries.protocols(conn) == [frozen]
+
+
+def test_protocol_freeze_takes_no_cost_schedule_date_but_the_freeze_s_own(
+    config: Path, conn: psycopg.Connection
+) -> None:
+    before = queries.protocols(conn)
+
+    with pytest.raises(SystemExit):
+        main(["protocol", "freeze", "--costs-as-of", COSTS_AS_OF.isoformat()])
+
+    assert queries.protocols(conn) == before
 
 
 def test_protocol_windows_prints_the_boundaries_and_freezes_nothing(
@@ -181,7 +196,7 @@ def test_every_protocol_field_is_readable_through_the_query_layer(
     protocol = found.protocol
     assert (protocol.family, protocol.name) == ("pullback", "pullback_v1")
     assert protocol.code_revision == code_revision("tradeline.strategy.pullback")
-    assert protocol.git_commit == git_commit()
+    assert protocol.git_commit == TEST_COMMIT
     assert protocol.grid == {
         "k": (D("1.5"), D(2), D("2.5"), D(3)),
         "r": (D("1.5"), D(2), D(3)),
@@ -273,6 +288,41 @@ def test_the_backtest_command_without_a_protocol_is_refused_with_the_reason(
     assert main(["backtest", "--from", "2023-06-15", "--to", "2023-06-15"]) == 1
 
     assert "runs under a frozen Protocol and names none" in capsys.readouterr().out
+
+
+@pytest.fixture
+def dirty_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The code run from a checkout with a tracked file changed since its commit."""
+    checkout = dirty_checkout(tmp_path / "checkout")
+    monkeypatch.setattr(revision, "running_commit", lambda: revision.git_commit(checkout))
+
+
+@pytest.mark.usefixtures("dirty_tree")
+def test_a_backtest_from_a_dirty_working_tree_is_refused(conn: psycopg.Connection) -> None:
+    frozen = freeze_protocol(conn, MARKET, FIRST, LAST)
+
+    with pytest.raises(ValueError, match="uncommitted changes"):
+        backtest(
+            conn,
+            PullbackV1(),
+            protocol=frozen.hash,
+            start=FIRST,
+            end=FIRST,
+            calendar=repo_calendar(),
+            tick_sizes=TICK_SIZES,
+        )
+
+
+@pytest.mark.usefixtures("dirty_tree")
+def test_protocol_freeze_from_a_dirty_working_tree_is_refused(
+    config: Path, conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    before = queries.protocols(conn)
+
+    assert main(freeze_cli()) == 1
+
+    assert "uncommitted changes" in capsys.readouterr().out
+    assert queries.protocols(conn) == before
 
 
 def test_a_backtest_under_a_protocol_frozen_at_another_commit_is_refused(

@@ -57,17 +57,16 @@ from typing import Any
 
 import psycopg
 
+from checkout import TEST_COMMIT
 from tradeline.config import UniverseRule
 from tradeline.costs import CostModel, Slippage, load_cost_schedule
 from tradeline.dates import IST, calendar_days, month_of, next_month
-from tradeline.engine import EXIT_BAND, STARTING_EQUITY
 from tradeline.freeze import FreezeResult
 from tradeline.freeze import freeze_protocol as freeze
 from tradeline.ingest.corporate_actions import ingest_corporate_actions, year_chunks
 from tradeline.ingest.eod import ingest_eod
 from tradeline.metrics import HaltLimits
 from tradeline.protocol import Gate, Layout, Terms, months_between
-from tradeline.revision import git_commit
 from tradeline.risk import Limits
 from tradeline.sectors import load_sectors
 from tradeline.sources import kite, nse
@@ -88,6 +87,9 @@ def repo_calendar() -> TradingCalendar:
 # The date whose cost schedule prices a test backtest's trades, fixed so results never
 # move with the calendar.
 COSTS_AS_OF = date(2026, 10, 24)
+# The repo's [protocol] starting Equity and exit band (tradeline.toml).
+STARTING_EQUITY = Decimal("500000")
+EXIT_BAND = Decimal("0.05")
 
 
 def repo_costs(rates_as_of: date = COSTS_AS_OF) -> CostModel:
@@ -527,7 +529,8 @@ def freeze_protocol(
     """Store the Universe for the months of ``first`` to ``last`` and freeze a Protocol over
     them (``protocol_terms`` unless ``terms`` is given) for ``pullback_v1`` under the
     Market's rule, the default Limits, Halts and Slippage and the checked-in schedule as of
-    ``COSTS_AS_OF``, at the commit the tests run at unless ``commit`` is given."""
+    ``COSTS_AS_OF``, at ``TEST_COMMIT`` (the commit the tests run at) unless ``commit``
+    is given."""
     compute_universe_months(conn, market, first, last)
     return freeze(
         conn,
@@ -535,12 +538,12 @@ def freeze_protocol(
         strategy=strategy or PullbackV1(),
         rule_version=market.rule.version,
         limits=limits or Limits(),
-        halts=halts or HaltLimits(),
+        halts=halts or HaltLimits(daily_loss=D("0.03"), drawdown=D("0.10")),
         schedule=load_cost_schedule(REPO_ROOT / "cost_rates.csv"),
         slippage=Slippage(),
-        costs_as_of=COSTS_AS_OF,
+        costs_as_of_for_tests=COSTS_AS_OF,
         calendar=repo_calendar(),
-        commit=commit or git_commit(),
+        commit=commit or TEST_COMMIT,
     )
 
 
