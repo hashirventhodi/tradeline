@@ -56,6 +56,7 @@ from typing import Any
 import psycopg
 
 from tradeline.config import UniverseRule
+from tradeline.costs import CostModel, Slippage, load_cost_schedule
 from tradeline.dates import IST, calendar_days, month_of, next_month
 from tradeline.ingest.corporate_actions import ingest_corporate_actions, year_chunks
 from tradeline.ingest.eod import ingest_eod
@@ -71,6 +72,16 @@ TICK = Decimal("0.05")
 
 def repo_calendar() -> TradingCalendar:
     return load_trading_calendar(REPO_ROOT / "trading_calendar.csv")
+
+
+# The date whose cost schedule prices a test backtest's trades, fixed so results never
+# move with the calendar.
+COSTS_AS_OF = date(2026, 10, 24)
+
+
+def repo_costs(rates_as_of: date = COSTS_AS_OF) -> CostModel:
+    """The checked-in cost schedule as of ``rates_as_of``, with the default Slippage."""
+    return CostModel(load_cost_schedule(REPO_ROOT / "cost_rates.csv"), Slippage(), rates_as_of)
 
 
 # --- Events -------------------------------------------------------------------

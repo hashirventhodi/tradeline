@@ -36,10 +36,25 @@ NSE fixes the month's tick by (the last close of the month before), and the
 20-day average daily traded value. The sector is the load in force, or the
 earliest load for a day before it (``queries.sectors_for_run``).
 
-The Limits see the open Positions at the day's close, but Equity stays the
-starting Equity, with no costs or Slippage, and a Position is not restated on
-an Ex-Date (all #78); Protocols are #81's, so a Strategy version is recorded
-without one and the starting Equity and the band are constants.
+Every Fill carries its charges and Slippage from the cost model
+(``tradeline.costs``), itemised. The account's cash is its starting Equity
+plus what its Fills moved (``queries.account_cash_flows``), and Equity is that
+cash plus the open Positions at the day's adjusted close, taken after the
+session; the Run sizes against it and records both, so Equity compounds.
+
+A split or bonus moves the Adjusted Series, so before the session each held
+Position whose Instrument has one ex-dated since the account's last trading
+day is restated by the Adjustment Factor: shares divided by it (rounded down,
+the fraction paid in cash at the restated previous close), entry multiplied
+to the paisa, stop and target multiplied and rounded down to the tick. Equity
+is unchanged by the action, and the exits keep their meaning in the new
+prices. Orders open for that session in the Instrument are cancelled, reason
+``corporate_action`` (NSE purges them on the Ex-Date): a sell is placed again
+at the restated prices and shares, an entry is not (the next Run may plan
+again).
+
+Protocols are #81's, so a Strategy version is recorded without one, and the
+starting Equity, the band and the cost schedule's date are the caller's.
 """
 
 from __future__ import annotations
@@ -47,17 +62,20 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import math
 import uuid
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
+from fractions import Fraction
 from typing import Any, Literal
 
 import psycopg
 
 from tradeline import queries
-from tradeline.adjust import AdjustedBar
+from tradeline.adjust import ADJUSTED_KINDS, AdjustedBar
+from tradeline.costs import CostModel
 from tradeline.dates import month_of
 from tradeline.paper_broker import (
     Bar,
@@ -191,6 +209,9 @@ class RunResult:
     orders: int = 0
     # Positions open after the Run.
     open_positions: int = 0
+    # The account after the session: Equity is cash plus the open Positions at the close.
+    cash: Decimal = Decimal(0)
+    equity: Decimal = Decimal(0)
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -206,6 +227,8 @@ class RunResult:
             "fills": self.fills,
             "orders": self.orders,
             "open_positions": self.open_positions,
+            "cash": str(self.cash),
+            "equity": str(self.equity),
         }
 
 
@@ -219,13 +242,16 @@ def run(
     rule_version: str,
     limits: Limits,
     tick_sizes: TickSizes,
-    equity: Decimal,
+    costs: CostModel,
+    starting_equity: Decimal,
     band: Decimal = EXIT_BAND,
     backtest_id: uuid.UUID | None = None,
 ) -> RunResult:
-    """The day ``as_of`` in one account: its session, then one Run over the month's Universe
-    under ``rule_version``, its Plans checked against ``limits`` at ``equity`` with the
-    account's open Positions held, then the Orders for the next session.
+    """The day ``as_of`` in one account: its held Positions restated for any split or bonus
+    ex-dated since its last day, its session, then one Run over the month's Universe under
+    ``rule_version``, its Plans checked against ``limits`` at the account's Equity (from
+    ``starting_equity``, after ``costs``) with its open Positions held, then the Orders for
+    the next session.
 
     A backtest id is required in backtest mode and refused in any other.
     """
@@ -242,7 +268,15 @@ def run(
         )
     members = [Member(m.instrument or m.symbol, m.symbol) for m in universe]
     data = StoredMarketData(conn, calendar, as_of=as_of)
-    account = _Account(conn, data, calendar, mode=mode, backtest_id=backtest_id)
+    account = _Account(
+        conn,
+        data,
+        calendar,
+        mode=mode,
+        backtest_id=backtest_id,
+        costs=costs,
+        tick_sizes=tick_sizes,
+    )
     next_session = _next_session(calendar, as_of)
     candidates = strategy.screen(members, data, as_of)
     plans = [strategy.plan(c) for c in candidates]
@@ -254,7 +288,12 @@ def run(
         # One Position per Instrument: a Candidate already held is skipped, not assessed.
         to_assess = [p for p in plans if p.instrument not in held_instruments]
         proposals = _proposals(conn, to_assess, data, tick_sizes, as_of=as_of)
-        portfolio = Portfolio(equity, _holdings(conn, held, account, as_of=as_of))
+        holdings = _holdings(conn, held, account, as_of=as_of)
+        cash = starting_equity + queries.account_cash_flows(
+            conn, mode=mode, backtest_id=backtest_id
+        )
+        equity = cash + sum((h.value for h in holdings), Decimal(0))
+        portfolio = Portfolio(equity, holdings)
         decisions = assess(proposals, portfolio=portfolio, limits=limits, run_id=run_id)
         strategy_id = _strategy_row(conn, strategy, mode=mode, backtest_id=backtest_id)
         _insert_run(
@@ -267,6 +306,8 @@ def run(
             as_of=as_of,
             rule_version=rule_version,
             universe_size=len(members),
+            cash=cash,
+            equity=equity,
         )
         _insert_candidates(conn, candidates, mode=mode, backtest_id=backtest_id, run_id=run_id)
         _insert_plans(conn, plans, mode=mode, backtest_id=backtest_id, run_id=run_id)
@@ -302,6 +343,8 @@ def run(
         fills=fills,
         orders=placed,
         open_positions=still_open,
+        cash=cash,
+        equity=equity,
     )
     log.info("run written to the ledger", extra=result.summary())
     return result
@@ -317,11 +360,14 @@ def backtest(
     rule_version: str,
     limits: Limits,
     tick_sizes: TickSizes,
-    equity: Decimal = STARTING_EQUITY,
+    costs: CostModel,
+    starting_equity: Decimal = STARTING_EQUITY,
     band: Decimal = EXIT_BAND,
 ) -> list[RunResult]:
     """A backtest from ``start`` to ``end``: one day per step of the simulated clock, each
-    filling the day before's Orders and then Running, all under one backtest id."""
+    filling the day before's Orders and then Running, all under one backtest id, one account
+    starting at ``starting_equity``. ``costs`` should fix its schedule's date
+    (``rates_as_of``) so every trade is priced on one schedule."""
     backtest_id = uuid.uuid4()
     results = [
         run(
@@ -333,7 +379,8 @@ def backtest(
             rule_version=rule_version,
             limits=limits,
             tick_sizes=tick_sizes,
-            equity=equity,
+            costs=costs,
+            starting_equity=starting_equity,
             band=band,
             backtest_id=backtest_id,
         )
@@ -352,6 +399,26 @@ def _next_session(calendar: TradingCalendar, as_of: date) -> date:
             return day
         day += timedelta(days=1)
     raise ValueError(f"the Trading Calendar has no trading day after {as_of}; extend it")
+
+
+def _previous_session(calendar: TradingCalendar, as_of: date) -> date:
+    """The trading day before ``as_of``, the account's last day when days run in order."""
+    days = list(calendar.trading_days(max(calendar.first, as_of - timedelta(days=31)), as_of))
+    earlier = [d for d in days if d < as_of]
+    if not earlier:
+        raise ValueError(f"the Trading Calendar has no trading day before {as_of}")
+    return earlier[-1]
+
+
+def _paisa(value: Fraction) -> Decimal:
+    """``value`` to the paisa, half up."""
+    exact = Decimal(value.numerator) / Decimal(value.denominator)
+    return exact.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _round_down(value: Fraction, tick: Decimal) -> Decimal:
+    """``value`` rounded down to the tick, exactly."""
+    return math.floor(value / Fraction(tick)) * tick
 
 
 @dataclass(frozen=True)
@@ -394,12 +461,16 @@ class _Account:
         *,
         mode: EngineMode,
         backtest_id: uuid.UUID | None,
+        costs: CostModel,
+        tick_sizes: TickSizes,
     ) -> None:
         self._conn = conn
         self._data = data
         self._calendar = calendar
         self._mode = mode
         self._backtest_id = backtest_id
+        self._costs = costs
+        self._tick_sizes = tick_sizes
         self._day = data.as_of
         self._seq = 0
         self._positions: dict[uuid.UUID, queries.LedgerPosition] = {}
@@ -428,9 +499,8 @@ class _Account:
                 self._conn, mode=mode, backtest_id=backtest_id, open_only=True
             )
         }
-        fills = 0
-        for found in sorted(open_orders, key=lambda o: (o.purpose != "entry", o.placed)):
-            order = _Order(
+        ordered = [
+            _Order(
                 found.id,
                 found.run_id,
                 found.rank,
@@ -442,6 +512,10 @@ class _Account:
                 found.shares,
                 found.session,
             )
+            for found in sorted(open_orders, key=lambda o: (o.purpose != "entry", o.placed))
+        ]
+        fills = 0
+        for order in self._restate(ordered):
             if order.purpose == "entry":
                 fills += self._meet_entry(order)
             elif order.purpose == "target":
@@ -451,6 +525,103 @@ class _Account:
         for target in list(self._targets.values()):
             fills += self._meet_target(target)
         return fills
+
+    def _restate(self, orders: list[_Order]) -> list[_Order]:
+        """Restate each held Position whose Instrument has a split or bonus ex-dated since the
+        account's last trading day, and its Orders open for the day; the Orders that remain
+        open, in their order."""
+        instruments = {p.instrument for p in self._positions.values()}
+        instruments |= {o.instrument for o in orders}
+        factors = {i: f for i in sorted(instruments) if (f := self._factor(i)) is not None}
+        if not factors:
+            return orders
+        for position in self.open_positions():
+            if position.instrument in factors:
+                self._restate_position(position, *factors[position.instrument])
+        remaining = []
+        for order in orders:
+            if order.instrument not in factors:
+                remaining.append(order)
+                continue
+            # NSE purges an Instrument's open Orders on its Ex-Date.
+            self._cancel(order, "corporate_action")
+            if order.purpose == "entry":
+                continue
+            position = self._positions[order.position_id]
+            if order.purpose == "target":
+                limit = position.target
+            else:
+                factor, _ = factors[order.instrument]
+                limit = _round_down(Fraction(order.limit_price) * factor, self._tick(position))
+            again = replace(order, id=uuid.uuid4(), limit_price=limit, shares=position.shares)
+            self._place(again)
+            remaining.append(again)
+        return remaining
+
+    def _factor(self, instrument: str) -> tuple[Fraction, Decimal] | None:
+        """The Adjustment Factor of the splits and bonuses ex-dated in the Instrument since the
+        account's last trading day, and its last close then in the day's prices; None if
+        there are none."""
+        previous = _previous_session(self._calendar, self._day)
+        actions = queries.corporate_actions(
+            self._conn,
+            instrument,
+            start=previous + timedelta(days=1),
+            end=self._day,
+            as_of=self._day,
+        )
+        if not any(a.kind in ADJUSTED_KINDS for a in actions):
+            return None
+        # One bar read as of the day and as of the last trading day: the ratio of its factors
+        # is the actions between, de-duplicated as the Adjusted Series applies them.
+        now = [
+            b
+            for b in self._data.bars(instrument, start=previous - REFERENCE_LOOKBACK, end=previous)
+            if b.close is not None
+        ]
+        if not now:
+            raise ValueError(f"{instrument} has no close in the month to {previous}")
+        last = now[-1]
+        (then,) = queries.adjusted_daily_candles(
+            self._conn, instrument, start=last.trade_date, end=last.trade_date, as_of=previous
+        )
+        factor = last.factor / then.factor
+        if factor == 1:
+            return None
+        assert last.close is not None
+        return factor, last.close
+
+    def _restate_position(
+        self, position: queries.LedgerPosition, factor: Fraction, close: Decimal
+    ) -> None:
+        exact = Fraction(position.shares) / factor
+        shares = math.floor(exact)
+        if shares == 0:
+            raise ValueError(
+                f"{position.symbol}'s {position.shares} shares come to none after the"
+                f" Adjustment Factor {factor} on {self._day}; close the Position by hand"
+            )
+        tick = self._tick(position)
+        restated = replace(
+            position,
+            shares=shares,
+            entry=_paisa(Fraction(position.entry) * factor),
+            stop=_round_down(Fraction(position.stop) * factor, tick),
+            target=_round_down(Fraction(position.target) * factor, tick),
+            as_of=self._day,
+        )
+        self._positions[position.id] = restated
+        self._write_position(
+            restated,
+            event="restated",
+            factor=factor,
+            cash_in_lieu=_paisa((exact - shares) * Fraction(close)),
+        )
+
+    def _tick(self, position: queries.LedgerPosition) -> Decimal:
+        return self._tick_sizes.tick(
+            self._day, reference_close=self._data.reference_close(position.instrument)
+        )
 
     def close(self, instrument: str) -> Decimal:
         """The Instrument's latest close on or before the day."""
@@ -644,9 +815,24 @@ class _Account:
         self._write_order(order, event="cancelled", reason=reason)
 
     def _fill(self, order: _Order, price: Decimal) -> None:
+        """The Fill, with its charges and Slippage from the cost model; the Order's share of
+        traded value is of the 20 trading days to the Fill's."""
+        charges = self._costs.charges(
+            order.side,
+            day=self._day,
+            price=price,
+            shares=order.shares,
+            average_traded_value=self._data.average_traded_value(
+                order.instrument, TRADED_VALUE_DAYS
+            ),
+        )
         self._conn.execute(
             "INSERT INTO fills (mode, backtest_id, order_id, day, seq, position_id, instrument,"
-            " symbol, side, price, shares) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            " symbol, side, price, shares, "
+            + ", ".join(charges.items())
+            + ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s"
+            + ", %s" * len(charges.items())
+            + ")",
             (
                 self._mode,
                 self._backtest_id,
@@ -659,20 +845,31 @@ class _Account:
                 order.side,
                 price,
                 order.shares,
+                *charges.items().values(),
             ),
         )
 
-    def _write_position(self, position: queries.LedgerPosition) -> None:
+    def _write_position(
+        self,
+        position: queries.LedgerPosition,
+        *,
+        event: str | None = None,
+        factor: Fraction | None = None,
+        cash_in_lieu: Decimal | None = None,
+    ) -> None:
+        """The Position's state after an event: ``opened`` or ``closed`` by its exit unless
+        ``event`` says otherwise."""
         self._conn.execute(
             "INSERT INTO positions (mode, backtest_id, position_id, event, day, seq, run_id,"
             " rank, instrument, symbol, opened_on, shares, entry, stop, target, time_stop_days,"
-            " exit_price, exit_reason)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            " exit_price, exit_reason, factor, cash_in_lieu)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
+            " %s, %s)",
             (
                 self._mode,
                 self._backtest_id,
                 position.id,
-                "opened" if position.exit_reason is None else "closed",
+                event or ("opened" if position.exit_reason is None else "closed"),
                 self._day,
                 self._next_seq(),
                 position.run_id,
@@ -687,6 +884,8 @@ class _Account:
                 position.time_stop_days,
                 position.exit_price,
                 position.exit_reason,
+                None if factor is None else f"{factor.numerator}/{factor.denominator}",
+                cash_in_lieu,
             ),
         )
 
@@ -799,11 +998,13 @@ def _insert_run(
     as_of: date,
     rule_version: str,
     universe_size: int,
+    cash: Decimal,
+    equity: Decimal,
 ) -> None:
     conn.execute(
         "INSERT INTO runs (id, mode, backtest_id, strategy_id, as_of, universe_month,"
-        " universe_rule_version, universe_size, parameters)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        " universe_rule_version, universe_size, parameters, cash, equity)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (
             run_id,
             mode,
@@ -814,6 +1015,8 @@ def _insert_run(
             rule_version,
             universe_size,
             json.dumps(dict(strategy.parameters()), sort_keys=True),
+            cash,
+            equity,
         ),
     )
 

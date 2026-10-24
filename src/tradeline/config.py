@@ -17,6 +17,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal, get_args, get_origin, get_type_hints
 
+from tradeline.costs import Slippage
 from tradeline.risk import Limits
 
 CONFIG_PATH_VAR = "TRADELINE_CONFIG"
@@ -185,6 +186,24 @@ class Config:
                 min_reward_to_risk=Decimal(str(self.min_reward_to_risk)),
             )
 
+    @dataclass(frozen=True)
+    class Costs:
+        """The cost model (``tradeline.costs``): the checked-in dated rate schedule, the real
+        contract notes it is checked against, and Slippage's parameters."""
+
+        # Relative to the working directory.
+        schedule: str = "cost_rates.csv"
+        contract_notes: str = "contract_notes.csv"
+        # Of the Order's value, per side.
+        safety_margin: float = 0.0005
+        # c in c x (Order value / 20-day average daily traded value).
+        impact: float = 0.1
+
+        def slippage(self) -> Slippage:
+            return Slippage(
+                margin=Decimal(str(self.safety_margin)), impact=Decimal(str(self.impact))
+            )
+
     logging: Logging = field(default_factory=Logging)
     universe: UniverseRule = field(default_factory=UniverseRule)
     parity: Parity = field(default_factory=Parity)
@@ -193,6 +212,7 @@ class Config:
     corporate_actions: CorporateActions = field(default_factory=CorporateActions)
     integrity: Integrity = field(default_factory=Integrity)
     risk: Risk = field(default_factory=Risk)
+    costs: Costs = field(default_factory=Costs)
 
     def __post_init__(self) -> None:
         # One Trading Calendar serves both checks (ADR 0018); two paths could drift apart.

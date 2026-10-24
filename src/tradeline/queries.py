@@ -8,6 +8,7 @@ candles, Universe membership, sectors, announcements.
 
 from __future__ import annotations
 
+import dataclasses
 import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ from tradeline.adjust import (
     adjust,
     superseded,
 )
+from tradeline.costs import Charges
 from tradeline.dates import IST
 from tradeline.instruments import Anomaly, Interval, KeyFrom, Link, LinkCandidate
 from tradeline.sources.nse import Delisting, SymbolChange
@@ -1604,6 +1606,10 @@ class LedgerRun:
     universe_size: int
     parameters: dict[str, str]
     recorded_at: datetime
+    # The account after the day's session: cash, and Equity (cash plus the open Positions
+    # at the day's adjusted close), what the Run sized against. None before #78.
+    cash: Decimal | None = None
+    equity: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -1642,8 +1648,8 @@ def runs(
     rows = conn.execute(
         "SELECT r.id, r.mode, r.backtest_id, s.id, s.mode, s.backtest_id, s.family, s.name,"
         " s.code_revision, s.protocol, s.ranking, r.as_of, r.universe_month,"
-        " r.universe_rule_version, r.universe_size, r.parameters, r.recorded_at"
-        " FROM runs r JOIN strategies s ON (s.mode, s.id) = (r.mode, r.strategy_id)"
+        " r.universe_rule_version, r.universe_size, r.parameters, r.recorded_at, r.cash,"
+        " r.equity FROM runs r JOIN strategies s ON (s.mode, s.id) = (r.mode, r.strategy_id)"
         " WHERE (%(mode)s::text IS NULL OR r.mode = %(mode)s)"
         " AND (%(backtest_id)s::uuid IS NULL OR r.backtest_id = %(backtest_id)s)"
         " AND (%(as_of)s::date IS NULL OR r.as_of = %(as_of)s)"
@@ -1662,6 +1668,8 @@ def runs(
             universe_size=row[14],
             parameters=row[15],
             recorded_at=row[16],
+            cash=row[17],
+            equity=row[18],
         )
         for row in rows
     ]
@@ -1838,6 +1846,16 @@ class LedgerFill:
     side: str
     price: Decimal
     shares: int
+    # Its costs beyond the price, itemised; None for a Fill written before #78.
+    charges: Charges | None = None
+
+    @property
+    def cash_flow(self) -> Decimal:
+        """What the Fill moved into the account's cash: the sale's value less its charges,
+        or less the purchase's value and its charges."""
+        value = self.price * self.shares
+        costs = Decimal(0) if self.charges is None else self.charges.total
+        return value - costs if self.side == "sell" else -value - costs
 
 
 @dataclass(frozen=True)
@@ -1916,12 +1934,24 @@ def fills(
 ) -> list[LedgerFill]:
     """An account's Fills in the order they happened."""
     rows = conn.execute(
-        "SELECT order_id, day, seq, position_id, instrument, symbol, side, price, shares"
-        " FROM fills WHERE mode = %(mode)s AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s"
-        " ORDER BY day, seq",
+        "SELECT order_id, day, seq, position_id, instrument, symbol, side, price, shares, "
+        + ", ".join(_CHARGE_COLUMNS)
+        + " FROM fills WHERE mode = %(mode)s"
+        " AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s ORDER BY day, seq",
         {"mode": mode, "backtest_id": backtest_id},
     ).fetchall()
-    return [LedgerFill(*row) for row in rows]
+    return [_ledger_fill(row) for row in rows]
+
+
+def _ledger_fill(row: tuple[Any, ...]) -> LedgerFill:
+    order_id, day, seq, position_id, instrument, symbol, side, price, shares = row[:9]
+    charges = None if row[9] is None else Charges(*row[9:])
+    return LedgerFill(
+        order_id, day, seq, position_id, instrument, symbol, side, price, shares, charges
+    )
+
+
+_CHARGE_COLUMNS = tuple(f.name for f in dataclasses.fields(Charges))
 
 
 def positions(
@@ -1942,3 +1972,77 @@ def positions(
         {"mode": mode, "backtest_id": backtest_id, "open_only": open_only},
     ).fetchall()
     return [LedgerPosition(*row) for row in rows]
+
+
+@dataclass(frozen=True)
+class LedgerPositionEvent:
+    """One event of a Position, with its state after it: ``opened``, ``restated`` on a split
+    or bonus Ex-Date, or ``closed``."""
+
+    position_id: uuid.UUID
+    event: str
+    day: date
+    seq: int
+    instrument: str
+    symbol: str
+    shares: int
+    entry: Decimal
+    stop: Decimal
+    target: Decimal
+    # A restatement's Adjustment Factor and the cash paid for a fractional share.
+    factor: Fraction | None
+    cash_in_lieu: Decimal | None
+    exit_price: Decimal | None
+    exit_reason: str | None
+
+
+def position_events(
+    conn: psycopg.Connection, *, mode: EngineMode, backtest_id: uuid.UUID | None
+) -> list[LedgerPositionEvent]:
+    """Every event of an account's Positions, in the order they happened."""
+    rows = conn.execute(
+        "SELECT position_id, event, day, seq, instrument, symbol, shares, entry, stop, target,"
+        " factor, cash_in_lieu, exit_price, exit_reason FROM positions"
+        " WHERE mode = %(mode)s AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s"
+        " ORDER BY day, seq",
+        {"mode": mode, "backtest_id": backtest_id},
+    ).fetchall()
+    return [
+        LedgerPositionEvent(
+            position_id=row[0],
+            event=row[1],
+            day=row[2],
+            seq=row[3],
+            instrument=row[4],
+            symbol=row[5],
+            shares=row[6],
+            entry=row[7],
+            stop=row[8],
+            target=row[9],
+            factor=None if row[10] is None else Fraction(row[10]),
+            cash_in_lieu=row[11],
+            exit_price=row[12],
+            exit_reason=row[13],
+        )
+        for row in rows
+    ]
+
+
+def account_cash_flows(
+    conn: psycopg.Connection, *, mode: EngineMode, backtest_id: uuid.UUID | None
+) -> Decimal:
+    """The net cash an account's Fills and restatements moved: every sale's value less its
+    charges, every purchase's value and its charges taken away, plus cash paid in lieu of
+    fractional shares. An account's cash is its starting Equity plus this."""
+    charges = " + ".join(f"coalesce({c}, 0)" for c in _CHARGE_COLUMNS)
+    row = conn.execute(
+        "SELECT coalesce((SELECT sum(CASE side WHEN 'sell' THEN price * shares"
+        " ELSE -price * shares END - (" + charges + ")) FROM fills"
+        " WHERE mode = %(mode)s AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s), 0)"
+        " + coalesce((SELECT sum(cash_in_lieu) FROM positions"
+        " WHERE mode = %(mode)s AND backtest_id IS NOT DISTINCT FROM %(backtest_id)s), 0)",
+        {"mode": mode, "backtest_id": backtest_id},
+    ).fetchone()
+    assert row is not None
+    found: Decimal = row[0]
+    return found
