@@ -13,6 +13,8 @@ arrives, declaring the Market's Universe Rule in force when the Market says
 when (``RuleDeclaration``, ADR 0005's Rule Validity), and
 ``compute_universe_months`` stores the Universe under that rule.
 ``load_sectors_on`` loads the sectors as NSE's list read on a given day.
+``freeze_protocol`` stores the Universe over a range and freezes a Protocol
+whose Windows span it, at the commit the tests run at, for a backtest there.
 
 A ``Stock`` is described by its path, the prices NSE would publish if it had
 no Corporate Actions: a starting close, a slope (the close moves by it every
@@ -58,10 +60,18 @@ import psycopg
 from tradeline.config import UniverseRule
 from tradeline.costs import CostModel, Slippage, load_cost_schedule
 from tradeline.dates import IST, calendar_days, month_of, next_month
+from tradeline.engine import EXIT_BAND, STARTING_EQUITY
+from tradeline.freeze import FreezeResult
+from tradeline.freeze import freeze_protocol as freeze
 from tradeline.ingest.corporate_actions import ingest_corporate_actions, year_chunks
 from tradeline.ingest.eod import ingest_eod
+from tradeline.protocol import Gate, Layout, Terms, months_between
+from tradeline.revision import git_commit
+from tradeline.risk import Limits
 from tradeline.sectors import load_sectors
 from tradeline.sources import kite, nse
+from tradeline.strategy import Strategy
+from tradeline.strategy.pullback import PullbackV1
 from tradeline.trading_calendar import TradingCalendar, load_trading_calendar
 from tradeline.transport import PlaybackTransport, RecordingTransport, Request, Response
 from tradeline.universe import compute_universe, declare_rule_validity
@@ -459,6 +469,76 @@ def compute_universe_months(
     while month <= last:
         compute_universe(conn, market.rule, month=month)
         month = next_month(month)
+
+
+# The spec's grid (#72).
+GRID = {
+    "k": (Decimal("1.5"), Decimal("2"), Decimal("2.5"), Decimal("3")),
+    "r": (Decimal("1.5"), Decimal("2"), Decimal("3")),
+    "n": (Decimal(5), Decimal(10), Decimal(15)),
+}
+
+
+def protocol_terms(first: date, last: date) -> Terms:
+    """The spec's Terms with one Window spanning the months of ``first`` to ``last``: the
+    Holdout the last month, the Out-of-Sample Window the month before, and every month
+    before that In-Sample (at least one)."""
+    months = len(months_between(first, last))
+    if months < 3:
+        raise ValueError(
+            "a Protocol's Windows need three months: In-Sample, Out-of-Sample, Holdout"
+        )
+    return Terms(
+        grid=GRID,
+        min_in_sample_trades=30,
+        layout=Layout(
+            holdout_start=month_of(last),
+            holdout_months=1,
+            windows=1,
+            out_of_sample_months=1,
+            in_sample_months=months - 2,
+        ),
+        band=EXIT_BAND,
+        starting_equity=STARTING_EQUITY,
+        risk_free_rate=Decimal("0.065"),
+        gate=Gate(
+            sharpe_above=Decimal("1.0"),
+            drawdown_below=Decimal("0.15"),
+            profit_factor_above=Decimal("1.3"),
+            min_stitched_trades=150,
+        ),
+        warm_up_trading_days=250,
+    )
+
+
+def freeze_protocol(
+    conn: psycopg.Connection,
+    market: Market,
+    first: date,
+    last: date,
+    *,
+    terms: Terms | None = None,
+    strategy: Strategy | None = None,
+    limits: Limits | None = None,
+    commit: str | None = None,
+) -> FreezeResult:
+    """Store the Universe for the months of ``first`` to ``last`` and freeze a Protocol over
+    them (``protocol_terms`` unless ``terms`` is given) for ``pullback_v1`` under the
+    Market's rule, the default Limits and Slippage and the checked-in schedule as of
+    ``COSTS_AS_OF``, at the commit the tests run at unless ``commit`` is given."""
+    compute_universe_months(conn, market, first, last)
+    return freeze(
+        conn,
+        terms or protocol_terms(first, last),
+        strategy=strategy or PullbackV1(),
+        rule_version=market.rule.version,
+        limits=limits or Limits(),
+        schedule=load_cost_schedule(REPO_ROOT / "cost_rates.csv"),
+        slippage=Slippage(),
+        costs_as_of=COSTS_AS_OF,
+        calendar=repo_calendar(),
+        commit=commit or git_commit(),
+    )
 
 
 # --- The base Market ----------------------------------------------------------

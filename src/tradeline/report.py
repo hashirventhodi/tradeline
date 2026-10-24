@@ -31,7 +31,7 @@ import time
 import uuid
 from collections import Counter, defaultdict
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
@@ -40,7 +40,7 @@ import psycopg
 
 from tradeline import queries
 from tradeline.costs import CostModel
-from tradeline.engine import STARTING_EQUITY, backtest
+from tradeline.engine import backtest
 from tradeline.metrics import (
     HaltDay,
     HaltLimits,
@@ -51,7 +51,7 @@ from tradeline.metrics import (
     profit_factor,
     sharpe,
 )
-from tradeline.risk import UNCLASSIFIED, Limits
+from tradeline.risk import UNCLASSIFIED
 from tradeline.strategy import Strategy
 from tradeline.tick_sizes import TickSizes
 from tradeline.trading_calendar import TradingCalendar
@@ -274,6 +274,7 @@ class BacktestReport:
         by_limit = Counter(b.limit for b in account.blocks)
         halts = self.halt_days
         return {
+            "protocol": self.strategy.protocol,
             "strategy": {
                 "family": self.strategy.family,
                 "name": self.strategy.name,
@@ -398,62 +399,60 @@ def report_backtest(
     conn: psycopg.Connection,
     strategy: Strategy,
     *,
+    protocol: str | None,
     start: date,
     end: date,
     calendar: TradingCalendar,
-    rule_version: str,
-    limits: Limits,
     tick_sizes: TickSizes,
-    costs: CostModel,
-    risk_free_rate: Decimal,
     halts: HaltLimits,
     contract_notes: int,
-    starting_equity: Decimal = STARTING_EQUITY,
 ) -> ReportResult:
-    """Backtest the cell from ``start`` to ``end``, then with c at zero and at twice
-    ``costs``' impact, and report all three from the Ledger."""
+    """Backtest the cell from ``start`` to ``end`` under the frozen Protocol ``protocol``,
+    then with its Slippage impact c at zero and at twice its value, and report all three from
+    the Ledger, scored at the Protocol's risk-free rate."""
 
-    def timed(model: CostModel) -> tuple[uuid.UUID, float]:
+    def timed(impact: Decimal | None) -> tuple[uuid.UUID, float]:
         began = time.monotonic()
         results = backtest(
             conn,
             strategy,
+            protocol=protocol,
             start=start,
             end=end,
             calendar=calendar,
-            rule_version=rule_version,
-            limits=limits,
             tick_sizes=tick_sizes,
-            costs=model,
-            starting_equity=starting_equity,
+            impact=impact,
         )
         found = results[0].backtest_id
         assert found is not None
         return found, time.monotonic() - began
 
-    backtest_id, seconds = timed(costs)
-    impact = costs.slippage.impact
+    backtest_id, seconds = timed(None)
+    (ran, *_) = queries.runs(conn, mode="backtest", backtest_id=backtest_id)
+    assert ran.strategy.protocol is not None
+    frozen = queries.protocol(conn, ran.strategy.protocol)
+    assert frozen is not None
+    terms = frozen.protocol
     variant_ids: dict[str, uuid.UUID] = {}
     variant_seconds: dict[str, float] = {}
     variants = []
-    for value in (Decimal(0), impact * 2):
-        model = replace(costs, slippage=replace(costs.slippage, impact=value))
-        variant_ids[str(value)], variant_seconds[str(value)] = timed(model)
+    for value in (Decimal(0), terms.slippage.impact * 2):
+        variant_ids[str(value)], variant_seconds[str(value)] = timed(value)
+        (first, *_) = queries.runs(conn, mode="backtest", backtest_id=variant_ids[str(value)])
+        assert first.impact is not None
         account = read_account(conn, variant_ids[str(value)])
-        variants.append(Variant(value, account.scores(risk_free_rate=risk_free_rate)))
-    account = read_account(conn, backtest_id)
-    (ran, *_) = queries.runs(conn, mode="backtest", backtest_id=backtest_id)
+        variants.append(Variant(first.impact, account.scores(risk_free_rate=terms.risk_free_rate)))
     report = BacktestReport(
         strategy=ran.strategy,
         parameters=ran.parameters,
         rule_version=ran.universe_rule_version,
         start=start,
         end=end,
-        starting_equity=starting_equity,
-        costs=costs,
-        risk_free_rate=risk_free_rate,
+        starting_equity=terms.starting_equity,
+        costs=terms.cost_model(),
+        risk_free_rate=terms.risk_free_rate,
         halts=halts,
-        account=account,
+        account=read_account(conn, backtest_id),
         variants=tuple(variants),
         contract_notes=contract_notes,
     )

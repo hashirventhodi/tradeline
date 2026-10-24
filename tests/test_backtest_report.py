@@ -2,8 +2,10 @@
 from its JSON (and, for Sharpe's curve, the query layer).
 
 The two-year report is ``synthetic_eod.two_year_market`` from 2022-07-01 to
-2024-06-28, as ``test_positions.py`` backtests it (k = 2, r = 2, n = 10, Rs
-5,00,000, the cost schedule as of 2026-10-24, c = 0.1), with the Halts lowered
+2024-06-28 under a Protocol frozen over it (``synthetic_eod.freeze_protocol``),
+as ``test_positions.py`` backtests it (k = 2, r = 2, n = 10, Rs 5,00,000, the
+cost schedule as of 2026-10-24, c = 0.1, risk-free 6.5 percent), with the Halts
+(configuration, not the Protocol's) lowered
 to a 0.8 percent daily loss and a 1.4 percent drawdown so that some fire. Its
 six closed trades, worked in ``test_positions.py``, net Rs 945.79, 2,553.64,
 3,776.42, 2,603.77 and -5,589.17 (the differences of the Runs' Equity there),
@@ -33,10 +35,11 @@ to 5,04,418.41, 5,605.52 under the peak (0.010991). The drawdown Halt fires firs
 after.
 
 The short reports are ``synthetic_eod.base_market`` over ``RUN_DAY`` and the
-day after, as ``test_verdicts.py`` works RUN_DAY: ALPHA and GAMMA Pass, BETA is
-Blocked by the sector Limit in Unclassified; both entries fill on 2023-06-16 at
-their limits and are open at the end. With at most one new entry a Run, GAMMA
-and BETA are Candidates beyond the Passes instead.
+day after, under a Protocol frozen over the quarter to June 2023, as
+``test_verdicts.py`` works RUN_DAY: ALPHA and GAMMA Pass, BETA is Blocked by
+the sector Limit in Unclassified; both entries fill on 2023-06-16 at their
+limits and are open at the end. Under a Protocol whose Limits allow one new
+entry a Run, GAMMA and BETA are Candidates beyond the Passes instead.
 """
 
 import contextlib
@@ -52,13 +55,12 @@ from typing import Any
 import pytest
 
 from synthetic_eod import (
-    COSTS_AS_OF,
     REPO_ROOT,
     RUN_DAY,
     TWO_YEARS,
     Market,
     base_market,
-    compute_universe_months,
+    freeze_protocol,
     load_market,
     repo_calendar,
     two_year_market,
@@ -67,11 +69,14 @@ from synthetic_eod import (
 from tradeline import queries
 from tradeline.cli import main
 from tradeline.db import app_connection
+from tradeline.risk import Limits
 
 D = Decimal
 # The stated CI budget for the fixture backtest: two years (494 trading days) of three
 # Universe members, one cell, its Runs, Orders, Fills and Positions written to the Ledger.
 FIXTURE_BUDGET_SECONDS = 20.0
+# The short reports' Protocol: In-Sample April, Out-of-Sample May, Holdout June 2023.
+QUARTER = (date(2023, 4, 1), date(2023, 6, 30))
 
 
 def config_text(market: Market, extra_risk: str = "") -> str:
@@ -95,14 +100,17 @@ def report_over(
     start: date,
     end: date,
     *,
+    frozen_over: tuple[date, date] | None = None,
+    limits: Limits | None = None,
     extra_risk: str = "",
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Load the market, report it from ``start`` to ``end``; the report's JSON and the
-    command's last log line."""
+    """Load the market, freeze a Protocol over ``frozen_over`` (``start`` to ``end`` unless
+    given) with ``limits``, and report it from ``start`` to ``end``; the report's JSON and
+    the command's last log line."""
     fixtures = write_fixtures(market, directory / "fixtures", repo_calendar())
     with app_connection(database_url) as conn:
         load_market(conn, fixtures, market)
-        compute_universe_months(conn, market, start, end)
+        frozen = freeze_protocol(conn, market, *(frozen_over or (start, end)), limits=limits)
     config = directory / "tradeline.toml"
     config.write_text(config_text(market, extra_risk))
     out = directory / "report.json"
@@ -111,8 +119,7 @@ def report_over(
         patch.setenv("TRADELINE_CONFIG", str(config))
         patch.setenv("DATABASE_URL", database_url)
         arguments = ["--from", start.isoformat(), "--to", end.isoformat(), "--out", str(out)]
-        costs = ["--costs-as-of", COSTS_AS_OF.isoformat()]
-        assert main(["backtest", "report", *arguments, *costs]) == 0
+        assert main(["backtest", "report", *arguments, "--protocol", frozen.hash]) == 0
     finished = json.loads(logs.getvalue().splitlines()[-1])
     assert finished["msg"] == "backtest report finished"
     found: dict[str, Any] = json.loads(out.read_text())
@@ -248,6 +255,15 @@ def test_the_report_states_the_results_with_c_at_zero_and_at_twice_its_value(
     assert len(set(ending)) == 3
     factors = [D(x["profit_factor"]) for x in (zero, report["metrics"], double)]
     assert factors == sorted(factors, reverse=True)
+    # Each variant's Runs record the c they were priced with; the cell's are the Protocol's.
+    finished, database_url = two_years[1], two_years[2]
+    labelled = [("cell", finished["backtest_id"]), *finished["variant_ids"].items()]
+    with app_connection(database_url) as conn:
+        impacts = {
+            label: {r.impact for r in queries.runs(conn, backtest_id=uuid.UUID(found))}
+            for label, found in labelled
+        }
+    assert impacts == {"cell": {None}, "0": {D(0)}, "0.2": {D("0.2")}}
 
 
 def test_the_fixture_backtest_runs_within_its_stated_budget(
@@ -259,7 +275,14 @@ def test_the_fixture_backtest_runs_within_its_stated_budget(
 def test_open_positions_at_the_end_are_marked_and_listed_and_unclassified_blocks_counted(
     fresh_database_url: str, tmp_path: Path
 ) -> None:
-    report, _ = report_over(fresh_database_url, tmp_path, base_market(), RUN_DAY, date(2023, 6, 16))
+    report, _ = report_over(
+        fresh_database_url,
+        tmp_path,
+        base_market(),
+        RUN_DAY,
+        date(2023, 6, 16),
+        frozen_over=QUARTER,
+    )
 
     assert report["metrics"]["trades"] == 0
     assert report["closed_trades"] == []
@@ -281,7 +304,8 @@ def test_the_report_counts_the_candidates_beyond_the_passes(
         base_market(),
         RUN_DAY,
         RUN_DAY,
-        extra_risk="max_new_entries = 1\n",
+        frozen_over=QUARTER,
+        limits=Limits(max_new_entries=1),
     )
 
     assert report["candidates_beyond_passes"] == 2

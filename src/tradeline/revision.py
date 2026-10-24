@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import subprocess
 from pathlib import Path
 
 import tradeline.strategy
@@ -47,6 +48,27 @@ def code_revision(module: str, *, package_dir: Path = PACKAGE_DIR) -> str:
         digest.update(name.encode() + b"\0")
         digest.update(ast.dump(tree, include_attributes=False).encode() + b"\0")
     return digest.hexdigest()
+
+
+def git_commit(directory: Path = PACKAGE_DIR) -> str:
+    """The git commit the code under ``directory`` is checked out at, the one a Protocol is
+    frozen at and every run under it must share (ADR 0007), with ``-dirty`` added when a
+    tracked file differs from it."""
+    try:
+        head = _git(directory, "rev-parse", "HEAD").strip()
+        changed = _git(directory, "status", "--porcelain", "--untracked-files=no").strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise ValueError(
+            f"cannot read the git commit of {directory}: {error}; a Protocol needs the code"
+            " run from a git checkout"
+        ) from error
+    return f"{head}-dirty" if changed else head
+
+
+def _git(directory: Path, *arguments: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(directory), *arguments], capture_output=True, text=True, check=True
+    ).stdout
 
 
 def docstring_reads(package_dir: Path = PACKAGE_DIR) -> list[str]:

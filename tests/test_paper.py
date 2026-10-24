@@ -39,6 +39,7 @@ from synthetic_eod import (
     Gap,
     base_market,
     compute_universe_months,
+    freeze_protocol,
     load_market,
     load_sectors_on,
     repo_calendar,
@@ -60,6 +61,8 @@ NEXT_DAY = date(2023, 6, 16)
 DAYS = tuple(repo_calendar().trading_days(RUN_DAY, date(2023, 7, 5)))
 LIMITS = Limits()
 TICK_SIZES = load_tick_sizes(REPO_ROOT / "tick_sizes.csv")
+# A backtest runs under a Protocol: one whose Holdout is the month the days end in.
+PROTOCOL_FROM = date(2023, 4, 1)
 
 # Every method through which the engine asks a component to decide, size, price or fill.
 SPIED: tuple[tuple[type, str], ...] = (
@@ -161,7 +164,9 @@ def both_modes(loaded: str) -> BothModes:
             )
             for cls, name in SPIED
         }
-        backtest(conn, strategy, start=DAYS[0], end=DAYS[-1], **shared)
+        frozen = freeze_protocol(conn, MARKET, PROTOCOL_FROM, DAYS[-1], limits=LIMITS)
+        unversioned = {k: v for k, v in shared.items() if k not in ("rule_version", "limits")}
+        backtest(conn, strategy, protocol=frozen.hash, start=DAYS[0], end=DAYS[-1], **unversioned)
         in_backtest = {name: len(spy.call_args_list) for name, spy in spies.items()}
         for day in DAYS:
             paper(conn, strategy, clock=on(day), **shared)
@@ -265,9 +270,17 @@ def test_an_unclassified_member_in_a_paper_run_raises_the_stale_sector_map_alert
     }
     with app_connection(another_database_url) as conn:
         load_market(conn, fixtures, MARKET)
-        compute_universe_months(conn, MARKET, RUN_DAY, RUN_DAY)
+        frozen = freeze_protocol(conn, MARKET, PROTOCOL_FROM, RUN_DAY, limits=LIMITS)
         with caplog.at_level(logging.WARNING, logger="tradeline.engine"):
-            backtest(conn, PullbackV1(), start=RUN_DAY, end=RUN_DAY, **shared)
+            backtest(
+                conn,
+                PullbackV1(),
+                protocol=frozen.hash,
+                start=RUN_DAY,
+                end=RUN_DAY,
+                calendar=repo_calendar(),
+                tick_sizes=TICK_SIZES,
+            )
         assert not [r for r in caplog.records if r.getMessage() == "stale sector map"]
 
         with caplog.at_level(logging.WARNING, logger="tradeline.engine"):

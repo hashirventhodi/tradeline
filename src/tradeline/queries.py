@@ -9,6 +9,8 @@ candles, Universe membership, sectors, announcements.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import json
 import uuid
 from bisect import bisect_left, bisect_right
 from collections.abc import Iterable, Sequence
@@ -33,6 +35,7 @@ from tradeline.adjust import (
 from tradeline.costs import Charges
 from tradeline.dates import IST
 from tradeline.instruments import Anomaly, Interval, KeyFrom, Link, LinkCandidate
+from tradeline.protocol import Protocol
 from tradeline.sources.nse import Delisting, SymbolChange
 
 
@@ -897,6 +900,39 @@ def universe_window_hashes(
     return row[0], row[1]
 
 
+def adjusted_series_hash(
+    conn: psycopg.Connection, instrument: str, *, start: date, end: date
+) -> str:
+    """SHA-256 of an Instrument's Adjusted Series from ``start`` to ``end`` as it stood on
+    ``end``: each bar's day, Symbol, series, prices, volume, cumulative factor and later
+    Flagged Actions, oldest first.
+
+    Every Run as of a day in the range reads bars derived from these raw rows
+    and a subset of these actions, so an end-of-day row or a split or bonus
+    that changes in the range changes the hash.
+    """
+    digest = hashlib.sha256()
+    for bar in adjusted_daily_candles(conn, instrument, start=start, end=end, as_of=end):
+        flagged = ",".join(f"{a.ex_date}:{a.kind}" for a in bar.unadjusted)
+        line = "|".join(
+            str(value)
+            for value in (
+                bar.trade_date,
+                bar.symbol,
+                bar.series,
+                bar.open,
+                bar.high,
+                bar.low,
+                bar.close,
+                bar.volume,
+                bar.factor,
+                flagged,
+            )
+        )
+        digest.update(line.encode() + b"\n")
+    return digest.hexdigest()
+
+
 @dataclass(frozen=True)
 class MinuteCandle:
     ts: datetime  # the minute the bar starts
@@ -1665,7 +1701,8 @@ class LedgerStrategy:
     family: str
     name: str
     code_revision: str
-    # The Protocol it ran under; None before Protocols exist (#81).
+    # The hash of the Protocol it ran under (every backtest has one); None for a Run
+    # outside one, such as a paper Run.
     protocol: str | None
     ranking: str
 
@@ -1688,6 +1725,9 @@ class LedgerRun:
     equity: Decimal | None = None
     # A paper dry-run's Run (#80), which the Paper Gate never counts.
     dry_run: bool = False
+    # The Slippage impact c it was priced with in place of its Protocol's (a report's c
+    # sensitivity, #79); None for the Protocol's own.
+    impact: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -1728,7 +1768,7 @@ def runs(
         "SELECT r.id, r.mode, r.backtest_id, s.id, s.mode, s.backtest_id, s.family, s.name,"
         " s.code_revision, s.protocol, s.ranking, r.as_of, r.universe_month,"
         " r.universe_rule_version, r.universe_size, r.parameters, r.recorded_at, r.cash,"
-        " r.equity, r.dry_run"
+        " r.equity, r.dry_run, r.impact"
         " FROM runs r JOIN strategies s ON (s.mode, s.id) = (r.mode, r.strategy_id)"
         " WHERE (%(mode)s::text IS NULL OR r.mode = %(mode)s)"
         " AND (%(backtest_id)s::uuid IS NULL OR r.backtest_id = %(backtest_id)s)"
@@ -1752,6 +1792,7 @@ def runs(
             cash=row[17],
             equity=row[18],
             dry_run=row[19],
+            impact=row[20],
         )
         for row in rows
     ]
@@ -2169,3 +2210,45 @@ def paper_gate_trades(conn: psycopg.Connection) -> list[LedgerPosition]:
         for p in positions(conn, mode="paper", backtest_id=None, dry_run=False)
         if p.closed_on is not None
     ]
+
+
+@dataclass(frozen=True)
+class FrozenProtocol:
+    """A Protocol in the Ledger: its key, when it was frozen, and what it states."""
+
+    hash: str
+    frozen_at: datetime
+    protocol: Protocol
+
+
+# The shortest prefix of a Protocol's hash that names it.
+PROTOCOL_PREFIX = 12
+
+
+def protocols(conn: psycopg.Connection) -> list[FrozenProtocol]:
+    """Every frozen Protocol, in the order frozen."""
+    rows = conn.execute(
+        "SELECT hash, frozen_at, content FROM protocols ORDER BY frozen_at, hash"
+    ).fetchall()
+    return [FrozenProtocol(h, at, Protocol.from_content(json.loads(c))) for h, at, c in rows]
+
+
+def protocol(conn: psycopg.Connection, name: str) -> FrozenProtocol | None:
+    """The frozen Protocol whose hash is ``name``, or starts with it (at least 12 hex
+    characters); None if no Protocol has it. A prefix two Protocols share is refused."""
+    if len(name) < PROTOCOL_PREFIX:
+        raise ValueError(
+            f"a Protocol is named by at least {PROTOCOL_PREFIX} characters of its hash,"
+            f" not {name!r}"
+        )
+    rows = conn.execute(
+        "SELECT hash, frozen_at, content FROM protocols WHERE starts_with(hash, %s)"
+        " ORDER BY hash LIMIT 2",
+        (name.lower(),),
+    ).fetchall()
+    if len(rows) > 1:
+        raise ValueError(f"{name} names more than one Protocol; give more of its hash")
+    if not rows:
+        return None
+    ((found, frozen_at, content),) = rows
+    return FrozenProtocol(found, frozen_at, Protocol.from_content(json.loads(content)))
