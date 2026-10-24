@@ -35,6 +35,7 @@ from tradeline.adjust import (
 from tradeline.costs import Charges
 from tradeline.dates import IST
 from tradeline.instruments import Anomaly, Interval, KeyFrom, Link, LinkCandidate
+from tradeline.paper_broker import ExitReason, OrderPurpose
 from tradeline.protocol import Protocol
 from tradeline.sources.nse import Delisting, SymbolChange
 
@@ -1949,7 +1950,7 @@ class LedgerOrder:
     symbol: str
     side: str
     # ``entry``, ``target``, ``stop``, ``time`` or ``boundary``.
-    purpose: str
+    purpose: OrderPurpose
     limit_price: Decimal
     shares: int
     # The trading day it can fill on.
@@ -2008,7 +2009,7 @@ class LedgerPosition:
     # The day of its latest event: the day it closed, once closed.
     as_of: date
     # ``stop``, ``target``, ``time`` or ``boundary``; None while open.
-    exit_reason: str | None
+    exit_reason: ExitReason | None
     exit_price: Decimal | None
 
     @property
@@ -2137,7 +2138,7 @@ class LedgerPositionEvent:
     factor: Fraction | None
     cash_in_lieu: Decimal | None
     exit_price: Decimal | None
-    exit_reason: str | None
+    exit_reason: ExitReason | None
 
 
 def position_events(

@@ -12,7 +12,7 @@ from decimal import Decimal
 
 from tradeline.metrics import (
     HaltDay,
-    Trade,
+    PositionResult,
     expectancy,
     halt_days,
     max_drawdown,
@@ -46,7 +46,7 @@ def test_profit_factor_is_gross_profit_over_gross_loss_and_undefined_without_a_l
 
 
 def test_expectancy_is_the_mean_net_pnl_per_trade_in_rupees_and_as_a_fraction_of_equity() -> None:
-    trades = [Trade(D(300), D(100000)), Trade(D(-100), D(50000))]
+    trades = [PositionResult(D(300), D(100000)), PositionResult(D(-100), D(50000))]
 
     found = expectancy(trades)
 

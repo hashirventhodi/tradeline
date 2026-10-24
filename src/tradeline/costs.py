@@ -42,6 +42,7 @@ from __future__ import annotations
 from dataclasses import dataclass, fields
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from fractions import Fraction
 from pathlib import Path
 from typing import Literal
 
@@ -171,8 +172,8 @@ class CostModel:
             raise ValueError(f"side {side!r} is not buy or sell")
         rates = self.schedule.rates(self.rates_as_of or day)
         value = price * shares
-        exchange = _paisa(value * rates.exchange)
-        sebi = _paisa(value * rates.sebi)
+        exchange = paisa(value * rates.exchange)
+        sebi = paisa(value * rates.sebi)
         selling = side == "sell"
         dp = rates.dp_charge if selling else _ZERO
         share = value / average_traded_value if average_traded_value > 0 else Decimal(1)
@@ -181,10 +182,10 @@ class CostModel:
             stamp_duty=_ZERO if selling else _rupee(value * rates.stamp_duty),
             exchange_charge=exchange,
             sebi_fee=sebi,
-            gst=_paisa((exchange + sebi) * rates.gst),
+            gst=paisa((exchange + sebi) * rates.gst),
             dp_charge=dp,
-            dp_gst=_paisa(dp * rates.gst),
-            slippage=_paisa(value * (self.slippage.margin + self.slippage.impact * share)),
+            dp_gst=paisa(dp * rates.gst),
+            slippage=paisa(value * (self.slippage.margin + self.slippage.impact * share)),
         )
 
 
@@ -192,7 +193,10 @@ def _rupee(value: Decimal) -> Decimal:
     return value.quantize(_RUPEE, rounding=ROUND_HALF_UP)
 
 
-def _paisa(value: Decimal) -> Decimal:
+def paisa(value: Decimal | Fraction) -> Decimal:
+    """``value`` to the paisa, half up."""
+    if isinstance(value, Fraction):
+        value = Decimal(value.numerator) / Decimal(value.denominator)
     return value.quantize(_PAISA, rounding=ROUND_HALF_UP)
 
 

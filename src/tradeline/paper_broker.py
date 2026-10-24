@@ -39,7 +39,12 @@ from tradeline.strategy.pricing import round_down
 UnfilledReason = Literal[
     "no_bar", "circuit_lock", "open_above_limit", "open_below_limit", "not_reached", "stop_reached"
 ]
-ExitReason = Literal["stop", "time"]
+# What a completed bar can trigger: a stop, or the time stop.
+ExitTrigger = Literal["stop", "time"]
+# Why a Position closed: a stop or time-stop exit, its target, or a Boundary Exit.
+ExitReason = Literal["stop", "time", "target", "boundary"]
+# What an Order is for: an entry, or one of a Position's exits.
+OrderPurpose = Literal["entry", "target", "stop", "time", "boundary"]
 
 
 @dataclass(frozen=True)
@@ -113,7 +118,7 @@ def fill_boundary(bar: Bar | None, *, last_close: Decimal) -> Filled:
 
 def exit_trigger(
     bar: Bar, *, stop: Decimal, days_held: int, time_stop_days: int
-) -> ExitReason | None:
+) -> ExitTrigger | None:
     """The exit the completed bar triggers, if any; a stop before a time stop."""
     if bar.low <= stop:
         return "stop"
@@ -146,7 +151,7 @@ class FillModel:
 
     def trigger(
         self, bar: Bar, *, stop: Decimal, days_held: int, time_stop_days: int
-    ) -> ExitReason | None:
+    ) -> ExitTrigger | None:
         return exit_trigger(bar, stop=stop, days_held=days_held, time_stop_days=time_stop_days)
 
     def exit_limit(self, close: Decimal, *, band: Decimal, tick: Decimal) -> Decimal:

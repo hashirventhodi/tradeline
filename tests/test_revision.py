@@ -42,7 +42,7 @@ def test_the_revision_of_a_copy_is_the_revision_of_the_package(tree: Path) -> No
         ("pullback.py", "FAST = 20", "FAST = 21"),
         ("indicators.py", "abs(bar.low - previous_close))", "abs(bar.low - bar.low))"),
         ("__init__.py", "    rank: int\n", "    rank: int\n    note: str = ''\n"),
-        ("pricing.py", "rounding=ROUND_FLOOR) * tick", "rounding=ROUND_FLOOR) * tick * 1"),
+        ("pricing.py", "Fraction(tick)) * tick", "Fraction(tick)) * tick * 1"),
     ],
     ids=["the-strategy", "an-imported-module", "the-interface", "plan-pricing"],
 )

@@ -145,7 +145,7 @@ def test_the_report_states_the_metrics_of_the_fixture_backtest_as_worked_by_hand
         "ending_equity": "502503.59",
         "open_positions": 0,
     }
-    assert [t["net_pnl"] for t in report["closed_trades"]] == [
+    assert [t["net_pnl"] for t in report["closed_positions"]] == [
         "945.79",
         "2553.64",
         "3776.42",
@@ -276,7 +276,7 @@ def test_open_positions_at_the_end_are_marked_and_listed_and_unclassified_blocks
     )
 
     assert report["metrics"]["trades"] == 0
-    assert report["closed_trades"] == []
+    assert report["closed_positions"] == []
     assert [
         (p["symbol"], p["opened_on"], p["shares"], p["entry"]) for p in report["open_positions"]
     ] == [("ALPHA", "2023-06-16", 267, "280.00"), ("GAMMA", "2023-06-16", 133, "560.00")]

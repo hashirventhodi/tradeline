@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import astuple, dataclass, fields
 from decimal import ROUND_FLOOR, Decimal
+from fractions import Fraction
 
 from tradeline.strategy import Plan
 
@@ -54,8 +56,9 @@ class PricedPlan:
         return hashlib.sha256(canonical.encode()).hexdigest()
 
 
-def round_down(price: Decimal, tick: Decimal) -> Decimal:
-    return (price / tick).to_integral_value(rounding=ROUND_FLOOR) * tick
+def round_down(price: Decimal | Fraction, tick: Decimal) -> Decimal:
+    """``price`` rounded down to the tick, exactly."""
+    return math.floor(Fraction(price) / Fraction(tick)) * tick
 
 
 def shares_within(budget: Decimal, per_share: Decimal) -> int:

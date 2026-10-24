@@ -29,14 +29,18 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, localcontext
+from typing import Literal
 
 TRADING_DAYS_A_YEAR = 252
 
+# The Limits that Halt (``docs/risk-controls.md``), by name.
+HaltLimit = Literal["daily_loss", "drawdown"]
+
 
 @dataclass(frozen=True)
-class Trade:
-    """A closed trade as the metrics read it: its net P&L after every charge and Slippage,
-    and the Equity its Plan was sized against."""
+class PositionResult:
+    """A closed Position as the metrics read it: its net P&L after every charge and
+    Slippage, and the Equity its Plan was sized against."""
 
     net_pnl: Decimal
     equity_at_entry: Decimal
@@ -53,8 +57,8 @@ class HaltLimits:
     """The Limits that Halt live (``docs/risk-controls.md``): a day's loss on the day
     before's Equity, and the fall from the Equity peak, as fractions."""
 
-    daily_loss: Decimal = Decimal("0.03")
-    drawdown: Decimal = Decimal("0.10")
+    daily_loss: Decimal
+    drawdown: Decimal
 
 
 @dataclass(frozen=True)
@@ -63,7 +67,7 @@ class HaltDay:
     the day before's Equity (negative for a gain), and the drawdown from the peak so far."""
 
     day: date
-    limits: tuple[str, ...]
+    limits: tuple[HaltLimit, ...]
     daily_loss: Decimal
     drawdown: Decimal
 
@@ -109,7 +113,7 @@ def profit_factor(pnls: Sequence[Decimal]) -> Decimal | None:
     return None if loss == 0 else profit / loss
 
 
-def expectancy(trades: Sequence[Trade]) -> Expectancy | None:
+def expectancy(trades: Sequence[PositionResult]) -> Expectancy | None:
     """None without a closed trade."""
     if not trades:
         return None
@@ -129,7 +133,10 @@ def halt_days(
     falls = drawdowns(curve)
     for i, (day, equity, fall) in enumerate(zip(days, curve, falls, strict=True)):
         loss = Decimal(0) if i == 0 else (curve[i - 1] - equity) / curve[i - 1]
-        checks = (("daily_loss", loss, daily_loss), ("drawdown", fall, drawdown))
+        checks: tuple[tuple[HaltLimit, Decimal, Decimal], ...] = (
+            ("daily_loss", loss, daily_loss),
+            ("drawdown", fall, drawdown),
+        )
         limits = tuple(name for name, value, limit in checks if value >= limit)
         if limits:
             found.append(HaltDay(day, limits, loss, fall))

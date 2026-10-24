@@ -27,9 +27,9 @@ the clock and the data's origin, never what the Strategy or the Risk Engine
 does: the code below has no branch on it beyond the backtest id the Ledger
 requires.
 
-In backtest mode the clock is simulated: ``SimulatedClock`` steps one trading
-day at a time over the Trading Calendar, and each step is one Run as of that
-day. The data source, ``StoredMarketData``, is bound to the Run's As-Of Date and
+In backtest mode the clock is the Backtest's: ``BacktestClock`` steps one
+trading day at a time over the Trading Calendar, and each step is one Run as of
+that day. The data source, ``StoredMarketData``, is bound to the Run's As-Of Date and
 refuses any read past it. A backtest loads each Instrument's rows once
 (``SeriesCache``) and re-adjusts them only when an action's Ex-Date passes, the
 only day its Adjusted Series changes; each read is still as of the Run's day.
@@ -88,18 +88,27 @@ import uuid
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 from fractions import Fraction
-from typing import Any, Literal, Protocol, TypeVar
+from typing import Any, Protocol, TypeVar
 
 import psycopg
 
 from tradeline import queries
 from tradeline.adjust import ADJUSTED_KINDS, AdjustedBar, CorporateAction
-from tradeline.costs import CostModel
+from tradeline.costs import CostModel, paisa
 from tradeline.dates import IST, month_of
 from tradeline.freeze import verify_snapshot
-from tradeline.paper_broker import FILL_MODEL, Bar, FillModel, Unfilled
+from tradeline.paper_broker import (
+    FILL_MODEL,
+    Bar,
+    ExitReason,
+    ExitTrigger,
+    FillModel,
+    OrderPurpose,
+    Unfilled,
+)
+from tradeline.queries import EngineMode
 from tradeline.revision import code_revision, git_commit
 from tradeline.risk import (
     RISK_ENGINE,
@@ -113,14 +122,13 @@ from tradeline.risk import (
     verify_pass,
 )
 from tradeline.strategy import Candidate, Member, Plan, Strategy
+from tradeline.strategy.pricing import round_down
 from tradeline.tick_sizes import TickSizes
 from tradeline.trading_calendar import TradingCalendar
 
 log = logging.getLogger(__name__)
 
 T = TypeVar("T")
-
-EngineMode = Literal["backtest", "paper", "live"]
 
 # Equity at the start of a backtest, until the Protocol states it (#81).
 STARTING_EQUITY = Decimal("500000")
@@ -135,8 +143,8 @@ SERIES_LOOKBACK = timedelta(days=730)
 REFERENCE_LOOKBACK = timedelta(days=31)
 
 
-class SimulatedClock:
-    """Backtest time: the Trading Calendar's open days from ``start`` to ``end``."""
+class BacktestClock:
+    """A Backtest's time: the Trading Calendar's open days from ``start`` to ``end``."""
 
     def __init__(self, calendar: TradingCalendar, *, start: date, end: date) -> None:
         if end < start:
@@ -606,7 +614,7 @@ def backtest(
     impact: Decimal | None = None,
 ) -> list[RunResult]:
     """A backtest under the frozen Protocol ``protocol`` (its hash, or 12 or more characters
-    of it) from ``start`` to ``end``: one day per step of the simulated clock, each filling
+    of it) from ``start`` to ``end``: one day per step of the Backtest's clock, each filling
     the day before's Orders and then Running, all under one backtest id, one account
     starting at the Protocol's starting Equity, every trade priced on its cost schedule's
     date, and every Run under its Universe Rule version, Limits and band.
@@ -674,7 +682,7 @@ def backtest_span(
         )
     if impact is not None:
         costs = replace(costs, slippage=replace(costs.slippage, impact=impact))
-    days = list(SimulatedClock(calendar, start=start, end=end).days())
+    days = list(BacktestClock(calendar, start=start, end=end).days())
     if not days:
         raise ValueError(f"no trading day from {start} to {end} on the Trading Calendar")
     terms_of_run: dict[str, Any] = {
@@ -702,7 +710,7 @@ def backtest_span(
         results = _step(
             conn,
             strategy,
-            SimulatedClock(calendar, start=start, end=before[-1]),
+            BacktestClock(calendar, start=start, end=before[-1]),
             entries=entries,
             **terms_of_run,
         )
@@ -710,7 +718,7 @@ def backtest_span(
         results += _step(
             conn,
             strategy,
-            SimulatedClock(calendar, start=last, end=last),
+            BacktestClock(calendar, start=last, end=last),
             entries=False,
             boundary=True,
             **terms_of_run,
@@ -877,17 +885,6 @@ def _previous_session(calendar: TradingCalendar, as_of: date) -> date:
     return earlier[-1]
 
 
-def _paisa(value: Fraction) -> Decimal:
-    """``value`` to the paisa, half up."""
-    exact = Decimal(value.numerator) / Decimal(value.denominator)
-    return exact.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-
-
-def _round_down(value: Fraction, tick: Decimal) -> Decimal:
-    """``value`` rounded down to the tick, exactly."""
-    return math.floor(value / Fraction(tick)) * tick
-
-
 @dataclass(frozen=True)
 class _Order:
     id: uuid.UUID
@@ -896,7 +893,7 @@ class _Order:
     position_id: uuid.UUID
     instrument: str
     symbol: str
-    purpose: str
+    purpose: OrderPurpose
     limit_price: Decimal
     shares: int
     session: date
@@ -948,7 +945,7 @@ class _Account:
         # Each open Position's open target Order.
         self._targets: dict[uuid.UUID, _Order] = {}
         # Exits that met the session and did not fill, to be sent again.
-        self._exits_due: dict[uuid.UUID, str] = {}
+        self._exits_due: dict[uuid.UUID, ExitTrigger] = {}
         self._bars: dict[str, Bar | None] = {}
 
     def open_positions(self) -> list[queries.LedgerPosition]:
@@ -1024,7 +1021,7 @@ class _Account:
                 limit = position.target
             else:
                 factor, _ = factors[order.instrument]
-                limit = _round_down(Fraction(order.limit_price) * factor, self._tick(position))
+                limit = round_down(Fraction(order.limit_price) * factor, self._tick(position))
             again = replace(order, id=uuid.uuid4(), limit_price=limit, shares=position.shares)
             self._place(again)
             remaining.append(again)
@@ -1071,9 +1068,9 @@ class _Account:
         restated = replace(
             position,
             shares=shares,
-            entry=_paisa(Fraction(position.entry) * factor),
-            stop=_round_down(Fraction(position.stop) * factor, tick),
-            target=_round_down(Fraction(position.target) * factor, tick),
+            entry=paisa(Fraction(position.entry) * factor),
+            stop=round_down(Fraction(position.stop) * factor, tick),
+            target=round_down(Fraction(position.target) * factor, tick),
             as_of=self._day,
         )
         self._positions[position.id] = restated
@@ -1081,7 +1078,7 @@ class _Account:
             restated,
             event="restated",
             factor=factor,
-            cash_in_lieu=_paisa((exact - shares) * Fraction(close)),
+            cash_in_lieu=paisa((exact - shares) * Fraction(close)),
         )
 
     def _tick(self, position: queries.LedgerPosition) -> Decimal:
@@ -1247,13 +1244,17 @@ class _Account:
         return 1
 
     def _meet_exit(self, order: _Order) -> int:
+        """A stop or time-stop exit against the open (a Boundary Exit never rests)."""
+        purpose = order.purpose
+        if purpose != "stop" and purpose != "time":
+            raise ValueError(f"order {order.id} is a {purpose} order, not a stop or time exit")
         outcome = self._fill_model.exit(order.limit_price, self._bar(order.instrument))
         if isinstance(outcome, Unfilled):
             self._cancel(order, outcome.reason)
-            self._exits_due[order.position_id] = order.purpose
+            self._exits_due[order.position_id] = purpose
             return 0
         self._fill(order, outcome.price)
-        self._close_position(order.position_id, price=outcome.price, reason=order.purpose)
+        self._close_position(order.position_id, price=outcome.price, reason=purpose)
         return 1
 
     def _meet_target(self, order: _Order) -> int:
@@ -1268,7 +1269,9 @@ class _Account:
         self._close_position(order.position_id, price=outcome.price, reason="target")
         return 1
 
-    def _close_position(self, position_id: uuid.UUID, *, price: Decimal, reason: str) -> None:
+    def _close_position(
+        self, position_id: uuid.UUID, *, price: Decimal, reason: ExitReason
+    ) -> None:
         closed = replace(
             self._positions.pop(position_id),
             as_of=self._day,
