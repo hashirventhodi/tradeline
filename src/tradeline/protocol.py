@@ -11,8 +11,9 @@ against (each stated only when there is one), whether
 dividends are credited (stated only when they are), the starting Equity, the
 risk-free rate, the Gate thresholds, the Universe Rule version, the Strategy
 family, name and code revision, the git commit it was frozen at, and the data
-snapshot: each Universe month's mode and build, and the
-hash of the Adjusted Series of every member over the Protocol's range.
+snapshot: each Universe month's mode and build, the
+hash of the Adjusted Series of every member over the Protocol's range, and,
+only when demergers are credited, the hash of the demerger table.
 
 Its identity is the SHA-256 of its canonical serialisation: JSON with sorted
 keys and no spaces, every decimal number written in one fixed form (no
@@ -118,6 +119,8 @@ class Terms:
     warm_up_trading_days: int
     # Whether a holder is credited each dividend in cash on its Ex-Date (ADR 0020).
     dividends: bool = False
+    # Whether a holder is credited each demerger of the demerger table (ADR 0020).
+    demergers: bool = False
 
 
 @dataclass(frozen=True)
@@ -145,6 +148,9 @@ class DataSnapshot:
     end: date
     months: tuple[MonthSnapshot, ...]
     adjusted_series: Mapping[str, str]
+    # The hash of the demerger table its runs credit (``tradeline.demergers``); None, and
+    # absent from the content, when the Protocol credits no demerger.
+    demergers: str | None = None
 
 
 @dataclass(frozen=True)
@@ -179,6 +185,13 @@ class Protocol:
     # The Benchmark's funds (``tradeline.benchmark``) a Relative Drawdown is measured
     # against; stated only when there are, so older Protocols keep their hashes.
     benchmark: BenchmarkFunds | None = None
+
+    @property
+    def demergers(self) -> bool:
+        """Whether a holder at the close before a demerger's Ex-Date is credited the child's
+        shares in cash on its first listing day (ADR 0020): stated by the data snapshot's
+        hash of the demerger table, present only when on."""
+        return self.snapshot.demergers is not None
 
     @property
     def first(self) -> date:
@@ -249,6 +262,8 @@ class Protocol:
             content["dividends"] = True
         if self.benchmark is not None:
             content["benchmark"] = [dataclasses.asdict(c) for c in self.benchmark.changes]
+        if snapshot.demergers is not None:
+            content["data_snapshot"]["demergers"] = snapshot.demergers
         return content
 
     @classmethod
@@ -294,6 +309,7 @@ class Protocol:
                 end=date.fromisoformat(snapshot["end"]),
                 months=tuple(_read_month(m) for m in snapshot["months"]),
                 adjusted_series=dict(snapshot["adjusted_series"]),
+                demergers=snapshot.get("demergers"),
             ),
             dividends=content.get("dividends", False),
             benchmark=None if "benchmark" not in content else _read_benchmark(content["benchmark"]),

@@ -53,6 +53,9 @@ manual_links = "manual_links.csv"
 # The checked-in splits and bonuses NSE's lists omit, each citing NSE's
 # circulars (see the file's header); stored by `ingest cited-actions`.
 cited = "cited_corporate_actions.csv"
+# The checked-in demergers a holder is credited for (ADR 0020), each citing NSE or
+# the company (see the file's header); stored by `ingest demergers`.
+demergers = "demergers.csv"
 
 [integrity]
 # The checked-in Trading Calendar: the weekdays NSE was closed and the Special
