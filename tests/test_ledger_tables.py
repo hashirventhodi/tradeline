@@ -22,6 +22,8 @@ LEDGER_TABLES = (
     "positions",
     "dividend_credits",
     "demerger_credits",
+    "tax_debits",
+    "liquidation_values",
 )
 INSERTS = {
     "strategies": "INSERT INTO strategies (mode, backtest_id, family, name, code_revision,"
@@ -62,6 +64,12 @@ INSERTS = {
     " ratio_denominator, close, cash, basis) VALUES (%s, %s, '2023-08-21', 1,"
     " gen_random_uuid(), 'A', 'A', 'B', '2023-07-20', '2023-06-16', 50, 1, 1, 250, 12500,"
     " 300)",
+    "tax_debits": "INSERT INTO tax_debits (mode, backtest_id, id, day, financial_year,"
+    " short_term_gain, long_term_gain, dividends, tax, settled)"
+    " VALUES (%s, %s, gen_random_uuid(), '2024-04-01', 2023, 1000, 0, 0, 208, false)",
+    "liquidation_values": "INSERT INTO liquidation_values (mode, backtest_id, id, day, value,"
+    " tax_due, dropped_short_term_loss, dropped_long_term_loss)"
+    " VALUES (%s, %s, gen_random_uuid(), '2024-04-01', 500000, 0, 0, 0)",
 }
 
 

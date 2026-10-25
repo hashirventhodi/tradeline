@@ -2421,6 +2421,165 @@ def position_bases(
     return bases
 
 
+@dataclass(frozen=True)
+class PositionLot:
+    """A Position as the tax ledger takes it (``tradeline.tax``): bought on ``opened_on``
+    for ``basis`` (its buys' value and charges, less any cash paid in lieu of a fractional
+    share, which is already in cash, and less the child's share each Demerger Credit moved
+    to the credit), and, once closed, sold on ``closed_on`` for
+    ``proceeds`` (its sales' value less charges)."""
+
+    position_id: uuid.UUID
+    opened_on: date
+    closed_on: date | None
+    basis: Decimal
+    proceeds: Decimal | None
+
+
+def position_lots(
+    conn: psycopg.Connection,
+    *,
+    mode: EngineMode,
+    backtest_id: uuid.UUID | None,
+    dry_run: bool = False,
+) -> list[PositionLot]:
+    """Every Position of an account as a lot, open or closed, in the order they opened."""
+    charges = " + ".join(f"coalesce({c}, 0)" for c in _CHARGE_COLUMNS)
+    rows = conn.execute(
+        "SELECT p.position_id, p.opened_on, p.closed_on,"
+        " f.basis - p.in_lieu - coalesce(d.moved, 0), f.proceeds"
+        " FROM (SELECT position_id, min(opened_on) AS opened_on,"
+        "   max(day) FILTER (WHERE event = 'closed') AS closed_on,"
+        "   coalesce(sum(cash_in_lieu), 0) AS in_lieu FROM positions"
+        f"  WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
+        "  AND dry_run = %(dry_run)s GROUP BY position_id) p"
+        " JOIN (SELECT position_id,"
+        f"   sum(price * shares + {charges}) FILTER (WHERE side = 'buy') AS basis,"
+        f"   sum(price * shares - ({charges})) FILTER (WHERE side = 'sell') AS proceeds"
+        "  FROM fills"
+        f"  WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
+        "  AND dry_run = %(dry_run)s GROUP BY position_id) f USING (position_id)"
+        " LEFT JOIN (SELECT position_id, sum(basis) AS moved FROM demerger_credits"
+        f"  WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
+        "  AND dry_run = %(dry_run)s GROUP BY position_id) d USING (position_id)"
+        " ORDER BY p.opened_on, p.position_id",
+        {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
+    ).fetchall()
+    return [
+        PositionLot(row[0], row[1], row[2], row[3], None if row[2] is None else row[4])
+        for row in rows
+    ]
+
+
+@dataclass(frozen=True)
+class TaxDebit:
+    """A financial year's net tax debited from an account's cash (``tradeline.tax``): on the
+    first trading day after its March 31, or ``settled`` on the day a liquidation ends the
+    account, with the losses it left unused."""
+
+    day: date
+    financial_year: int
+    short_term_gain: Decimal
+    long_term_gain: Decimal
+    dividends: Decimal
+    tax: Decimal
+    settled: bool
+    dropped_short_term_loss: Decimal | None
+    dropped_long_term_loss: Decimal | None
+
+
+def tax_debits(
+    conn: psycopg.Connection,
+    *,
+    mode: EngineMode,
+    backtest_id: uuid.UUID | None,
+    dry_run: bool = False,
+) -> list[TaxDebit]:
+    """Every tax debit of an account, in the order debited."""
+    rows = conn.execute(
+        "SELECT day, financial_year, short_term_gain, long_term_gain, dividends, tax, settled,"
+        " dropped_short_term_loss, dropped_long_term_loss FROM tax_debits"
+        f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
+        " AND dry_run = %(dry_run)s ORDER BY day, financial_year",
+        {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
+    ).fetchall()
+    return [TaxDebit(*row) for row in rows]
+
+
+@dataclass(frozen=True)
+class BenchmarkDay:
+    """The Benchmark on one day of an account: its scheme, bought on ``bought_on`` at
+    ``bought_nav``, valued at ``nav``, and its Liquidation Value and the tax in it."""
+
+    scheme: int
+    bought_on: date
+    bought_nav: Decimal
+    nav: Decimal
+    value: Decimal
+    tax_due: Decimal
+
+
+@dataclass(frozen=True)
+class LiquidationDay:
+    """An account's Liquidation Value on a day, the tax in it and the losses it would drop,
+    and the Benchmark's (None on the Initial Buy's day, before the Benchmark is bought)."""
+
+    day: date
+    value: Decimal
+    tax_due: Decimal
+    dropped_short_term_loss: Decimal
+    dropped_long_term_loss: Decimal
+    benchmark: BenchmarkDay | None
+
+
+def liquidation_values(
+    conn: psycopg.Connection,
+    *,
+    mode: EngineMode,
+    backtest_id: uuid.UUID | None,
+    dry_run: bool = False,
+) -> list[LiquidationDay]:
+    """An account's Liquidation Value on each day it Ran, in day order."""
+    rows = conn.execute(
+        "SELECT day, value, tax_due, dropped_short_term_loss, dropped_long_term_loss,"
+        " benchmark_scheme, benchmark_bought_on, benchmark_bought_nav, benchmark_nav,"
+        " benchmark_value, benchmark_tax_due FROM liquidation_values"
+        f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
+        " AND dry_run = %(dry_run)s ORDER BY day",
+        {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
+    ).fetchall()
+    return [
+        LiquidationDay(
+            row[0],
+            row[1],
+            row[2],
+            row[3],
+            row[4],
+            None if row[5] is None else BenchmarkDay(*row[5:]),
+        )
+        for row in rows
+    ]
+
+
+def account_first_day(
+    conn: psycopg.Connection,
+    *,
+    mode: EngineMode,
+    backtest_id: uuid.UUID | None,
+    dry_run: bool = False,
+) -> date | None:
+    """The first day an account Ran, an Initial Buy's decision aside; None before it."""
+    row = conn.execute(
+        "SELECT min(as_of) FROM runs"
+        f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
+        " AND dry_run = %(dry_run)s AND portfolio_step IS DISTINCT FROM 'initial_buy'",
+        {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
+    ).fetchone()
+    assert row is not None
+    found: date | None = row[0]
+    return found
+
+
 def account_cash_flows(
     conn: psycopg.Connection,
     *,
@@ -2430,8 +2589,8 @@ def account_cash_flows(
 ) -> Decimal:
     """The net cash an account's Fills, restatements and credits moved: every sale's value
     less its charges, every purchase's value and its charges taken away, plus cash paid in
-    lieu of fractional shares, every dividend and every Demerger Credit. An account's cash is its
-    starting Equity plus this."""
+    lieu of fractional shares, every dividend and every Demerger Credit, less every tax
+    debited. An account's cash is its starting Equity plus this."""
     charges = " + ".join(f"coalesce({c}, 0)" for c in _CHARGE_COLUMNS)
     row = conn.execute(
         "SELECT coalesce((SELECT sum(CASE side WHEN 'sell' THEN price * shares"
@@ -2445,6 +2604,9 @@ def account_cash_flows(
         f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
         " AND dry_run = %(dry_run)s), 0)"
         " + coalesce((SELECT sum(cash) FROM demerger_credits"
+        f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
+        " AND dry_run = %(dry_run)s), 0)"
+        " - coalesce((SELECT sum(tax) FROM tax_debits"
         f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
         " AND dry_run = %(dry_run)s), 0)",
         {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},

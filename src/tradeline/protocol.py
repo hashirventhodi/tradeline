@@ -5,7 +5,10 @@ Walk-Forward Windows and the Holdout as trading days from the Trading Calendar,
 the cost schedule's date with the rates in force on it and Slippage's
 parameters, the exit band, every Limit on with its value or off (ADR 0020), the
 daily-loss and drawdown Halt fractions a backtest reports against, whether
-dividends are credited (stated only when they are), the starting Equity, the
+dividends are credited (stated only when they are), whether the account keeps
+the tax ledger and is compared with the Benchmark (stated only when it does,
+with the tax rates as of the freeze, the dividend rate, the Benchmark's funds,
+the factor fund and the fund-unit rates as of the freeze), the starting Equity, the
 risk-free rate, the Gate thresholds, the Universe Rule version, the Strategy
 family, name and code revision, the git commit it was frozen at, and the data
 snapshot: each Universe month's mode and build, the
@@ -34,10 +37,12 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from tradeline.costs import CHARGES, CostModel, CostSchedule, Rate, Rates, Slippage
+from tradeline.benchmark import BenchmarkFunds, BenchmarkTerms, FundChange
+from tradeline.costs import CHARGES, CostModel, CostSchedule, FundRates, Rate, Rates, Slippage
 from tradeline.dates import month_end, month_of, next_month
 from tradeline.metrics import HaltLimits
 from tradeline.risk import Limits
+from tradeline.tax import ITEMS, TaxRate, TaxSchedule, TaxTerms
 from tradeline.trading_calendar import TradingCalendar
 
 # The layout of the serialised content; a change to it is a new format. Format 2 adds the
@@ -117,6 +122,9 @@ class Terms:
     dividends: bool = False
     # Whether a holder is credited each demerger of the demerger table (ADR 0020).
     demergers: bool = False
+    # Whether the account keeps the tax ledger, its Liquidation Value and the Benchmark's
+    # computed daily (ADR 0015 amendment).
+    tax: bool = False
 
 
 @dataclass(frozen=True)
@@ -178,6 +186,15 @@ class Protocol:
     # Ex-Date (ADR 0020). Stated in the content only when on, so a Protocol frozen before
     # it existed (``pullback_v1``'s) reads back to the same hash, with dividends off.
     dividends: bool = False
+    # The tax ledger's rates as of the freeze and the dividend rate, and the Benchmark the
+    # account is compared with (ADR 0015 amendment): both or neither, stated in the
+    # content only when kept, as ``dividends`` is.
+    tax: TaxTerms | None = None
+    benchmark: BenchmarkTerms | None = None
+
+    def __post_init__(self) -> None:
+        if (self.tax is None) != (self.benchmark is None):
+            raise ValueError("a Protocol keeping the tax ledger states the Benchmark, and only it")
 
     @property
     def demergers(self) -> bool:
@@ -255,6 +272,18 @@ class Protocol:
             content["dividends"] = True
         if snapshot.demergers is not None:
             content["data_snapshot"]["demergers"] = snapshot.demergers
+        if self.tax is not None and self.benchmark is not None:
+            rates = self.tax.schedule.rates(self.tax.rates_as_of)
+            content["tax"] = {
+                "rates_as_of": self.tax.rates_as_of,
+                "rates": dataclasses.asdict(rates),
+                "dividend_rate": self.tax.dividend_rate,
+            }
+            content["benchmark"] = {
+                "funds": [dataclasses.asdict(c) for c in self.benchmark.funds.changes],
+                "factor_fund": self.benchmark.factor_fund,
+                "fund_rates": dataclasses.asdict(self.benchmark.rates),
+            }
         return content
 
     @classmethod
@@ -303,6 +332,8 @@ class Protocol:
                 demergers=snapshot.get("demergers"),
             ),
             dividends=content.get("dividends", False),
+            tax=None if "tax" not in content else _read_tax(content["tax"]),
+            benchmark=None if "benchmark" not in content else _read_benchmark(content["benchmark"]),
         )
 
     def boundaries_text(self) -> str:
@@ -443,6 +474,46 @@ def read_limits(raw: Mapping[str, Any]) -> Limits:
     limits = Limits(stop_required=stop_required, **values)
     limits.require_stated()
     return limits
+
+
+def frozen_tax_terms(schedule: TaxSchedule, as_of: date, dividend_rate: Decimal) -> TaxTerms:
+    """The tax terms a Protocol frozen on ``as_of`` states: the schedule's rates in force
+    then, as a schedule of one row each from that day, applied to every event."""
+    rates = schedule.rates(as_of)
+    rows = tuple(TaxRate(as_of, item, getattr(rates, item), "Protocol") for item in ITEMS)
+    return TaxTerms(TaxSchedule(rows), rates_as_of=as_of, dividend_rate=dividend_rate)
+
+
+def _read_tax(raw: Mapping[str, Any]) -> TaxTerms:
+    as_of = date.fromisoformat(raw["rates_as_of"])
+    rows = tuple(TaxRate(as_of, item, Decimal(raw["rates"][item]), "Protocol") for item in ITEMS)
+    return TaxTerms(
+        TaxSchedule(rows), rates_as_of=as_of, dividend_rate=Decimal(raw["dividend_rate"])
+    )
+
+
+def _read_benchmark(raw: Mapping[str, Any]) -> BenchmarkTerms:
+    rates = raw["fund_rates"]
+    return BenchmarkTerms(
+        funds=BenchmarkFunds(
+            tuple(
+                FundChange(
+                    date.fromisoformat(c["in_force_from"]),
+                    c["scheme_code"],
+                    c["event"],
+                    c["citation"],
+                )
+                for c in raw["funds"]
+            )
+        ),
+        factor_fund=raw["factor_fund"],
+        rates=FundRates(
+            stamp_duty=Decimal(rates["stamp_duty"]),
+            stt=Decimal(rates["stt"]),
+            exit_load=Decimal(rates["exit_load"]),
+            exit_load_days=rates["exit_load_days"],
+        ),
+    )
 
 
 def _span(span: Span) -> dict[str, date]:

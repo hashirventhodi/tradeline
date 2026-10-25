@@ -13,19 +13,24 @@ as a holiday so the April debit has to look past it.
 
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
+from tradeline.benchmark import BenchmarkLiquidation, benchmark_liquidation
+from tradeline.costs import FundRates
 from tradeline.tax import (
     DemergerCredit,
     Dividend,
     Losses,
     Sale,
     TaxRate,
+    TaxRates,
     TaxSchedule,
     TaxTerms,
     TaxYear,
     liquidation_value,
+    load_tax_schedule,
     tax_ledger,
 )
 from tradeline.trading_calendar import CalendarDay, TradingCalendar
@@ -507,3 +512,106 @@ def test_the_benchmark_held_over_the_holdouts_two_years_is_taxed_as_long_term() 
     )
 
     assert (value.value, value.tax_due) == (D("110440.00"), D("1560.00"))
+
+
+# --- The checked-in schedule ---------------------------------------------------
+
+REPO_SCHEDULE = Path(__file__).resolve().parents[1] / "tax_rates.csv"
+
+
+def test_the_checked_in_schedule_gives_todays_rates_and_the_rates_before_july_2024() -> None:
+    schedule = load_tax_schedule(REPO_SCHEDULE)
+
+    # Finance (No. 2) Act, 2024: 20 and 12.5 percent from 2024-07-23; 15 and 10 before.
+    assert schedule.rates(date(2026, 10, 24)) == TaxRates(D("0.20"), D("0.125"), D("0.04"))
+    assert schedule.rates(date(2024, 7, 22)) == TaxRates(D("0.15"), D("0.10"), D("0.04"))
+
+
+@pytest.mark.parametrize(
+    ("row", "refusal"),
+    [
+        ("2024-07-23,surcharge,0.1,Finance Act", "unknown item 'surcharge'"),
+        ("2024-07-23,short_term,0.2,", "no citation"),
+        ("2024-07-23,short_term,-0.2,Finance Act", "not a non-negative number"),
+        ("2018-04-01,short_term,0.15,again", "short_term on 2018-04-01 again"),
+    ],
+)
+def test_a_bad_schedule_row_refuses_the_file(tmp_path: Path, row: str, refusal: str) -> None:
+    path = tmp_path / "tax_rates.csv"
+    path.write_text(
+        "in_force_from,item,rate,citation\n"
+        "2018-04-01,short_term,0.15,s. 111A\n"
+        "2018-04-01,long_term,0.10,s. 112A\n"
+        "2018-04-01,cess,0.04,Finance Act 2018\n"
+        f"{row}\n"
+    )
+
+    with pytest.raises(ValueError, match=refusal):
+        load_tax_schedule(path)
+
+
+def test_a_schedule_whose_first_date_lacks_an_item_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "tax_rates.csv"
+    path.write_text(
+        "in_force_from,item,rate,citation\n"
+        "2018-04-01,short_term,0.15,s. 111A\n"
+        "2018-04-01,cess,0.04,Finance Act 2018\n"
+        "2019-04-01,long_term,0.10,s. 112A\n"
+    )
+
+    with pytest.raises(ValueError, match="first date 2018-04-01 has no rate for long_term"):
+        load_tax_schedule(path)
+
+
+# --- The Benchmark as one lot --------------------------------------------------
+
+# The fund-unit rates of cost_rates.csv: stamp duty 0.005 percent, STT 0.001 percent,
+# exit load 1 percent within 15 days.
+FUND_RATES = FundRates(D("0.00005"), D("0.00001"), D("0.01"), 15)
+
+
+def benchmark(day: date, nav: str) -> BenchmarkLiquidation:
+    """Rs 5 lakh invested on 2022-04-01 at a NAV of 20, liquidated on ``day``."""
+    return benchmark_liquidation(
+        bought_on=date(2022, 4, 1),
+        bought_nav=D("20"),
+        day=day,
+        nav=D(nav),
+        invested=D("500000"),
+        rates=FUND_RATES,
+        terms=TERMS,
+        calendar=CALENDAR,
+    )
+
+
+def test_the_benchmark_pays_stamp_duty_on_its_purchase_and_holds_the_units_for_the_rest() -> None:
+    found = benchmark(date(2022, 4, 1), "20")
+
+    # 0.005 percent of Rs 5,00,000 is Rs 25; 4,99,975 at 20 is 24,998.75 units.
+    assert found.purchase.stamp_duty == D("25.00")
+    assert found.units == D("24998.75")
+    assert found.value == D("499975.00")
+
+
+def test_the_benchmark_sold_within_15_days_pays_the_exit_load_and_short_term_tax() -> None:
+    found = benchmark(date(2022, 4, 8), "21")
+
+    # 24,998.75 units at 21: Rs 5,24,973.75. STT 0.001 percent: 5.25; exit load 1 percent:
+    # 5,249.74. Proceeds 5,19,718.76 against the Rs 5,00,000 paid: a short-term gain of
+    # 19,718.76, taxed at 20.8 percent: 4,101.50.
+    assert found.value == D("524973.75")
+    assert (found.sale.stt, found.sale.exit_load) == (D("5.25"), D("5249.74"))
+    assert found.short_term
+    assert found.liquidation.tax_due == D("4101.50")
+    assert found.liquidation.value == D("515617.26")
+
+
+def test_the_benchmark_held_over_twelve_months_pays_no_exit_load_and_long_term_tax() -> None:
+    found = benchmark(date(2023, 4, 3), "22")
+
+    # Rs 5,49,972.50; STT 5.50, no exit load: proceeds 5,49,967.00, a long-term gain of
+    # 49,967.00 at 13 percent: 6,495.71.
+    assert (found.sale.stt, found.sale.exit_load) == (D("5.50"), D("0"))
+    assert not found.short_term
+    assert found.liquidation.tax_due == D("6495.71")
+    assert found.liquidation.value == D("543471.29")

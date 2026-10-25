@@ -23,11 +23,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 import psycopg
 
 from tradeline import queries
+from tradeline.benchmark import BenchmarkFunds, BenchmarkTerms
 from tradeline.costs import CostSchedule, Slippage
 from tradeline.dates import IST
 from tradeline.metrics import HaltLimits
@@ -40,12 +42,14 @@ from tradeline.protocol import (
     Terms,
     canonical,
     content_hash,
+    frozen_tax_terms,
     months_between,
     window_boundaries,
 )
 from tradeline.revision import code_revision
 from tradeline.risk import Limits
 from tradeline.strategy.portfolio import AnyStrategy
+from tradeline.tax import DEFAULT_DIVIDEND_RATE, TaxSchedule
 from tradeline.trading_calendar import TradingCalendar
 
 log = logging.getLogger(__name__)
@@ -101,10 +105,18 @@ def freeze_protocol(
     slippage: Slippage,
     calendar: TradingCalendar,
     commit: str,
+    tax_schedule: TaxSchedule | None = None,
+    dividend_rate: Decimal = DEFAULT_DIVIDEND_RATE,
+    benchmark_funds: BenchmarkFunds | None = None,
+    factor_fund: int | None = None,
     costs_as_of_for_tests: date | None = None,
 ) -> FreezeResult:
     """Freeze the Protocol these state, with the data snapshot read now, at ``commit``, its
     trades priced on ``schedule`` as of the freeze: the day it is frozen, in India.
+
+    When ``terms`` keep tax, the Protocol also states ``tax_schedule``'s rates as of the
+    freeze with ``dividend_rate``, and the Benchmark: ``benchmark_funds``, ``factor_fund``
+    and ``schedule``'s fund-unit rates as of the freeze. Without tax none is read.
 
     ``costs_as_of_for_tests`` replaces that day, so a test's hand-worked costs do not move
     with the day it runs; nothing else passes it."""
@@ -124,6 +136,15 @@ def freeze_protocol(
             f"no end-of-day file is stored for {last}, the Holdout's last trading day;"
             " a Protocol freezes data that is there"
         )
+    tax, benchmark = None, None
+    if terms.tax:
+        if tax_schedule is None or benchmark_funds is None or factor_fund is None:
+            raise ValueError(
+                "a Protocol keeping tax freezes the tax schedule, the Benchmark's funds and"
+                " the factor fund; give all three"
+            )
+        tax = frozen_tax_terms(tax_schedule, costs_as_of, dividend_rate)
+        benchmark = BenchmarkTerms(benchmark_funds, factor_fund, schedule.fund_rates(costs_as_of))
     protocol = Protocol(
         family=strategy.family,
         name=strategy.name,
@@ -156,6 +177,8 @@ def freeze_protocol(
             demergers=terms.demergers,
         ),
         dividends=terms.dividends,
+        tax=tax,
+        benchmark=benchmark,
     )
     content = canonical(protocol.content())
     found = content_hash(protocol.content())

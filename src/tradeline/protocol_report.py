@@ -62,7 +62,7 @@ from tradeline.report import (
 from tradeline.risk import RISK_ENGINE, RiskEngine
 from tradeline.tick_sizes import TickSizes
 from tradeline.trading_calendar import TradingCalendar
-from tradeline.walk_forward import StrategyFactory, restitch, window_json
+from tradeline.walk_forward import StrategyFactory, liquidation, restitch, window_json
 
 log = logging.getLogger(__name__)
 
@@ -157,12 +157,14 @@ class ProtocolReport:
                 **_span_json(self.stitched),
                 "metrics": self.stitched.scores(risk_free_rate=rate).as_json(),
                 "boundary_exits": sum(t.exit_reason == "boundary" for t in self.stitched.closed),
+                **liquidation(self.stitched, terms),
             },
             "holdout": {
                 **_span_json(self.holdout),
                 "parameters": dict(sorted((self.attempt.parameters or {}).items())),
                 "metrics": self.holdout.scores(risk_free_rate=rate).as_json(),
                 "open_positions": [p.as_json() for p in self.holdout.open],
+                **liquidation(self.holdout, terms),
             },
             "gapped_stops": {c: a.gapped_stops_json() for c, a in accounts.items()},
             "limits": {c: a.limits_json() for c, a in accounts.items()},

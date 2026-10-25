@@ -190,12 +190,19 @@ class WalkForwardReport:
                 "trading_days": len(stitched.days),
                 "metrics": stitched.scores(risk_free_rate=terms.risk_free_rate).as_json(),
                 "boundary_exits": sum(t.exit_reason == "boundary" for t in stitched.closed),
+                **liquidation(stitched, terms),
                 "closed_positions": [t.as_json() for t in stitched.closed],
             },
         }
 
     def text(self) -> str:
         return json.dumps(self.as_json(), indent=2) + "\n"
+
+
+def liquidation(account: Account, terms: Protocol) -> dict[str, Any]:
+    """The account's Liquidation Value against the Benchmark, under a Protocol keeping tax."""
+    found = account.liquidation_json(terms.tax, terms.benchmark, invested=terms.starting_equity)
+    return {} if found is None else {"liquidation": found}
 
 
 def window_json(

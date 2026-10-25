@@ -1,0 +1,29 @@
+# The tax on a portfolio account's capital gains, dated (ADR 0015 amendment, #91, #96).
+#
+# Every row is reviewed like code and cites where the rate is enacted.
+# `tradeline.tax` reads this file; its location is `tax.schedule` in
+# tradeline.toml. A rate is in force from `in_force_from` (a transfer date)
+# until the item's next row. A Protocol freezes the rates in force on its
+# freeze day and applies them to every event (docs/risk-controls.md, "Tax
+# (portfolio families)"). `item` is one of:
+#
+#   short_term   a fraction of a short-term gain on listed equity sold through
+#                the exchange with STT paid (held twelve months or less)
+#   long_term    a fraction of a long-term gain on it (held more than twelve months)
+#   cess         Health and Education Cess, a fraction of the tax
+#
+# Surcharge is not modelled and the Rs 1.25 lakh long-term exemption is not
+# applied; dividends are taxed at `tax.dividend_rate`, cess included.
+#
+# The file starts on 2018-04-01, when s. 112A taxed long-term gains on listed
+# equity and the 4% cess replaced the education cesses. A freeze before it is
+# refused. From 2026-04-01 the Income-tax Act, 2025 replaces the 1961 Act; these
+# rates are taken as carried over (spec #89), not yet checked against its text:
+# a rate it changed is a new row here, with its section.
+in_force_from,item,rate,citation
+2018-04-01,short_term,0.15,Income-tax Act 1961 s. 111A as amended by Finance Act 2008
+2018-04-01,long_term,0.10,Income-tax Act 1961 s. 112A inserted by Finance Act 2018
+2018-04-01,cess,0.04,Finance Act 2018 s. 2(11) (Health and Education Cess at 4%); re-enacted by each Finance Act since
+# For transfers on or after 2024-07-23.
+2024-07-23,short_term,0.20,Finance (No. 2) Act 2024 amending s. 111A (20% from 2024-07-23)
+2024-07-23,long_term,0.125,Finance (No. 2) Act 2024 amending s. 112A (12.5% from 2024-07-23)

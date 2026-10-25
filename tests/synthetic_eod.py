@@ -61,20 +61,23 @@ import psycopg
 
 from checkout import TEST_COMMIT
 from limits import PULLBACK
+from tradeline.benchmark import load_benchmark_funds
 from tradeline.config import UniverseRule
 from tradeline.costs import CostModel, Slippage, load_cost_schedule
 from tradeline.dates import IST, calendar_days, month_of, next_month
 from tradeline.freeze import FreezeResult
 from tradeline.freeze import freeze_protocol as freeze
+from tradeline.ingest.benchmark import ingest_benchmark
 from tradeline.ingest.corporate_actions import ingest_corporate_actions, year_chunks
 from tradeline.ingest.eod import ingest_eod
 from tradeline.metrics import HaltLimits
 from tradeline.protocol import Gate, Layout, Terms, months_between
 from tradeline.risk import Limits
 from tradeline.sectors import load_sectors
-from tradeline.sources import kite, nse
+from tradeline.sources import amfi, kite, nse
 from tradeline.strategy import Strategy
 from tradeline.strategy.pullback import PullbackV1
+from tradeline.tax import load_tax_schedule
 from tradeline.trading_calendar import TradingCalendar, load_trading_calendar
 from tradeline.transport import PlaybackTransport, RecordingTransport, Request, Response
 from tradeline.universe import compute_universe, declare_rule_validity
@@ -92,6 +95,10 @@ def repo_calendar() -> TradingCalendar:
 COSTS_AS_OF = date(2026, 10, 24)
 # The repo's [protocol] starting Equity and exit band (tradeline.toml).
 STARTING_EQUITY = Decimal("500000")
+# The factor fund's AMFI code (tradeline.toml's [benchmark]).
+FACTOR_FUND = 141596
+# The Benchmark's AMFI code (benchmark_funds.csv).
+BENCHMARK_SCHEME = 147625
 EXIT_BAND = Decimal("0.05")
 
 
@@ -608,6 +615,9 @@ def freeze_protocol(
         costs_as_of_for_tests=COSTS_AS_OF,
         calendar=repo_calendar(),
         commit=commit or TEST_COMMIT,
+        tax_schedule=load_tax_schedule(REPO_ROOT / "tax_rates.csv"),
+        benchmark_funds=load_benchmark_funds(REPO_ROOT / "benchmark_funds.csv"),
+        factor_fund=FACTOR_FUND,
     )
 
 
@@ -958,8 +968,8 @@ def lowvol_terms() -> Terms:
     )
 
 
-def lowvol_market() -> Market:
-    """Seventy EQ stocks from 2021-03-01 to 2022-11-30 for ``lowvol_v1``, each flat at
+def lowvol_market(end: date = date(2022, 11, 30)) -> Market:
+    """Seventy EQ stocks from 2021-03-01 to ``end`` (2022-11-30) for ``lowvol_v1``, each flat at
     Rs 100 with a ``swing``: its close alternates between 100 plus the swing and 100, so
     its 252 daily log returns are, in turn, plus and minus ln(1 + swing / 100), and the
     larger the swing the larger their standard deviation. Every Stock trades
@@ -1010,8 +1020,57 @@ def lowvol_market() -> Market:
     others += [stock(f"O{i:02}", str(D("3.15") + D("0.05") * (i - 1))) for i in range(2, 7)]
     return Market(
         start=start,
-        end=date(2022, 11, 30),
+        end=end,
         rule=LOWVOL_RULE,
         declaration=RuleDeclaration(start, datetime.combine(start, time(), IST)),
         stocks=(*news, *held, *others, stock("Z", "5.00", volume=500_000)),
+    )
+
+
+# --- AMFI ---------------------------------------------------------------------
+
+# AMFI's scheme master lines for the Benchmark (Direct Plan, Growth) and the factor fund.
+AMFI_MASTER = (
+    "Scheme Code;ISIN Div Payout/ ISIN Growth;ISIN Div Reinvestment;Scheme Name;Plan;Option;"
+    "Net Asset Value;Date\r\n\r\nMotilal Oswal Mutual Fund\r\n\r\n"
+    "147625;INF247L01957;-;Motilal Oswal Nifty 500 Index Fund;Direct Plan;Growth;{nav};{day}\r\n"
+    "\r\nICICI Prudential Mutual Fund\r\n\r\n"
+    "141596;INF109KC19U5;-;ICICI Prudential Nifty 100 Low Volatility 30 ETF;;;{nav};{day}\r\n"
+)
+
+
+def write_amfi_fixtures(
+    navs: dict[int, dict[date, Decimal]], directory: Path, *, first: date, end: date
+) -> Path:
+    """Record AMFI's answers ``ingest benchmark`` asks for to ``end``, from ``first`` (the
+    Benchmark's first date): the scheme master naming both schemes, and each scheme's
+    NAV history window holding its NAVs in ``navs`` that fall inside it."""
+    last = max(navs[BENCHMARK_SCHEME])
+    master = AMFI_MASTER.format(nav=navs[BENCHMARK_SCHEME][last], day=f"{last:%d-%b-%Y}")
+    responses = {amfi.SCHEME_MASTER_URL: _ok(master.encode())}
+    for code, series in navs.items():
+        for start, stop in amfi.nav_windows(first, end):
+            records = [
+                {"date": d.isoformat(), "nav": str(v), "upload_time": f"{d}T21:00:00.000Z"}
+                for d, v in sorted(series.items())
+                if start <= d <= stop
+            ]
+            body = {"data": {"nav_groups": [{"historical_records": records}]}}
+            responses[amfi.nav_history_url(code, start, stop)] = _ok(json.dumps(body).encode())
+    recorder = RecordingTransport(_Served(responses), directory)
+    for url in responses:
+        recorder.send(Request("GET", url))
+    return directory
+
+
+def load_benchmark(conn: psycopg.Connection, fixtures: Path, *, end: date) -> None:
+    """Load AMFI's recorded answers through ``ingest benchmark``, never sleeping."""
+    ingest_benchmark(
+        conn,
+        PlaybackTransport(fixtures),
+        funds=load_benchmark_funds(REPO_ROOT / "benchmark_funds.csv"),
+        factor_fund=FACTOR_FUND,
+        end=end,
+        clock=lambda: 0.0,
+        sleep=lambda seconds: None,
     )

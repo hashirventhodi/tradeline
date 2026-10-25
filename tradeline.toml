@@ -77,6 +77,15 @@ funds = "benchmark_funds.csv"
 # The ICICI Prudential Nifty 100 Low Vol 30 ETF, compared at NAV and never gated.
 factor_fund = 141596
 
+# The tax ledger of a portfolio family (docs/risk-controls.md, "Tax (portfolio
+# families)"): a Protocol keeping tax freezes the schedule's rates as of its
+# freeze and the dividend rate, with [benchmark]'s funds and factor fund.
+[tax]
+# The checked-in dated rate schedule, each rate citing where it is enacted
+# (see the file's header).
+schedule = "tax_rates.csv"
+dividend_rate = 0.312       # the 30 percent slab plus cess; surcharge not modelled
+
 # The Risk Engine's Limits (docs/risk-controls.md), fractions of Equity where
 # they are: `pullback_v1`'s set, every Limit stated (ADR 0020), a Limit off
 # written `false`. Every Plan of a Run is checked against them in Plan order.
@@ -169,3 +178,4 @@ sharpe_above = 1.0              # pullback_v1's Gate until the Benchmark Gate (#
 drawdown_below = 0.15
 profit_factor_above = 1.3
 min_stitched_trades = 150
+tax = true                      # the tax ledger, Liquidation Value against the Benchmark

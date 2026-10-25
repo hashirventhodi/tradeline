@@ -82,6 +82,8 @@ From `lowvol` on, the Backtest Gate compares Liquidation Value after tax with th
 
 Short-term losses set off against either kind of gain, long-term losses against long-term gains only, carried forward eight years. Each Indian financial year's net tax is debited from cash on the first trading day after March 31; liquidation settles the final partial year, and losses left unused are dropped and their size reported. The Benchmark is taxed once, on sale, by the same holding rule. Fund units pay stamp duty on purchase, STT on redemption and any exit load, from the cost schedule.
 
+The schedule is `tax_rates.csv` (`[tax]` in `tradeline.toml`, with the dividend rate), each rate citing where it is enacted, from 2018-04-01. A Protocol that keeps tax (`[lowvol.protocol] tax = true`) freezes the rates in force on its freeze day, the dividend rate, the Benchmark's funds, the factor fund and the fund-unit rates. Its accounts record each day's Liquidation Value and the Benchmark's, bought for the starting Equity on the account's first day, and the report lists every tax debit and the losses a liquidation drops. A Boundary Exit settles the final partial year in cash; an account that ends without one (the Holdout, a Fresh Period) is judged on its last day's Liquidation Value.
+
 ## Halt
 
 Triggered by the Operator or by the daily loss or drawdown Limit. Cancels pending Orders, blocks new entries, keeps managing exits. Cleared by the Operator after review; a drawdown Halt also requires a written note in the Ledger.
