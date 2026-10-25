@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from limits import PULLBACK
+from limits import LOWVOL, PULLBACK
 from tradeline.config import Config, ConfigError, UniverseRule, load_config
 
 
@@ -292,3 +292,46 @@ def test_the_committed_config_states_the_default_limits_and_the_tick_table() -> 
 
     assert config.risk.limits() == PULLBACK
     assert config.risk.tick_sizes == "tick_sizes.csv"
+
+
+def test_a_limit_is_stated_off_in_risk_as_false(tmp_path: Path) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text("[risk]\nmax_sector = false\nmax_new_entries = false\n")
+
+    limits = load_config(path).risk.limits()
+
+    assert (limits.max_sector, limits.max_new_entries) == (None, None)
+    assert limits.max_position == Decimal("0.15")
+
+
+@pytest.mark.parametrize(
+    ("section", "key"),
+    [("risk", "max_sector"), ("lowvol.risk", "max_open_positions")],
+    ids=["a-fraction", "a-count"],
+)
+def test_a_limit_stated_true_is_refused_by_name(tmp_path: Path, section: str, key: str) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text(f"[{section}]\n{key} = true\n")
+
+    with pytest.raises(ConfigError, match=f"{section}.{key}"):
+        load_config(path)
+
+
+def test_a_limit_read_off_the_stop_on_without_a_stop_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text("[risk]\nstop_required = false\n")
+
+    with pytest.raises(ConfigError, match="risk_per_trade"):
+        load_config(path)
+
+
+def test_the_committed_config_states_lowvols_limits_and_one_cell_protocol() -> None:
+    config = load_config(Path(__file__).resolve().parents[1] / "tradeline.toml")
+
+    assert config.lowvol == Config.Lowvol()
+    assert config.lowvol.risk.limits() == LOWVOL
+    terms = config.lowvol.protocol.terms()
+    assert terms.grid == {}
+    assert terms.layout.holdout_start == date(2024, 10, 1)
+    assert (terms.layout.holdout_months, terms.layout.windows) == (24, 5)
+    assert terms.layout.out_of_sample_months == 12

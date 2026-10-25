@@ -18,6 +18,12 @@ out-of-sample day's close every open Position takes a Boundary Exit, after
 costs. Each Window's selection and out-of-sample result is then recorded
 (``walk_forward_windows``).
 
+A Protocol whose grid has one cell (``lowvol_v1``'s, which has no free
+parameter) has nothing to select: no In-Sample run is made, every Window
+records no selection, and its Out-of-Sample Windows run at the one cell, with
+entries, as one continuous backtest, the Stitched Curve (a portfolio
+Strategy's starting with its Initial Buy, ``engine.backtest_span``).
+
 The run is resumable per cell: a cell's summary and each out-of-sample day are
 committed as they finish, so a run interrupted and started again skips what is
 recorded, picks up at the first unfinished cell (or the day after the
@@ -55,7 +61,7 @@ from tradeline.paper_broker import FILL_MODEL, FillModel
 from tradeline.protocol import TIE_BREAK, Protocol, Window
 from tradeline.report import FRACTION, RATIO, RUPEE, Account, read_account, rounded
 from tradeline.risk import RISK_ENGINE, RiskEngine
-from tradeline.strategy import Strategy
+from tradeline.strategy.portfolio import AnyStrategy
 from tradeline.tick_sizes import TickSizes
 from tradeline.trading_calendar import TradingCalendar
 
@@ -65,7 +71,12 @@ log = logging.getLogger(__name__)
 SMALLER_FIRST = tuple(t.removeprefix("smaller ") for t in TIE_BREAK if t.startswith("smaller "))
 
 # A Strategy at one cell's parameters, by the names its ``parameters`` gives them.
-StrategyFactory = Callable[[Mapping[str, Decimal]], Strategy]
+StrategyFactory = Callable[[Mapping[str, Decimal]], AnyStrategy]
+# What a Window of a one-cell Protocol's Walk-Forward records in place of a selection.
+ONE_CELL = (
+    "the grid has one cell, so Walk-Forward selects nothing: the Out-of-Sample Windows run"
+    " at it as one continuous backtest"
+)
 
 
 @dataclass(frozen=True)
@@ -137,6 +148,13 @@ def grid_cells(grid: Mapping[str, tuple[Decimal, ...]]) -> list[dict[str, Decima
     ]
 
 
+def one_cell(grid: Mapping[str, tuple[Decimal, ...]]) -> Mapping[str, Decimal] | None:
+    """The grid's one cell, when it has exactly one (Walk-Forward then selects nothing);
+    None otherwise."""
+    cells = grid_cells(grid)
+    return cells[0] if len(cells) == 1 else None
+
+
 @dataclass(frozen=True)
 class WalkForwardReport:
     """A Protocol's Walk-Forward read back from the Ledger: each Window's selection and
@@ -203,6 +221,8 @@ def window_json(
         "selection": selection,
         "no_selection": None
         if selection is not None
+        else ONE_CELL
+        if one_cell(terms.grid) is not None
         else f"no cell reached {terms.min_in_sample_trades} in-sample trades",
         "out_of_sample_result": {
             "runs": found.out_of_sample_runs,
@@ -267,10 +287,27 @@ def walk_forward(
     chosen_before: Mapping[str, Decimal] | None = None
     cells_run = 0
     run = _Runner(conn, strategy, frozen, calendar, tick_sizes, risk_engine, fill_model)
+    only = one_cell(terms.grid)
     for number, window in enumerate(terms.windows, start=1):
         if number in done:
             if (recorded := done[number].parameters) is not None:
                 chosen_before = {a: Decimal(v) for a, v in recorded.items()}
+            continue
+        last_window = number == len(terms.windows)
+        if only is not None:
+            cache = SeriesCache(
+                conn, start=window.out_of_sample.first, end=window.out_of_sample.last
+            )
+            run.out_of_sample(backtest_id, window, cache, only, entries=True, last=last_window)
+            _record_window(
+                conn,
+                frozen,
+                backtest_id,
+                number,
+                window,
+                cells=1,
+                selection=Selection(None, None, None, None, 0),
+            )
             continue
         cache = SeriesCache(conn, start=window.in_sample.first, end=window.out_of_sample.last)
         scores, ran = run.cells(number, window, cache)
@@ -286,7 +323,6 @@ def walk_forward(
                 else _strings(selection.parameters),
             },
         )
-        last_window = number == len(terms.windows)
         if selection.parameters is not None:
             run.out_of_sample(
                 backtest_id, window, cache, selection.parameters, entries=True, last=last_window
@@ -343,9 +379,10 @@ def restitch(
             f" {len(windows)} of {len(terms.windows)} Windows"
         )
     run = _Runner(conn, strategy, frozen, calendar, tick_sizes, risk_engine, fill_model)
-    chosen: Mapping[str, Decimal] | None = None
+    only = one_cell(terms.grid)
+    chosen: Mapping[str, Decimal] | None = only
     for number, (window, found) in enumerate(zip(terms.windows, windows, strict=True), start=1):
-        entries = found.parameters is not None
+        entries = found.parameters is not None or only is not None
         if found.parameters is not None:
             chosen = {a: Decimal(v) for a, v in found.parameters.items()}
         if chosen is None:

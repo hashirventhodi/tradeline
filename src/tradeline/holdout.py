@@ -49,7 +49,7 @@ from tradeline.protocol import months_between
 from tradeline.risk import RISK_ENGINE, RiskEngine
 from tradeline.tick_sizes import TickSizes
 from tradeline.trading_calendar import TradingCalendar
-from tradeline.walk_forward import StrategyFactory
+from tradeline.walk_forward import StrategyFactory, one_cell
 
 log = logging.getLogger(__name__)
 
@@ -202,7 +202,8 @@ def rerun_holdout(
 
 def _last_parameters(conn: psycopg.Connection, frozen: queries.FrozenProtocol) -> dict[str, str]:
     """The parameters the Stitched Curve ended under: the last Window's selection, or the
-    last before it; refused before the Walk-Forward has finished or if no Window chose."""
+    last before it, or a one-cell grid's cell; refused before the Walk-Forward has finished
+    or if no Window chose."""
     short, terms = frozen.hash[:12], frozen.protocol
     windows = queries.walk_forward_windows(conn, frozen.hash)
     if len(windows) < len(terms.windows):
@@ -211,6 +212,10 @@ def _last_parameters(conn: psycopg.Connection, frozen: queries.FrozenProtocol) -
             f" {len(terms.windows)} Windows; finish it (`tradeline backtest --protocol"
             f" {short}`) before the Holdout"
         )
+    only = one_cell(terms.grid)
+    if only is not None:
+        # One cell: nothing was selected, and the Stitched Curve ran at it.
+        return {name: str(value) for name, value in only.items()}
     chosen = [w.parameters for w in windows if w.parameters is not None]
     if not chosen:
         raise ValueError(
