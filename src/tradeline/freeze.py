@@ -192,7 +192,7 @@ def freeze_protocol(
         snapshot=_data_snapshot(
             conn,
             rule_version,
-            start=_warm_up_start(calendar, first, terms.warm_up_trading_days),
+            start=warm_up_start(calendar, first, terms.warm_up_trading_days),
             first=first,
             last=last,
             calendar=calendar,
@@ -202,6 +202,7 @@ def freeze_protocol(
         tax=tax,
         benchmark=benchmark,
         notes=terms.notes,
+        not_independent=terms.not_independent,
     )
     content = canonical(protocol.content())
     found = content_hash(protocol.content())
@@ -326,7 +327,7 @@ def run_members(conn: psycopg.Connection, month: date, rule_version: str) -> set
     }
 
 
-def _warm_up_start(calendar: TradingCalendar, first: date, days: int) -> date:
+def warm_up_start(calendar: TradingCalendar, first: date, days: int) -> date:
     """The trading day ``days`` trading days before ``first``, or the calendar's first day."""
     if days == 0:
         return first

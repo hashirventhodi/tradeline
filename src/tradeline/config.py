@@ -42,6 +42,13 @@ BUFFER_SCALE_NOTE = (
     " share of the eligible than in the index"
 )
 
+# Why ``lowvol_v1``'s Holdout run is Not Independent though it is its family's first (ADR
+# 0007 amendment of 2026-10-25), frozen with its Protocol.
+NOT_INDEPENDENT_REASON = (
+    "the family was chosen after reading published results covering the Holdout's years"
+    " (NSE's factor indices among them)"
+)
+
 
 RankBy = Literal["symbol", "instrument"]
 RANK_BY: tuple[RankBy, ...] = get_args(RankBy)
@@ -332,8 +339,18 @@ class Config:
         demergers: bool = True
         # What the Protocol notes of the rule beyond its numbers (``Protocol.notes``).
         buffer_scale_note: str = BUFFER_SCALE_NOTE
+        # Why its Holdout run is Not Independent, frozen with the Protocol: it then passes the
+        # Backtest Gate only with a Fresh Period. Required: the family was chosen after
+        # reading results that cover the Holdout's years.
+        not_independent: str = NOT_INDEPENDENT_REASON
 
         def __post_init__(self) -> None:
+            if not self.not_independent.strip():
+                raise ConfigError(
+                    "lowvol.protocol: not_independent states why lowvol_v1's Holdout run is"
+                    " Not Independent (its family was chosen after reading results covering"
+                    " the Holdout's years), so it cannot be empty"
+                )
             if not self.tax:
                 raise ConfigError(
                     "lowvol.protocol: the Benchmark Gate compares Liquidation Values after"
@@ -368,6 +385,7 @@ class Config:
                 dividends=self.dividends,
                 demergers=self.demergers,
                 notes={"buffer_scale": self.buffer_scale_note},
+                not_independent=self.not_independent,
             )
 
     @dataclass(frozen=True)

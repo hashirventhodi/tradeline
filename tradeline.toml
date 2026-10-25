@@ -194,4 +194,8 @@ min_stitched_rebalances = 8
 tax = true                      # the tax ledger, Liquidation Value against the Benchmark
 dividends = true                # credited in cash on the Ex-Date (ADR 0020)
 demergers = true                # the demerger table's Demerger Credits (ADR 0020)
+# not_independent: why lowvol_v1's Holdout run is Not Independent (ADR 0007,
+# 2026-10-25): required, defaulting to config.NOT_INDEPENDENT_REASON. A Not
+# Independent run passes only with a Fresh Period of twelve months holding two
+# Rebalances after its Initial Buy (the Benchmark Gate's min_fresh_period_rebalances).
 

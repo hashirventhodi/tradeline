@@ -14,9 +14,9 @@ from decimal import Decimal
 import pytest
 
 from tradeline.benchmark import UnitSplit, chained_navs
-from tradeline.gate import BenchmarkCurve, benchmark_curve, evaluate
+from tradeline.gate import BenchmarkCurve, GateOutcome, benchmark_curve, evaluate
 from tradeline.metrics import benchmark_comparison
-from tradeline.protocol import BenchmarkGate
+from tradeline.protocol import BenchmarkGate, gate_content, read_gate
 
 D = Decimal
 START = D(500000)
@@ -180,6 +180,35 @@ def test_a_not_independent_run_passes_only_with_a_fresh_period_beating_the_bench
     assert outcome(None) == "cannot pass"
     assert outcome(replace(GOOD, rebalances=2)) == "pass"
     assert outcome(NO_EXCESS) == "fail"
+
+
+def test_a_fresh_period_with_one_rebalance_after_its_initial_buy_cannot_carry_the_gate() -> None:
+    def scored(fresh: BenchmarkCurve) -> GateOutcome:
+        return evaluate(
+            GATE,
+            stitched=GOOD,
+            holdout=GOOD,
+            independent=False,
+            may_pass=True,
+            standing="Not Independent: twelve months of Fresh Period",
+            fresh_period=fresh,
+        )
+
+    one = scored(replace(GOOD, rebalances=1))
+    assert one.outcome == "cannot pass"
+    assert "1 Rebalance after its Initial Buy, short of 2" in one.reason
+    (check,) = [c for c in one.checks if (c.curve, c.metric) == ("fresh_period", "rebalances")]
+    assert (check.value, check.rule, check.threshold, check.passed) == (1, "at least", 2, False)
+    # Short of its Rebalances, a Fresh Period that misses a threshold does not fail the Gate
+    # either: it has not yet carried it.
+    assert scored(replace(NO_EXCESS, rebalances=1)).outcome == "cannot pass"
+    assert scored(replace(GOOD, rebalances=2)).outcome == "pass"
+    assert scored(replace(NO_EXCESS, rebalances=2)).outcome == "fail"
+
+
+def test_the_gate_freezes_the_fresh_periods_two_rebalances() -> None:
+    assert GATE.min_fresh_period_rebalances == 2
+    assert read_gate(gate_content(GATE)) == GATE
 
 
 def test_a_unit_split_is_chained_so_the_fund_holds_its_value_across_it() -> None:
