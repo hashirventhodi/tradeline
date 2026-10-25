@@ -28,6 +28,7 @@ that path from a day on:
   continues from there (a gap past a stop is a large negative ``Gap``).
 - ``CircuitLock``: the day is pinned at the previous close plus ``amount``,
   open, high, low and close equal (GLOSSARY: Circuit Lock).
+- ``Dividend``: a dividend NSE lists, by its subject; it leaves the path as it is.
 - ``Split`` and ``Bonus``: a Corporate Action. From its Ex-Date NSE publishes
   the path times the factor (a Rs 10 to Rs 5 split halves the price and
   doubles the volume), so adding an action changes no bar before its Ex-Date.
@@ -159,9 +160,20 @@ class Bonus:
         return f"Bonus {self.new}:{self.held}"
 
 
+@dataclass(frozen=True)
+class Dividend:
+    """A dividend as NSE lists it: its Ex-Date, its subject, and the face value NSE stores
+    with it. The path is unchanged by it (no fall by the amount), so the only money it
+    moves is the cash a holder is credited."""
+
+    ex_date: date
+    subject: str
+    face_value: int = 10
+
+
 PathEvent = Trend | Dip | Gap | CircuitLock
 Action = Split | Bonus
-Event = PathEvent | Action
+Event = PathEvent | Action | Dividend
 
 
 # --- Stocks and the Market ----------------------------------------------------
@@ -199,11 +211,15 @@ class Stock:
             (e for e in self.events if isinstance(e, Split | Bonus)), key=lambda a: a.ex_date
         )
 
+    @property
+    def dividends(self) -> list[Dividend]:
+        return sorted((e for e in self.events if isinstance(e, Dividend)), key=lambda d: d.ex_date)
+
     def path_bars(self, days: Sequence[date]) -> list[Bar]:
         """The path, one bar per trading day: NSE's prices had there been no action."""
         by_day: dict[date, list[PathEvent]] = {}
         for event in self.events:
-            if not isinstance(event, Split | Bonus):
+            if isinstance(event, Trend | Dip | Gap | CircuitLock):
                 by_day.setdefault(event.day, []).append(event)
         slope, previous, bars = self.slope, self.start, []
         for day in days:
@@ -422,11 +438,11 @@ def _corporate_actions(stocks: Iterable[Stock], start: date, end: date) -> list[
             "isin": s.isin,
             "exDate": f"{a.ex_date:%d-%b-%Y}",
             "recDate": f"{a.ex_date:%d-%b-%Y}",
-            "faceVal": "10",
+            "faceVal": str(a.face_value) if isinstance(a, Dividend) else "10",
             "subject": a.subject,
         }
         for s in stocks
-        for a in s.actions
+        for a in (*s.actions, *s.dividends)
         if start <= a.ex_date <= end
     ]
 

@@ -68,6 +68,14 @@ prices. Orders open for that session in the Instrument are cancelled, reason
 at the restated prices and shares, an entry is not (the next Run may plan
 again).
 
+When the Protocol credits dividends (ADR 0020), before the session each Position
+held at the account's last close is credited, in cash on the Ex-Date, every
+dividend its Instrument has ex-dated since then: its shares times the amount
+per share NSE's subject states (``tradeline.dividends``). A Position bought at
+the Ex-Date's open held nothing at the close before and is credited nothing; one
+sold that day is credited. An unparsed subject credits nothing and is written
+with its reason. The credit is part of the account's cash, so of Equity.
+
 A backtest runs under a frozen Protocol (``tradeline.protocol``, ADR 0007)
 and nothing else: its Universe Rule version, Limits, costs, band and starting
 Equity are the Protocol's, and each Strategy version it records names the
@@ -97,6 +105,7 @@ from tradeline import ledger, queries, revision
 from tradeline.adjust import ADJUSTED_KINDS, AdjustedBar, CorporateAction
 from tradeline.costs import CostModel, paisa
 from tradeline.dates import IST, month_of
+from tradeline.dividends import dividends as dividends_of
 from tradeline.freeze import verify_snapshot
 from tradeline.paper_broker import (
     FILL_MODEL,
@@ -465,9 +474,11 @@ def run(
     entries: bool = True,
     boundary: bool = False,
     commit: bool = True,
+    dividends: bool = False,
 ) -> RunResult:
-    """The day ``as_of`` in one account: its held Positions restated for any split or bonus
-    ex-dated since its last day, its session, then one Run over the month's Universe under
+    """The day ``as_of`` in one account: its held Positions credited any dividend ex-dated
+    since its last day when ``dividends`` is on (as its Protocol states), and restated for
+    any split or bonus, its session, then one Run over the month's Universe under
     ``rule_version``, its Plans checked against ``limits`` at the account's Equity (from
     ``starting_equity``, after ``costs``) with its open Positions held, then the Orders for
     the next session.
@@ -513,6 +524,7 @@ def run(
         costs=costs,
         tick_sizes=tick_sizes,
         fill_model=fill_model,
+        dividends=dividends,
     )
     tags: queries.Account = {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run}
     next_session = _next_session(calendar, as_of)
@@ -713,6 +725,7 @@ def backtest_span(
         "protocol": frozen.hash,
         "impact": impact,
         "commit": commit,
+        "dividends": terms.dividends,
     }
     last = days[-1]
     before = days[:-1] if boundary else days
@@ -924,8 +937,10 @@ class _Account:
         costs: CostModel,
         tick_sizes: TickSizes,
         fill_model: FillModel,
+        dividends: bool = False,
     ) -> None:
         self._conn = conn
+        self._dividends = dividends
         self._account: queries.Account = {
             "mode": mode,
             "backtest_id": backtest_id,
@@ -976,6 +991,8 @@ class _Account:
             )
             for found in sorted(open_orders, key=lambda o: (o.purpose != "entry", o.placed))
         ]
+        if self._dividends:
+            self._credit_dividends()
         fills = 0
         for order in self._restate(ordered):
             if order.purpose == "entry":
@@ -987,6 +1004,26 @@ class _Account:
         for target in list(self._targets.values()):
             fills += self._meet_target(target)
         return fills
+
+    def _credit_dividends(self) -> None:
+        """Credit each Position open before the session, so held at the last close, every
+        dividend its Instrument has ex-dated since the account's last trading day, on the
+        shares held then (before any split or bonus that day restates them). An unparsed
+        subject credits nothing and is written with its reason."""
+        previous = _previous_session(self._calendar, self._day)
+        for position in self.open_positions():
+            actions = self._data.corporate_actions(
+                position.instrument, start=previous + timedelta(days=1)
+            )
+            for dividend in dividends_of(position.instrument, actions):
+                ledger.insert_dividend_credit(
+                    self._conn,
+                    self._account,
+                    position,
+                    dividend,
+                    day=self._day,
+                    seq=self._next_seq(),
+                )
 
     def _restate(self, orders: list[ledger.Order]) -> list[ledger.Order]:
         """Restate each held Position whose Instrument has a split or bonus ex-dated since the
