@@ -18,7 +18,9 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from tradeline import revision
+import psycopg
+
+from tradeline import queries, revision
 from tradeline import universe as universe_service
 from tradeline.cited_actions import load_cited_actions
 from tradeline.collect import collect_daily as collect_daily_service
@@ -69,6 +71,8 @@ from tradeline.sources.kite import (
     KiteSession,
     login_url,
 )
+from tradeline.strategy.lowvol import LowvolV1
+from tradeline.strategy.portfolio import AnyStrategy
 from tradeline.strategy.pullback import PullbackV1
 from tradeline.tick_sizes import load_tick_sizes
 from tradeline.trading_calendar import load_trading_calendar
@@ -79,6 +83,7 @@ from tradeline.transport import (
     transport_for,
 )
 from tradeline.verify_universe import verify_universe as verify_universe_service
+from tradeline.walk_forward import StrategyFactory
 from tradeline.walk_forward import walk_forward as walk_forward_service
 from tradeline.weekly_integrity import frozen_on, weekly_integrity
 
@@ -521,15 +526,24 @@ def integrity_weekly(ctx: Context, args: argparse.Namespace) -> int:
 
 
 def protocol(ctx: Context, args: argparse.Namespace) -> int:
-    """``protocol freeze`` freezes the configured Protocol for ``pullback_v1`` with the data
-    snapshot read now, at this commit, and prints its Window boundaries; ``protocol
-    windows`` prints the boundaries the configuration gives, writing nothing, for the
-    Operator to check before freezing.
+    """``protocol freeze`` freezes the configured Protocol for ``--strategy`` (``pullback_v1``
+    unless named) with the data snapshot read now, at this commit, and prints its Window
+    boundaries; ``protocol windows`` prints the boundaries the configuration gives, writing
+    nothing, for the Operator to check before freezing. ``pullback_v1``'s Terms and Limits
+    are ``[protocol]`` and ``[risk]``; ``lowvol_v1``'s are ``[lowvol.protocol]`` and
+    ``[lowvol.risk]``.
 
     The boundaries go to stderr; the summary is the last JSON line on stdout.
     """
     calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
-    terms = ctx.config.protocol.terms()
+    strategy: AnyStrategy
+    limit_set: Config.LimitSet
+    if args.strategy == LowvolV1.name:
+        strategy, limit_set = LowvolV1(), ctx.config.lowvol.risk
+        terms = ctx.config.lowvol.protocol.terms()
+    else:
+        strategy, limit_set = PullbackV1(), ctx.config.risk
+        terms = ctx.config.protocol.terms()
     if args.action == "windows":
         windows, holdout = window_boundaries(terms.layout, calendar)
         sys.stderr.write(windows_text(windows, holdout))
@@ -538,10 +552,10 @@ def protocol(ctx: Context, args: argparse.Namespace) -> int:
         result = freeze_protocol(
             conn,
             terms,
-            strategy=PullbackV1(),
+            strategy=strategy,
             rule_version=ctx.config.universe.version,
-            limits=ctx.config.risk.limits(),
-            halts=ctx.config.risk.halts(),
+            limits=limit_set.limits(),
+            halts=limit_set.halts(),
             schedule=load_cost_schedule(Path(ctx.config.costs.schedule)),
             slippage=ctx.config.costs.slippage(),
             calendar=calendar,
@@ -647,14 +661,18 @@ def backtest(ctx: Context, args: argparse.Namespace) -> int:
 
 
 def walk_forward(ctx: Context, args: argparse.Namespace) -> int:
-    """Walk-Forward over the Protocol ``--protocol`` names, for ``pullback_v1``."""
+    """Walk-Forward over the Protocol ``--protocol`` names, for the Strategy it validates."""
     if args.end is not None:
         raise ValueError("--to needs --from; without either, backtest runs the whole Protocol")
     calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
     tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
     with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
         result = walk_forward_service(
-            conn, _pullback, protocol=args.protocol, calendar=calendar, tick_sizes=tick_sizes
+            conn,
+            _strategies(conn, args.protocol),
+            protocol=args.protocol,
+            calendar=calendar,
+            tick_sizes=tick_sizes,
         )
     if args.out is not None:
         args.out.write_text(result.report.text())
@@ -669,7 +687,11 @@ def holdout(ctx: Context, args: argparse.Namespace) -> int:
     tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
     with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
         result = run_holdout(
-            conn, _pullback, protocol=args.protocol, calendar=calendar, tick_sizes=tick_sizes
+            conn,
+            _strategies(conn, args.protocol),
+            protocol=args.protocol,
+            calendar=calendar,
+            tick_sizes=tick_sizes,
         )
     log.info("holdout finished", extra=result.summary())
     return 0
@@ -683,7 +705,11 @@ def fresh_period(ctx: Context, args: argparse.Namespace) -> int:
     tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
     with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
         result = run_fresh_period(
-            conn, _pullback, protocol=args.protocol, calendar=calendar, tick_sizes=tick_sizes
+            conn,
+            _strategies(conn, args.protocol),
+            protocol=args.protocol,
+            calendar=calendar,
+            tick_sizes=tick_sizes,
         )
     log.info("fresh period finished", extra=result.summary())
     return 0
@@ -692,6 +718,30 @@ def fresh_period(ctx: Context, args: argparse.Namespace) -> int:
 def _pullback(parameters: Mapping[str, Decimal]) -> PullbackV1:
     """``pullback_v1`` at a cell's parameters."""
     return PullbackV1(k=parameters["k"], r=parameters["r"], n=int(parameters["n"]))
+
+
+def _lowvol(parameters: Mapping[str, Decimal]) -> LowvolV1:
+    """``lowvol_v1``, which has no parameters."""
+    if parameters:
+        raise ValueError(f"lowvol_v1 has no parameters, not {sorted(parameters)}")
+    return LowvolV1()
+
+
+# Each Strategy a Protocol can validate, by name, made at a cell's parameters.
+STRATEGIES: dict[str, StrategyFactory] = {
+    PullbackV1.name: _pullback,
+    LowvolV1.name: _lowvol,
+}
+
+
+def _strategies(conn: psycopg.Connection, protocol: str | None) -> StrategyFactory:
+    """The Strategy the frozen Protocol ``protocol`` validates, at a cell's parameters;
+    ``pullback_v1``'s when no Protocol of that name is frozen, for the service to refuse."""
+    frozen = queries.protocol(conn, protocol) if protocol else None
+    name = PullbackV1.name if frozen is None else frozen.protocol.name
+    if name not in STRATEGIES:
+        raise ValueError(f"Protocol {protocol} validates {name}, which this code does not know")
+    return STRATEGIES[name]
 
 
 def backtest_report(ctx: Context, args: argparse.Namespace) -> int:
@@ -736,7 +786,7 @@ def protocol_report(ctx: Context, args: argparse.Namespace) -> int:
     with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
         result = report_protocol(
             conn,
-            _pullback,
+            _strategies(conn, args.protocol),
             protocol=args.protocol,
             calendar=calendar,
             tick_sizes=tick_sizes,
@@ -1161,13 +1211,22 @@ def build_parser() -> argparse.ArgumentParser:
         "protocol", help="the Protocol a Strategy version is validated under (ADR 0007)"
     )
     protocol_actions = protocol_parser.add_subparsers(dest="action", required=True)
+    named = argparse.ArgumentParser(add_help=False)
+    named.add_argument(
+        "--strategy",
+        choices=sorted(STRATEGIES),
+        default=PullbackV1.name,
+        help="the Strategy whose configured Protocol it is (default %(default)s)",
+    )
     protocol_actions.add_parser(
         "freeze",
+        parents=[named],
         help="freeze the configured Protocol with the data snapshot and the cost schedule as of"
         " now, at this commit, and print its Window boundaries as trading days",
     )
     protocol_actions.add_parser(
         "windows",
+        parents=[named],
         help="print the configured Window boundaries as trading days, writing nothing",
     )
     return parser

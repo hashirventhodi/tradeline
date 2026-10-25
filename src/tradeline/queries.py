@@ -1749,6 +1749,9 @@ class LedgerRun:
     # The Slippage impact c it was priced with in place of its Protocol's (a report's c
     # sensitivity, #79); None for the Protocol's own.
     impact: Decimal | None = None
+    # A portfolio Strategy's Run: ``initial_buy``, ``rebalance`` or ``rebalance_buys``
+    # (``tradeline.engine``); None on any other day and for any other Strategy.
+    portfolio_step: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1769,9 +1772,10 @@ class LedgerPlan:
     instrument: str
     symbol: str
     entry: Decimal
-    stop: Decimal
-    target: Decimal
-    time_stop_days: int
+    # None, all three, for a portfolio Strategy's Plan.
+    stop: Decimal | None
+    target: Decimal | None
+    time_stop_days: int | None
     facts: dict[str, Decimal]
 
 
@@ -1789,7 +1793,7 @@ def runs(
         "SELECT r.id, r.mode, r.backtest_id, s.id, s.mode, s.backtest_id, s.family, s.name,"
         " s.code_revision, s.protocol, s.ranking, r.as_of, r.universe_month,"
         " r.universe_rule_version, r.universe_size, r.parameters, r.recorded_at, r.cash,"
-        " r.equity, r.dry_run, r.impact"
+        " r.equity, r.dry_run, r.impact, r.portfolio_step"
         " FROM runs r JOIN strategies s ON (s.mode, s.id) = (r.mode, r.strategy_id)"
         " WHERE (%(mode)s::text IS NULL OR r.mode = %(mode)s)"
         " AND (%(backtest_id)s::uuid IS NULL OR r.backtest_id = %(backtest_id)s)"
@@ -1814,6 +1818,7 @@ def runs(
             equity=row[18],
             dry_run=row[19],
             impact=row[20],
+            portfolio_step=row[21],
         )
         for row in rows
     ]
@@ -1860,9 +1865,10 @@ class LedgerPass:
     symbol: str
     plan_hash: str
     entry: Decimal
-    stop: Decimal
-    target: Decimal
-    time_stop_days: int
+    # None, all three, for a portfolio Strategy's Plan.
+    stop: Decimal | None
+    target: Decimal | None
+    time_stop_days: int | None
     shares: int
     # The sector the sector Limit read; ``unclassified`` when none was recorded.
     sector: str
@@ -1882,9 +1888,10 @@ class LedgerBlock:
     symbol: str
     limit: str
     entry: Decimal
-    stop: Decimal
-    target: Decimal
-    time_stop_days: int
+    # None, all three, for a portfolio Strategy's Plan.
+    stop: Decimal | None
+    target: Decimal | None
+    time_stop_days: int | None
     shares: int
     sector: str
     facts: dict[str, Decimal]
@@ -2023,9 +2030,10 @@ class LedgerPosition:
     opened_on: date
     shares: int
     entry: Decimal
-    stop: Decimal
-    target: Decimal
-    time_stop_days: int
+    # None, all three, for a portfolio Strategy's Plan.
+    stop: Decimal | None
+    target: Decimal | None
+    time_stop_days: int | None
     # The day of its latest event: the day it closed, once closed.
     as_of: date
     # ``stop``, ``target``, ``time`` or ``boundary``; None while open.
@@ -2183,8 +2191,8 @@ class LedgerPositionEvent:
     symbol: str
     shares: int
     entry: Decimal
-    stop: Decimal
-    target: Decimal
+    stop: Decimal | None
+    target: Decimal | None
     # A restatement's Adjustment Factor and the cash paid for a fractional share.
     factor: Fraction | None
     cash_in_lieu: Decimal | None

@@ -42,7 +42,9 @@ Every Limit above is declared on or off, with its value, in each family's Protoc
 | Daily loss halt, drawdown halt | off, replaced by the Relative Drawdown Halt |
 | Relative Drawdown Halt | the worst Relative Drawdown of the NIFTY100 Low Volatility 30 TRI against the NIFTY 500 TRI, 2005-04 to 2019-09, rounded up to the next 5 points (ADR 0020) |
 
-`lowvol` sizing: at a Rebalance, leavers are sold at the Rebalance day's open, and entrants split all the cash then held equally at the next trading day's open, each at most 15% of Equity; any residual stays in cash, and cash as a share of Equity is reported at every Rebalance. Continuing names are never trimmed, and the largest weight any name reached is reported.
+`lowvol` sizing: at a Rebalance, leavers are sold at the Rebalance day's open, and entrants split all the cash then held equally at the next trading day's open, each at most 15% of Equity; any residual stays in cash, and cash as a share of Equity is reported at every Rebalance. Continuing names are never trimmed, and the largest weight any name reached is reported. Each sale is an after-market limit sell at the decision day's close less the Protocol's band, sent again each day the open does not fill it; each buy is a limit buy at the sizing day's close plus the band, rounded up to the tick, and its equal share of cash buys as many shares as fit at that limit with the buy's charges, so the account never spends cash it does not hold. `lowvol_v1`'s band is 1 percent (`[lowvol.protocol]`): a buy goes unfilled only on an open more than 1 percent over the close, and sizing at the limit leaves up to about 1 percent of each buy in cash. The Initial Buy is decided by a Run on the trading day before the account's first, from that day's close, and is not a day of the account's curve.
+
+A family's Limits are configuration too: `[risk]` is `pullback_v1`'s and `[lowvol.risk]` `lowvol_v1`'s, each Limit a value or `false` when off; `tradeline protocol freeze --strategy lowvol_v1` freezes `[lowvol.risk]` with `[lowvol.protocol]`.
 
 ## Sizing
 

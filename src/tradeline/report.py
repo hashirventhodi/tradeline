@@ -7,6 +7,9 @@ reading and nothing else. Its metrics are ``tradeline.metrics`` over the daily
 marked Equity curve (the starting Equity, then each Run's Equity) and the closed
 trades.
 
+A portfolio Strategy's Initial Buy is decided by a Run on the trading day before its
+account's first; that Run is not a day of the curve.
+
 A closed trade is a Position the backtest closed; its net P&L is what its Fills
 moved into cash after every charge and Slippage, plus any cash paid in lieu of a
 fractional share when it was restated. Its Equity at entry is the Equity its Pass
@@ -73,8 +76,9 @@ class ClosedPosition:
     closed_on: date
     shares: int
     entry: Decimal
-    stop: Decimal
-    target: Decimal
+    # None, both, for a portfolio Strategy's holding.
+    stop: Decimal | None
+    target: Decimal | None
     exit_price: Decimal
     exit_reason: ExitReason
     net_pnl: Decimal
@@ -85,10 +89,12 @@ class ClosedPosition:
     @property
     def gapped(self) -> bool:
         """A Gapped Stop: the stop's exit filled under the stop."""
-        return self.exit_reason == "stop" and self.exit_price < self.stop
+        return self.exit_reason == "stop" and self.stop is not None and self.exit_price < self.stop
 
     @property
     def planned_risk(self) -> Decimal:
+        # Read only for a Gapped Stop, which has a stop.
+        assert self.stop is not None
         return self.shares * (self.entry - self.stop)
 
     def as_json(self) -> dict[str, Any]:
@@ -116,8 +122,8 @@ class OpenPosition:
     opened_on: date
     shares: int
     entry: Decimal
-    stop: Decimal
-    target: Decimal
+    stop: Decimal | None
+    target: Decimal | None
     # The last day's adjusted close it is marked at.
     close: Decimal
 
@@ -253,7 +259,10 @@ def read_account(conn: psycopg.Connection, backtest_id: uuid.UUID) -> Account:
     if frozen is None:
         raise ValueError(f"backtest {backtest_id} names no frozen Protocol to start it from")
     curve = [frozen.protocol.starting_equity]
-    for ran in runs:
+    # An Initial Buy's Run is the decision on the day before the account's first: its
+    # Equity is the starting Equity the curve starts at, not a day of the account's.
+    days = [r for r in runs if r.portfolio_step != "initial_buy"]
+    for ran in days:
         if ran.equity is None:
             raise ValueError(f"the Run on {ran.as_of} records no Equity; backtest it again")
         curve.append(ran.equity)
@@ -294,7 +303,7 @@ def read_account(conn: psycopg.Connection, backtest_id: uuid.UUID) -> Account:
         )
     closed.sort(key=lambda t: (t.closed_on, t.opened_on, t.symbol))
     return Account(
-        tuple(r.as_of for r in runs),
+        tuple(r.as_of for r in days),
         tuple(curve),
         tuple(closed),
         tuple(still_open),

@@ -66,8 +66,8 @@ large_moves = "large_moves.csv"
 large_move_ratio = 1.5
 
 # The Risk Engine's Limits (docs/risk-controls.md), fractions of Equity where
-# they are: `pullback_v1`'s set, every Limit stated (ADR 0020). Every Plan of a
-# Run is checked against them in Plan order.
+# they are: `pullback_v1`'s set, every Limit stated (ADR 0020), a Limit off
+# written `false`. Every Plan of a Run is checked against them in Plan order.
 [risk]
 stop_required = true        # a Plan without a stop under its entry is Blocked
 risk_per_trade = 0.01       # Equity at risk at the stop
@@ -116,6 +116,44 @@ risk_free_rate = 0.065          # a year, for Sharpe
 band = 0.05                     # a stop or time-stop exit's limit under the close
 warm_up_trading_days = 250      # before the first Window, also hashed in the data snapshot
 sharpe_above = 1.0              # the Backtest Gate, on the Stitched Curve and the Holdout
+drawdown_below = 0.15
+profit_factor_above = 1.3
+min_stitched_trades = 150
+
+# `lowvol_v1`'s Limits (docs/risk-controls.md, "Limits by family"; ADR 0020):
+# every Limit stated, `false` when off. A portfolio Plan has an entry price and
+# a size only, so the Limits read off a stop are off; the sector Limit is off
+# as in the NIFTY100 Low Volatility 30. Frozen by
+# `tradeline protocol freeze --strategy lowvol_v1`.
+[lowvol.risk]
+stop_required = false
+risk_per_trade = false
+max_open_positions = 30
+max_position = 0.15         # of Equity at entry, the cap on each buy's equal share of cash
+max_sector = false          # sector weights are reported at every Rebalance instead
+max_gross = 1.0
+participation_cap = 0.01
+min_order_value = 5000
+max_new_entries = false
+min_reward_to_risk = false
+daily_loss_halt = 0.03      # reported only, until the Relative Drawdown Halt replaces both (#97)
+drawdown_halt = 0.10
+
+# `lowvol_v1`'s Protocol: one grid cell, so Walk-Forward selects nothing and the
+# Out-of-Sample Windows (2019-10 to 2024-09) are one continuous backtest, the
+# Stitched Curve, starting with an Initial Buy decided on 2019-09-30, the one
+# In-Sample month's last day.
+[lowvol.protocol]
+holdout_start = "2024-10"
+holdout_months = 24
+windows = 5
+out_of_sample_months = 12
+in_sample_months = 1            # never run; holds the Initial Buy's decision day
+starting_equity = 500000
+risk_free_rate = 0.065
+band = 0.01                     # a Rebalance buy's limit over the close, a sale's under it
+warm_up_trading_days = 260      # the 253 trading days of bars the first decision reads
+sharpe_above = 1.0              # pullback_v1's Gate until the Benchmark Gate (#98)
 drawdown_below = 0.15
 profit_factor_above = 1.3
 min_stitched_trades = 150

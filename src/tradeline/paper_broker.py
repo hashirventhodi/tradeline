@@ -10,9 +10,12 @@ Phase 3). Every Order is a limit Order:
 - A target is a limit sell at the Plan's target, resting through the day. It
   fills at the open when the open is above the target, else at the target when
   the high is strictly above it; a high equal to it fills nothing.
-- A stop or time-stop exit is an after-market limit sell at the close less the
-  protective band. It fills at the open when the open is at or above the limit;
-  an open below leaves the Position open.
+- A stop or time-stop exit, or a Rebalance's sale of a leaver, is an
+  after-market limit sell at the close less the protective band. It fills at
+  the open when the open is at or above the limit; an open below leaves the
+  Position open.
+- A Rebalance's buy is an after-market limit buy at the close plus the band
+  (``entry_limit``), filled as an entry.
 - A Circuit Lock day (open, high, low and close equal) fills nothing, and nor
   does a day the Instrument did not trade (no bar).
 
@@ -34,17 +37,21 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Literal
 
-from tradeline.strategy.pricing import round_down
+from tradeline.strategy.pricing import round_down, round_up
 
 UnfilledReason = Literal[
     "no_bar", "circuit_lock", "open_above_limit", "open_below_limit", "not_reached", "stop_reached"
 ]
 # What a completed bar can trigger: a stop, or the time stop.
 ExitTrigger = Literal["stop", "time"]
-# Why a Position closed: a stop or time-stop exit, its target, or a Boundary Exit.
-ExitReason = Literal["stop", "time", "target", "boundary"]
+# Why a Position closed: a stop or time-stop exit, its target, a Boundary Exit, or a
+# portfolio Strategy's Rebalance selling it.
+ExitReason = Literal["stop", "time", "target", "boundary", "rebalance"]
 # What an Order is for: an entry, or one of a Position's exits.
-OrderPurpose = Literal["entry", "target", "stop", "time", "boundary"]
+OrderPurpose = Literal["entry", "target", "stop", "time", "boundary", "rebalance"]
+# An exit placed after the close at the close less the band: a stop or time stop the bar
+# triggered, or a Rebalance's sale of a leaver.
+AfterCloseExit = Literal["stop", "time", "rebalance"]
 
 
 @dataclass(frozen=True)
@@ -132,6 +139,12 @@ def exit_limit(close: Decimal, *, band: Decimal, tick: Decimal) -> Decimal:
     return round_down(close * (1 - band), tick)
 
 
+def entry_limit(close: Decimal, *, band: Decimal, tick: Decimal) -> Decimal:
+    """A Rebalance's buy limit: the close plus the band, rounded up to the tick, so a buy
+    fills unless the next open gaps past the band."""
+    return round_up(close * (1 + band), tick)
+
+
 class FillModel:
     """The fill model as an object the engine is handed, so a backtest and a paper Run can be
     shown to fill through the very same one (ADR 0002); each method is the function above
@@ -156,6 +169,9 @@ class FillModel:
 
     def exit_limit(self, close: Decimal, *, band: Decimal, tick: Decimal) -> Decimal:
         return exit_limit(close, band=band, tick=tick)
+
+    def entry_limit(self, close: Decimal, *, band: Decimal, tick: Decimal) -> Decimal:
+        return entry_limit(close, band=band, tick=tick)
 
 
 FILL_MODEL = FillModel()

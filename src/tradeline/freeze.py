@@ -42,7 +42,7 @@ from tradeline.protocol import (
 )
 from tradeline.revision import code_revision
 from tradeline.risk import Limits
-from tradeline.strategy import Strategy
+from tradeline.strategy.portfolio import AnyStrategy
 from tradeline.trading_calendar import TradingCalendar
 
 log = logging.getLogger(__name__)
@@ -90,7 +90,7 @@ def freeze_protocol(
     conn: psycopg.Connection,
     terms: Terms,
     *,
-    strategy: Strategy,
+    strategy: AnyStrategy,
     rule_version: str,
     limits: Limits,
     halts: HaltLimits,

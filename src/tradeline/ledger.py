@@ -28,8 +28,9 @@ from tradeline.costs import Charges
 from tradeline.dates import month_of
 from tradeline.paper_broker import OrderPurpose
 from tradeline.queries import EngineMode
-from tradeline.risk import Decision, Pass, Proposal
-from tradeline.strategy import Candidate, Plan, Strategy
+from tradeline.risk import Decision, Pass, PortfolioPlan, Proposal
+from tradeline.strategy import Candidate, Plan
+from tradeline.strategy.portfolio import AnyStrategy
 
 
 @dataclass(frozen=True)
@@ -173,7 +174,7 @@ def insert_position(
 
 def strategy_row(
     conn: psycopg.Connection,
-    strategy: Strategy,
+    strategy: AnyStrategy,
     *,
     mode: EngineMode,
     backtest_id: uuid.UUID | None,
@@ -211,7 +212,7 @@ def strategy_row(
 
 def insert_run(
     conn: psycopg.Connection,
-    strategy: Strategy,
+    strategy: AnyStrategy,
     *,
     run_id: uuid.UUID,
     mode: EngineMode,
@@ -224,11 +225,12 @@ def insert_run(
     cash: Decimal,
     equity: Decimal,
     impact: Decimal | None,
+    portfolio_step: str | None = None,
 ) -> None:
     conn.execute(
         "INSERT INTO runs (id, mode, backtest_id, dry_run, strategy_id, as_of, universe_month,"
-        " universe_rule_version, universe_size, parameters, cash, equity, impact)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        " universe_rule_version, universe_size, parameters, cash, equity, impact,"
+        " portfolio_step) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (
             run_id,
             mode,
@@ -243,6 +245,7 @@ def insert_run(
             cash,
             equity,
             impact,
+            portfolio_step,
         ),
     )
 
@@ -283,7 +286,7 @@ def insert_candidates(
 
 def insert_plans(
     conn: psycopg.Connection,
-    plans: Sequence[Plan],
+    plans: Sequence[Plan | PortfolioPlan],
     *,
     mode: EngineMode,
     backtest_id: uuid.UUID | None,
@@ -308,7 +311,7 @@ def insert_plans(
                     p.stop,
                     p.target,
                     p.time_stop_days,
-                    _facts(p.facts),
+                    _facts(p.facts if isinstance(p, Plan) else {}),
                 )
                 for p in plans
             ],
@@ -387,7 +390,7 @@ def insert_decisions(
 
 def insert_held_verdicts(
     conn: psycopg.Connection,
-    plans: Sequence[Plan],
+    plans: Sequence[Plan | PortfolioPlan],
     *,
     mode: EngineMode,
     backtest_id: uuid.UUID | None,

@@ -12,10 +12,11 @@ import hashlib
 import json
 import os
 import tomllib
+import types
 from dataclasses import dataclass, field, fields
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Literal, get_args, get_origin, get_type_hints
+from typing import Any, ClassVar, Literal, get_args, get_origin, get_type_hints
 
 from tradeline.costs import Slippage
 from tradeline.dates import parse_month
@@ -24,6 +25,8 @@ from tradeline.protocol import Gate, Layout, Terms
 from tradeline.risk import Limits
 
 CONFIG_PATH_VAR = "TRADELINE_CONFIG"
+# Every Limit a family's Limit set states, in ``Limits``' order.
+_LIMIT_NAMES = tuple(f.name for f in fields(Limits))
 DEFAULT_CONFIG_PATH = Path("tradeline.toml")
 
 
@@ -157,50 +160,155 @@ class Config:
         cited: str = "cited_corporate_actions.csv"
 
     @dataclass(frozen=True)
-    class Risk:
-        """The Limits of ``docs/risk-controls.md`` the Risk Engine enforces (``tradeline.risk``),
-        fractions of Equity where they are, and the tick table Plans are priced on. The
-        defaults are ``pullback_v1``'s set, every Limit on (ADR 0020)."""
+    class LimitSet:
+        """One family's Limits of ``docs/risk-controls.md`` (``tradeline.risk``), fractions
+        of Equity where they are, each on with its value or off, written ``false`` (ADR
+        0020); and the Halt fractions a backtest reports. The defaults are ``pullback_v1``'s
+        set, every Limit on."""
+
+        # The section's name in ``tradeline.toml``, for the errors.
+        SECTION: ClassVar[str] = "risk"
 
         stop_required: bool = True
-        risk_per_trade: float = 0.01
-        max_open_positions: int = 8
-        max_position: float = 0.15
-        max_sector: float = 0.30
-        max_gross: float = 1.0
+        risk_per_trade: float | bool = 0.01
+        max_open_positions: int | bool = 8
+        max_position: float | bool = 0.15
+        max_sector: float | bool = 0.30
+        max_gross: float | bool = 1.0
         # Of the 20-day average daily traded value.
-        participation_cap: float = 0.01
+        participation_cap: float | bool = 0.01
         # Rupees.
-        min_order_value: int = 5000
-        max_new_entries: int = 4
-        min_reward_to_risk: float = 1.5
+        min_order_value: int | bool = 5000
+        max_new_entries: int | bool = 4
+        min_reward_to_risk: float | bool = 1.5
         # The Halts a backtest reports and never applies: a day's loss on the day before's
         # Equity, and the fall from the Equity peak.
         daily_loss_halt: float = 0.03
         drawdown_halt: float = 0.10
-        # The checked-in dated table of NSE tick sizes (``tradeline.tick_sizes``),
-        # relative to the working directory.
-        tick_sizes: str = "tick_sizes.csv"
+
+        def __post_init__(self) -> None:
+            for name in _LIMIT_NAMES:
+                if name != "stop_required" and getattr(self, name) is True:
+                    raise ConfigError(
+                        f"{self.SECTION}.{name} is a Limit's value, or false when it is off"
+                    )
+            try:
+                self.limits()
+            except ValueError as error:
+                raise ConfigError(f"{self.SECTION}: {error}") from error
 
         def limits(self) -> Limits:
-            return Limits(
-                stop_required=self.stop_required,
-                risk_per_trade=Decimal(str(self.risk_per_trade)),
-                max_open_positions=self.max_open_positions,
-                max_position=Decimal(str(self.max_position)),
-                max_sector=Decimal(str(self.max_sector)),
-                max_gross=Decimal(str(self.max_gross)),
-                participation_cap=Decimal(str(self.participation_cap)),
-                min_order_value=Decimal(self.min_order_value),
-                max_new_entries=self.max_new_entries,
-                min_reward_to_risk=Decimal(str(self.min_reward_to_risk)),
-            )
+            def stated(name: str) -> Decimal | int | None:
+                value = getattr(self, name)
+                if value is False:
+                    return None
+                return value if isinstance(value, int) else Decimal(str(value))
+
+            counts = {"max_open_positions", "max_new_entries"}
+            values: dict[str, Any] = {
+                name: stated(name) for name in _LIMIT_NAMES if name != "stop_required"
+            }
+            for name, value in values.items():
+                if name not in counts and isinstance(value, int):
+                    values[name] = Decimal(value)
+            return Limits(stop_required=self.stop_required, **values)
 
         def halts(self) -> HaltLimits:
             return HaltLimits(
                 daily_loss=Decimal(str(self.daily_loss_halt)),
                 drawdown=Decimal(str(self.drawdown_halt)),
             )
+
+    @dataclass(frozen=True)
+    class Risk(LimitSet):
+        """``pullback_v1``'s Limits and Halts (``LimitSet``), and the tick table every
+        Plan is priced on."""
+
+        # The checked-in dated table of NSE tick sizes (``tradeline.tick_sizes``),
+        # relative to the working directory.
+        tick_sizes: str = "tick_sizes.csv"
+
+    @dataclass(frozen=True)
+    class LowvolRisk(LimitSet):
+        """``lowvol_v1``'s Limits (``docs/risk-controls.md``, "Limits by family"): a
+        portfolio Plan has no stop, so the Limits read off one are off, and so are the
+        entry cap and the sector Limit. Its Halts are ``pullback_v1``'s fractions until the
+        Relative Drawdown Halt replaces them (#97)."""
+
+        SECTION: ClassVar[str] = "lowvol.risk"
+
+        stop_required: bool = False
+        risk_per_trade: float | bool = False
+        max_open_positions: int | bool = 30
+        max_position: float | bool = 0.15
+        max_sector: float | bool = False
+        max_gross: float | bool = 1.0
+        participation_cap: float | bool = 0.01
+        min_order_value: int | bool = 5000
+        max_new_entries: int | bool = False
+        min_reward_to_risk: float | bool = False
+
+    @dataclass(frozen=True)
+    class LowvolProtocol:
+        """What the Operator states in ``lowvol_v1``'s Protocol beyond its Limits and costs.
+        Its grid has one cell (``lowvol_v1`` has no free parameter), so Walk-Forward selects
+        nothing and its Out-of-Sample Windows run as one continuous backtest, the Stitched
+        Curve (``tradeline.walk_forward``); no In-Sample run is made, and the one In-Sample
+        month before the first Window holds the decision day of its Initial Buy."""
+
+        holdout_start: str = "2024-10"
+        holdout_months: int = 24
+        windows: int = 5
+        out_of_sample_months: int = 12
+        in_sample_months: int = 1
+        starting_equity: int = 500000
+        risk_free_rate: float = 0.065
+        # Over the close for a Rebalance's buy, under it for its sale.
+        band: float = 0.01
+        # 253 trading days of bars before the Initial Buy's decision day, and a margin.
+        warm_up_trading_days: int = 260
+        # ``pullback_v1``'s Backtest Gate, until the Gate against the Benchmark (#98).
+        sharpe_above: float = 1.0
+        drawdown_below: float = 0.15
+        profit_factor_above: float = 1.3
+        min_stitched_trades: int = 150
+
+        def __post_init__(self) -> None:
+            try:
+                self.terms()
+            except (ValueError, InvalidOperation) as error:
+                raise ConfigError(f"lowvol.protocol: {error}") from error
+
+        def terms(self) -> Terms:
+            return Terms(
+                grid={},
+                min_in_sample_trades=0,
+                layout=Layout(
+                    holdout_start=parse_month(self.holdout_start),
+                    holdout_months=self.holdout_months,
+                    windows=self.windows,
+                    out_of_sample_months=self.out_of_sample_months,
+                    in_sample_months=self.in_sample_months,
+                ),
+                band=Decimal(str(self.band)),
+                starting_equity=Decimal(self.starting_equity),
+                risk_free_rate=Decimal(str(self.risk_free_rate)),
+                gate=Gate(
+                    sharpe_above=Decimal(str(self.sharpe_above)),
+                    drawdown_below=Decimal(str(self.drawdown_below)),
+                    profit_factor_above=Decimal(str(self.profit_factor_above)),
+                    min_stitched_trades=self.min_stitched_trades,
+                ),
+                warm_up_trading_days=self.warm_up_trading_days,
+            )
+
+    @dataclass(frozen=True)
+    class Lowvol:
+        """``lowvol_v1``'s Limits and Protocol (``[lowvol.risk]``, ``[lowvol.protocol]``),
+        which ``tradeline protocol freeze --strategy lowvol_v1`` freezes."""
+
+        risk: Config.LowvolRisk = field(default_factory=lambda: Config.LowvolRisk())
+        protocol: Config.LowvolProtocol = field(default_factory=lambda: Config.LowvolProtocol())
 
     @dataclass(frozen=True)
     class Costs:
@@ -296,6 +404,7 @@ class Config:
     risk: Risk = field(default_factory=Risk)
     costs: Costs = field(default_factory=Costs)
     protocol: Protocol = field(default_factory=Protocol)
+    lowvol: Lowvol = field(default_factory=Lowvol)
 
     def __post_init__(self) -> None:
         # One Trading Calendar serves both checks (ADR 0018); two paths could drift apart.
@@ -375,11 +484,19 @@ def _build[T](cls: type[T], raw: dict[str, Any], *, prefix: str) -> T:
             values[name] = value
         elif not isinstance(value, expected):
             raise ConfigError(
-                f"config key {prefix}{name} must be {expected.__name__}, got {type(value).__name__}"
+                f"config key {prefix}{name} must be {_type_name(expected)},"
+                f" got {type(value).__name__}"
             )
         else:
             values[name] = value
     return cls(**values)
+
+
+def _type_name(expected: Any) -> str:
+    """A type as an error names it: ``float or false`` for a Limit that can be off."""
+    if get_origin(expected) is types.UnionType:
+        return " or ".join("false" if t is bool else t.__name__ for t in get_args(expected))
+    return str(expected.__name__)
 
 
 def _string_table(value: Any, *, prefix: str, types: tuple[Any, ...]) -> dict[str, str]:

@@ -159,9 +159,30 @@ class Bonus:
         return f"Bonus {self.new}:{self.held}"
 
 
-PathEvent = Trend | Dip | Gap | CircuitLock
+@dataclass(frozen=True)
+class Absent:
+    """No row for the Stock in NSE's files from ``first`` to ``last`` (one day when ``last``
+    is None): a day it did not trade, or a suspension. Its path runs on underneath, and
+    the next published day opens at the path's previous close."""
+
+    first: date
+    last: date | None = None
+
+    def covers(self, day: date) -> bool:
+        return self.first <= day <= (self.last or self.first)
+
+
+@dataclass(frozen=True)
+class Volume:
+    """The shares a day on the path from ``day`` on."""
+
+    day: date
+    volume: int
+
+
+PathEvent = Trend | Dip | Gap | CircuitLock | Volume
 Action = Split | Bonus
-Event = PathEvent | Action
+Event = PathEvent | Action | Absent
 
 
 # --- Stocks and the Market ----------------------------------------------------
@@ -192,6 +213,13 @@ class Stock:
     events: tuple[Event, ...] = ()
     # NSE's sector (the Total Market list's Industry); None: not on the list.
     sector: str | None = None
+    # A zigzag on the path: on the Market's even-numbered trading days (the first is 0)
+    # the close moves by the slope plus the swing, on odd ones by the slope less it.
+    swing: Decimal = Decimal(0)
+
+    def absent(self, day: date) -> bool:
+        """No row is published for the Stock on ``day``."""
+        return any(e.covers(day) for e in self.events if isinstance(e, Absent))
 
     @property
     def actions(self) -> list[Action]:
@@ -203,28 +231,31 @@ class Stock:
         """The path, one bar per trading day: NSE's prices had there been no action."""
         by_day: dict[date, list[PathEvent]] = {}
         for event in self.events:
-            if not isinstance(event, Split | Bonus):
+            if not isinstance(event, Split | Bonus | Absent):
                 by_day.setdefault(event.day, []).append(event)
-        slope, previous, bars = self.slope, self.start, []
-        for day in days:
+        slope, previous, bars, volume = self.slope, self.start, [], self.volume
+        for index, day in enumerate(days):
             today = by_day.get(day, [])
             for event in today:
                 if isinstance(event, Trend):
                     slope = event.slope
+                elif isinstance(event, Volume):
+                    volume = event.volume
+            move = slope + (self.swing if index % 2 == 0 else -self.swing)
             gap = sum((e.amount for e in today if isinstance(e, Gap)), Decimal(0))
             lock = next((e for e in today if isinstance(e, CircuitLock)), None)
             if lock is not None:
                 price = previous + lock.amount
-                bar = Bar(day, price, price, price, price, self.volume)
+                bar = Bar(day, price, price, price, price, volume)
             else:
                 open_ = previous + gap
-                close = open_ + slope
+                close = open_ + move
                 low = min(open_, close) - self.half_range
                 for event in today:
                     if isinstance(event, Dip):
                         low = min(low, close - event.depth)
                 high = max(open_, close) + self.half_range
-                bar = Bar(day, open_, high, low, close, self.volume)
+                bar = Bar(day, open_, high, low, close, volume)
             if bar.low <= 0:
                 raise ValueError(f"{self.symbol}'s path falls to {bar.low} on {day}")
             bars.append(bar)
@@ -334,6 +365,8 @@ def _responses(market: Market, calendar: TradingCalendar) -> Iterator[tuple[str,
             continue
         lines = [",".join(_UDIFF_HEADER)]
         for stock in market.stocks:
+            if stock.absent(day):
+                continue
             bar = raw[stock.symbol][day]
             lines.append(_udiff_line(stock, bar, previous.get(stock.symbol, bar.open)))
             previous[stock.symbol] = bar.close
@@ -855,4 +888,100 @@ def walk_forward_market() -> Market:
                 Dip(date(2022, 11, 22), pullback),
             ),
         ),
+    )
+
+
+# --- The low-volatility Market ------------------------------------------------
+
+# ``lowvol_v1``'s decision days on ``lowvol_market``: the Initial Buy's (the day before
+# the account's first trading day, and a last trading day of March, which is no Rebalance
+# for it), then the one Rebalance.
+LOWVOL_INITIAL = date(2022, 3, 31)
+LOWVOL_REBALANCE = date(2022, 9, 30)
+# The Protocol's range: the one In-Sample month (March 2022) to the Holdout (2022-11).
+LOWVOL_RANGE = (date(2022, 3, 1), date(2022, 11, 30))
+LOWVOL_LAYOUT = Layout(
+    holdout_start=date(2022, 11, 1),
+    holdout_months=1,
+    windows=7,
+    out_of_sample_months=1,
+    in_sample_months=1,
+)
+LOWVOL_RULE = UniverseRule(
+    top_n=69, lookback_trading_days=20, min_listing_trading_days=20, min_presence_percent=90
+)
+# Each Stock's volume: 1,000,000 shares near Rs 100, a 20-day average traded value of
+# about Rs 10 crore, so the Participation Cap (1 percent) never binds.
+LOWVOL_VOLUME = 1_000_000
+
+
+def lowvol_terms() -> Terms:
+    """``lowvol_v1``'s one-cell Terms on ``LOWVOL_LAYOUT``: Out-of-Sample Windows each month
+    from 2022-04 to 2022-10, the Holdout 2022-11, the band 1 percent."""
+    return replace(
+        protocol_terms(*LOWVOL_RANGE),
+        grid={},
+        min_in_sample_trades=0,
+        layout=LOWVOL_LAYOUT,
+        band=Decimal("0.01"),
+        warm_up_trading_days=260,
+    )
+
+
+def lowvol_market() -> Market:
+    """Seventy EQ stocks from 2021-03-01 to 2022-11-30 for ``lowvol_v1``, each flat at
+    Rs 100 with a ``swing``: its close alternates between 100 plus the swing and 100, so
+    its 252 daily log returns are, in turn, plus and minus ln(1 + swing / 100), and the
+    larger the swing the larger their standard deviation. Every Stock trades
+    ``LOWVOL_VOLUME`` shares a day unless stated, and ``LOWVOL_RULE`` (the 69 most traded)
+    is declared in force from the first day.
+
+    - N01 to N33: swings 0.05 to 1.65 (N0k: 0.05 k), the least volatile, each without a
+      row on 2021-07-01, inside the 253 trading days to ``LOWVOL_INITIAL`` (from
+      2021-03-24) and before those to ``LOWVOL_REBALANCE`` (from 2021-09-27); N33 is
+      suspended instead, from 2021-06-21 to 2021-07-02. So all 33 are ineligible on the
+      Initial Buy's day and rank 1 to 33 at the Rebalance.
+    - H01 to H30: swings 1.70 to 3.15 (H0j: 0.05 (33 + j)), ranks 1 to 30 on the Initial
+      Buy's day. H15 has no row on 2022-07-15, so it is ineligible at the Rebalance. H20
+      trades 1,000 shares a day from 2022-07-01, so it leaves the Universe from 2022-08,
+      and gaps Rs 4,000 up on 2022-08-01. The other 28 rank 34 to 61 at the Rebalance:
+      H29 60th, H30 61st.
+    - O01 to O06: swings 3.15 (O01, tied with H30 and after it by Symbol: 31st on the
+      Initial Buy's day, 62nd at the Rebalance) and 3.20 to 3.40.
+    - Z: swing 5.00 and 500,000 shares a day, the least traded and out of the Universe
+      until H20 trades less.
+    """
+    start = date(2021, 3, 1)
+
+    def stock(symbol: str, swing: str, *events: Event, volume: int = LOWVOL_VOLUME) -> Stock:
+        return Stock(
+            symbol,
+            f"INE{symbol:0>6}014",
+            start=D("100.00"),
+            slope=D(0),
+            half_range=D("0.50"),
+            volume=volume,
+            swing=D(swing),
+            events=events,
+        )
+
+    missing = Absent(date(2021, 7, 1))
+    news = [stock(f"N{k:02}", str(D("0.05") * k), missing) for k in range(1, 33)]
+    news.append(stock("N33", "1.65", Absent(date(2021, 6, 21), date(2021, 7, 2))))
+    held: list[Stock] = []
+    for j in range(1, 31):
+        events: tuple[Event, ...] = ()
+        if j == 15:
+            events = (Absent(date(2022, 7, 15)),)
+        elif j == 20:
+            events = (Volume(date(2022, 7, 1), 1_000), Gap(date(2022, 8, 1), D("4000.00")))
+        held.append(stock(f"H{j:02}", str(D("0.05") * (33 + j)), *events))
+    others = [stock("O01", "3.15")]
+    others += [stock(f"O{i:02}", str(D("3.15") + D("0.05") * (i - 1))) for i in range(2, 7)]
+    return Market(
+        start=start,
+        end=date(2022, 11, 30),
+        rule=LOWVOL_RULE,
+        declaration=RuleDeclaration(start, datetime.combine(start, time(), IST)),
+        stocks=(*news, *held, *others, stock("Z", "5.00", volume=500_000)),
     )

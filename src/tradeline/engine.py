@@ -100,10 +100,11 @@ from tradeline.dates import IST, month_of
 from tradeline.freeze import verify_snapshot
 from tradeline.paper_broker import (
     FILL_MODEL,
+    AfterCloseExit,
     Bar,
     ExitReason,
-    ExitTrigger,
     FillModel,
+    OrderPurpose,
     Unfilled,
 )
 from tradeline.queries import EngineMode
@@ -114,11 +115,13 @@ from tradeline.risk import (
     Limits,
     Pass,
     Portfolio,
+    PortfolioPlan,
     Proposal,
     RiskEngine,
     verify_pass,
 )
 from tradeline.strategy import Candidate, Member, Plan, Strategy
+from tradeline.strategy.portfolio import AnyStrategy, PortfolioStrategy
 from tradeline.strategy.pricing import round_down
 from tradeline.tick_sizes import TickSizes
 from tradeline.trading_calendar import TradingCalendar
@@ -444,7 +447,7 @@ class RunResult:
 
 def run(
     conn: psycopg.Connection,
-    strategy: Strategy,
+    strategy: AnyStrategy,
     *,
     mode: EngineMode,
     as_of: date,
@@ -465,6 +468,7 @@ def run(
     entries: bool = True,
     boundary: bool = False,
     commit: bool = True,
+    initial_buy: bool = False,
 ) -> RunResult:
     """The day ``as_of`` in one account: its held Positions restated for any split or bonus
     ex-dated since its last day, its session, then one Run over the month's Universe under
@@ -485,6 +489,16 @@ def run(
     taken, and no Order is placed for the next session: the account ends with the day.
     ``commit`` false leaves the day uncommitted, for a caller that holds the transaction
     (Walk-Forward's grid cells, which keep only a summary).
+
+    A portfolio Strategy (``PortfolioStrategy``) screens and plans nothing. On the last
+    trading day of one of its ``rebalance_months`` the Run is a Rebalance: its entrants
+    are the Run's Candidates, and each leaver gets a sell at the close less the band for
+    the next session. On the trading day after, the Run sizes the entrants from the cash
+    then held (``_split_cash``) and puts them to the Risk Engine, and each Pass is a buy
+    for the next session. ``initial_buy`` makes the Run its account's Initial Buy, on
+    the trading day before the account's first: a Rebalance's entrants with nothing
+    held, sized and put to the Risk Engine at once, bought at the next open. On every
+    other day its holdings rest, with no Order but a sale the open did not fill.
     """
     if boundary and entries:
         raise ValueError("a Boundary Exit's day places no new entries; pass entries=False")
@@ -494,6 +508,8 @@ def run(
         raise ValueError("only a paper Run can be a dry run")
     if as_of not in set(calendar.trading_days(as_of, as_of)):
         raise ValueError(f"{as_of} is not a trading day on the Trading Calendar")
+    if initial_buy and not isinstance(strategy, PortfolioStrategy):
+        raise ValueError(f"{strategy.name} is not a portfolio Strategy; it has no Initial Buy")
     data = data_source(conn, calendar, as_of=as_of)
     month = month_of(as_of)
     universe = queries.universe_membership(conn, month, as_of=as_of, rule_version=rule_version)
@@ -516,8 +532,24 @@ def run(
     )
     tags: queries.Account = {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run}
     next_session = _next_session(calendar, as_of)
-    candidates = data.screen(strategy, members) if entries else []
-    plans = [strategy.plan(c) for c in candidates]
+    step: str | None = None
+    candidates: list[Candidate] = []
+    plans: list[Plan | PortfolioPlan] = []
+    if isinstance(strategy, PortfolioStrategy):
+        step = _portfolio_step(
+            conn,
+            strategy,
+            calendar,
+            tags,
+            as_of=as_of,
+            next_session=next_session,
+            initial_buy=initial_buy,
+            entries=entries,
+        )
+    else:
+        candidates = data.screen(strategy, members) if entries else []
+        plans = [strategy.plan(c) for c in candidates]
+    leavers: tuple[str, ...] = ()
     run_id = uuid.uuid4()
     # Pipelined: the day's writes go without waiting each for its reply (#82: a backtest is
     # bound by round trips to Postgres, not by its own work).
@@ -527,13 +559,29 @@ def run(
             fills += account.boundary_exits()
         held = account.open_positions()
         held_instruments = {p.instrument for p in held}
-        # One Position per Instrument: a Candidate already held is skipped, not assessed.
-        to_assess = [p for p in plans if p.instrument not in held_instruments]
-        sectors = data.sectors([m.symbol for m in members] + [p.symbol for p in held])
-        proposals = _proposals(to_assess, data, tick_sizes, sectors, as_of=as_of)
+        if isinstance(strategy, PortfolioStrategy):
+            candidates, leavers = _portfolio_decision(
+                conn, strategy, step, held, members, data, calendar, tags, as_of=as_of
+            )
+        sectors = data.sectors(
+            [m.symbol for m in members] + [p.symbol for p in held] + [c.symbol for c in candidates]
+        )
         holdings = _holdings(held, account, sectors)
         cash = starting_equity + queries.account_cash_flows(conn, **tags)
         equity = cash + sum((h.value for h in holdings), Decimal(0))
+        if step in ("initial_buy", "rebalance_buys"):
+            plans = list(
+                _split_cash(
+                    [c for c in candidates if c.instrument not in held_instruments],
+                    cash=cash,
+                    account=account,
+                    band=band,
+                    session=next_session,
+                )
+            )
+        # One Position per Instrument: a Candidate already held is skipped, not assessed.
+        to_assess = [p for p in plans if p.instrument not in held_instruments]
+        proposals = _proposals(to_assess, data, tick_sizes, sectors, as_of=as_of)
         portfolio = Portfolio(equity, holdings)
         decisions = risk_engine.assess(proposals, portfolio=portfolio, limits=limits, run_id=run_id)
         strategy_id = ledger.strategy_row(
@@ -556,6 +604,7 @@ def run(
             cash=cash,
             equity=equity,
             impact=impact,
+            portfolio_step=step,
         )
         ledger.insert_candidates(conn, candidates, **tags, run_id=run_id)
         ledger.insert_plans(conn, plans, **tags, run_id=run_id)
@@ -567,6 +616,9 @@ def run(
         if not boundary:
             placed = account.place_exits(
                 run_id=run_id, session=next_session, band=band, tick_sizes=tick_sizes
+            )
+            placed += account.place_sales(
+                leavers, run_id=run_id, session=next_session, band=band, tick_sizes=tick_sizes
             )
             placed += account.place_entries(
                 [d for d in decisions if isinstance(d, Pass)], run_id=run_id, session=next_session
@@ -598,7 +650,7 @@ def run(
 
 def backtest(
     conn: psycopg.Connection,
-    strategy: Strategy,
+    strategy: AnyStrategy,
     *,
     protocol: str | None,
     start: date,
@@ -642,7 +694,7 @@ def backtest(
 
 def backtest_span(
     conn: psycopg.Connection,
-    strategy: Strategy,
+    strategy: AnyStrategy,
     frozen: queries.FrozenProtocol,
     *,
     start: date,
@@ -671,7 +723,11 @@ def backtest_span(
     ``fresh_period`` is for a Not Independent version's Fresh Period alone
     (``holdout.run_fresh_period``): its days lie after the Protocol's Holdout, past what
     the Protocol froze, so the range must start after the Holdout's last day instead of
-    lying inside the Protocol's."""
+    lying inside the Protocol's.
+
+    A portfolio Strategy's account that has no Run yet starts with its Initial Buy, a Run
+    as of the trading day before ``start`` (``run``'s ``initial_buy``), unless the span
+    places no entries."""
     _protocol_for(
         conn,
         strategy,
@@ -717,8 +773,22 @@ def backtest_span(
     last = days[-1]
     before = days[:-1] if boundary else days
     results = []
-    if before:
+    if (
+        isinstance(strategy, PortfolioStrategy)
+        and entries
+        and not queries.runs(conn, mode="backtest", backtest_id=backtest_id)
+    ):
+        decided = _previous_session(calendar, days[0])
         results = _step(
+            conn,
+            strategy,
+            BacktestClock(calendar, start=decided, end=decided),
+            entries=True,
+            initial_buy=True,
+            **terms_of_run,
+        )
+    if before:
+        results += _step(
             conn,
             strategy,
             BacktestClock(calendar, start=start, end=before[-1]),
@@ -739,7 +809,7 @@ def backtest_span(
 
 def paper(
     conn: psycopg.Connection,
-    strategy: Strategy,
+    strategy: AnyStrategy,
     *,
     clock: WallClock,
     calendar: TradingCalendar,
@@ -787,7 +857,7 @@ class Clock(Protocol):
 
 def _step(
     conn: psycopg.Connection,
-    strategy: Strategy,
+    strategy: AnyStrategy,
     clock: Clock,
     *,
     mode: EngineMode,
@@ -816,7 +886,7 @@ def _step(
 
 def _protocol_for(
     conn: psycopg.Connection,
-    strategy: Strategy,
+    strategy: AnyStrategy,
     name: str | None,
     *,
     start: date,
@@ -942,7 +1012,9 @@ class _Account:
         # Each open Position's open target Order.
         self._targets: dict[uuid.UUID, ledger.Order] = {}
         # Exits that met the session and did not fill, to be sent again.
-        self._exits_due: dict[uuid.UUID, ExitTrigger] = {}
+        self._exits_due: dict[uuid.UUID, AfterCloseExit] = {}
+        # Positions given their one sell Order for the next session by this Run.
+        self._selling: set[uuid.UUID] = set()
         self._bars: dict[str, Bar | None] = {}
 
     def open_positions(self) -> list[queries.LedgerPosition]:
@@ -1011,6 +1083,8 @@ class _Account:
                 continue
             position = self._positions[order.position_id]
             if order.purpose == "target":
+                # Only a Position with exits has a target.
+                assert position.target is not None
                 limit = position.target
             else:
                 factor, _ = factors[order.instrument]
@@ -1058,12 +1132,13 @@ class _Account:
                 f" Adjustment Factor {factor} on {self._day}; close the Position by hand"
             )
         tick = self._tick(position)
+        stop, target = position.stop, position.target
         restated = replace(
             position,
             shares=shares,
             entry=paisa(Fraction(position.entry) * factor),
-            stop=round_down(Fraction(position.stop) * factor, tick),
-            target=round_down(Fraction(position.target) * factor, tick),
+            stop=None if stop is None else round_down(Fraction(stop) * factor, tick),
+            target=None if target is None else round_down(Fraction(target) * factor, tick),
             as_of=self._day,
         )
         self._positions[position.id] = restated
@@ -1092,11 +1167,19 @@ class _Account:
     def place_exits(
         self, *, run_id: uuid.UUID, session: date, band: Decimal, tick_sizes: TickSizes
     ) -> int:
-        """One sell Order for the next session for each open Position; the number placed."""
+        """One sell Order for the next session for each open Position with exits, or with a
+        sale the open did not fill; the number placed. A portfolio Strategy's holding has
+        no exit of its own and rests with no Order."""
+        placed = 0
         for position in self.open_positions():
             reason = self._exits_due.get(position.id)
             bar = self._bar(position.instrument)
-            if reason is None and bar is not None:
+            if (
+                reason is None
+                and bar is not None
+                and position.stop is not None
+                and position.time_stop_days is not None
+            ):
                 held = len(
                     list(
                         self._calendar.trading_days(
@@ -1115,30 +1198,93 @@ class _Account:
                 # The Position's one sell Order goes before another is placed.
                 self._cancel(target, reason or "replaced")
             if reason is None:
+                if position.target is None:
+                    continue
                 limit = position.target
             else:
-                tick = tick_sizes.tick(
-                    self._day,
-                    reference_close=self._data.reference_close(position.instrument),
-                )
-                limit = self._fill_model.exit_limit(
-                    self.close(position.instrument), band=band, tick=tick
-                )
-            self._place(
-                ledger.Order(
-                    uuid.uuid4(),
-                    run_id,
-                    None,
-                    position.id,
-                    position.instrument,
-                    position.symbol,
-                    reason or "target",
-                    limit,
-                    position.shares,
-                    session,
-                )
+                limit = self._exit_limit(position, band=band, tick_sizes=tick_sizes)
+            self._sell(position, reason or "target", limit, run_id=run_id, session=session)
+            placed += 1
+        return placed
+
+    def place_sales(
+        self,
+        leavers: Sequence[str],
+        *,
+        run_id: uuid.UUID,
+        session: date,
+        band: Decimal,
+        tick_sizes: TickSizes,
+    ) -> int:
+        """A Rebalance's sell for the next session, at the close less the band, for each
+        open Position in a leaving Instrument not already given its sell; the number
+        placed."""
+        placed = 0
+        leaving = set(leavers)
+        for position in self.open_positions():
+            if position.instrument not in leaving or position.id in self._selling:
+                continue
+            limit = self._exit_limit(position, band=band, tick_sizes=tick_sizes)
+            self._sell(position, "rebalance", limit, run_id=run_id, session=session)
+            placed += 1
+        return placed
+
+    def _exit_limit(
+        self, position: queries.LedgerPosition, *, band: Decimal, tick_sizes: TickSizes
+    ) -> Decimal:
+        tick = tick_sizes.tick(
+            self._day, reference_close=self._data.reference_close(position.instrument)
+        )
+        return self._fill_model.exit_limit(self.close(position.instrument), band=band, tick=tick)
+
+    def _sell(
+        self,
+        position: queries.LedgerPosition,
+        purpose: OrderPurpose,
+        limit: Decimal,
+        *,
+        run_id: uuid.UUID,
+        session: date,
+    ) -> None:
+        self._place(
+            ledger.Order(
+                uuid.uuid4(),
+                run_id,
+                None,
+                position.id,
+                position.instrument,
+                position.symbol,
+                purpose,
+                limit,
+                position.shares,
+                session,
             )
-        return len(self._positions)
+        )
+        self._selling.add(position.id)
+
+    def entry_limit(self, instrument: str, *, band: Decimal) -> Decimal:
+        """A Rebalance buy's limit for the next session: the day's close plus the band,
+        rounded up to the tick in force."""
+        tick = self._tick_sizes.tick(
+            self._day, reference_close=self._data.reference_close(instrument)
+        )
+        return self._fill_model.entry_limit(self.close(instrument), band=band, tick=tick)
+
+    def affordable(self, instrument: str, budget: Decimal, *, limit: Decimal, session: date) -> int:
+        """The most shares a buy at ``limit`` on ``session`` takes with its charges within
+        ``budget``; none for a budget of nothing."""
+        if budget <= 0:
+            return 0
+        shares = math.floor(budget / limit)
+        average = self._data.average_traded_value(instrument, TRADED_VALUE_DAYS)
+        while shares > 0:
+            charges = self._costs.charges(
+                "buy", day=session, price=limit, shares=shares, average_traded_value=average
+            )
+            if shares * limit + charges.total <= budget:
+                break
+            shares -= 1
+        return shares
 
     def boundary_exits(self) -> int:
         """Close every open Position at the day's close (the last close before it, on a day
@@ -1228,19 +1374,23 @@ class _Account:
         )
         self._positions[position.id] = position
         self._write_position(position)
-        # The target rests with the broker from the Fill.
-        target = replace(
-            order, id=uuid.uuid4(), rank=None, purpose="target", limit_price=granted.target
-        )
-        self._place(target)
-        self._targets[position.id] = target
+        if granted.target is not None:
+            # The target rests with the broker from the Fill.
+            target = replace(
+                order, id=uuid.uuid4(), rank=None, purpose="target", limit_price=granted.target
+            )
+            self._place(target)
+            self._targets[position.id] = target
         return 1
 
     def _meet_exit(self, order: ledger.Order) -> int:
-        """A stop or time-stop exit against the open (a Boundary Exit never rests)."""
+        """A stop or time-stop exit, or a Rebalance's sale, against the open (a Boundary
+        Exit never rests)."""
         purpose = order.purpose
-        if purpose != "stop" and purpose != "time":
-            raise ValueError(f"order {order.id} is a {purpose} order, not a stop or time exit")
+        if purpose != "stop" and purpose != "time" and purpose != "rebalance":
+            raise ValueError(
+                f"order {order.id} is a {purpose} order, not a stop, time or Rebalance exit"
+            )
         outcome = self._fill_model.exit(order.limit_price, self._bar(order.instrument))
         if isinstance(outcome, Unfilled):
             self._cancel(order, outcome.reason)
@@ -1252,6 +1402,8 @@ class _Account:
 
     def _meet_target(self, order: ledger.Order) -> int:
         position = self._positions[order.position_id]
+        # Only a Position with exits has a target.
+        assert position.stop is not None
         outcome = self._fill_model.target(
             order.limit_price, self._bar(order.instrument), stop=position.stop
         )
@@ -1347,8 +1499,98 @@ def _holdings(
     )
 
 
+def _portfolio_step(
+    conn: psycopg.Connection,
+    strategy: PortfolioStrategy,
+    calendar: TradingCalendar,
+    account: queries.Account,
+    *,
+    as_of: date,
+    next_session: date,
+    initial_buy: bool,
+    entries: bool,
+) -> str | None:
+    """What a portfolio Strategy's Run as of ``as_of`` does: its account's Initial Buy; a
+    Rebalance, on the last trading day of a Rebalance month; the Rebalance's buys, on the
+    trading day after the account Rebalanced; or nothing. A Run that places no entries
+    (``entries`` false) does nothing."""
+    if initial_buy:
+        return "initial_buy"
+    if not entries:
+        return None
+    months = strategy.rebalance_months
+    if as_of.month in months and next_session.month != as_of.month:
+        return "rebalance"
+    previous = _previous_session(calendar, as_of)
+    if previous.month in months and as_of.month != previous.month:
+        decided = queries.runs(conn, **account, as_of=previous)
+        if any(r.portfolio_step == "rebalance" for r in decided):
+            return "rebalance_buys"
+    return None
+
+
+def _portfolio_decision(
+    conn: psycopg.Connection,
+    strategy: PortfolioStrategy,
+    step: str | None,
+    held: Sequence[queries.LedgerPosition],
+    members: Sequence[Member],
+    data: StoredMarketData,
+    calendar: TradingCalendar,
+    account: queries.Account,
+    *,
+    as_of: date,
+) -> tuple[list[Candidate], tuple[str, ...]]:
+    """The Run's Candidates (the entrants, best first) and the Instruments it sells. A
+    Rebalance asks the Strategy; an Initial Buy asks it with nothing held; the Rebalance's
+    buys are the entrants its Run on the trading day before recorded."""
+    if step == "initial_buy":
+        if held:
+            raise ValueError(
+                f"the account holds {len(held)} Positions; an Initial Buy starts empty"
+            )
+        return list(strategy.rebalance((), members, data, as_of).entrants), ()
+    if step == "rebalance":
+        holdings = [Member(p.instrument, p.symbol) for p in held]
+        decided = strategy.rebalance(holdings, members, data, as_of)
+        return list(decided.entrants), decided.leavers
+    if step == "rebalance_buys":
+        previous = _previous_session(calendar, as_of)
+        (rebalance,) = [
+            r
+            for r in queries.runs(conn, **account, as_of=previous)
+            if r.portfolio_step == "rebalance"
+        ]
+        return [
+            Candidate(c.rank, c.instrument, c.symbol, c.score, c.facts)
+            for c in queries.candidates(conn, rebalance.id)
+        ], ()
+    return [], ()
+
+
+def _split_cash(
+    entrants: Sequence[Candidate],
+    *,
+    cash: Decimal,
+    account: _Account,
+    band: Decimal,
+    session: date,
+) -> Iterator[PortfolioPlan]:
+    """A portfolio Plan for each entrant, in rank order: the cash held now split equally
+    between them, each share spent on as many shares as it buys at the limit (the day's
+    close plus the band, rounded up to the tick) with the buy's charges. The Risk Engine
+    then caps each at the per-Position Limit; what no Plan spends stays in cash."""
+    if not entrants:
+        return
+    share = cash / len(entrants)
+    for entrant in entrants:
+        limit = account.entry_limit(entrant.instrument, band=band)
+        shares = account.affordable(entrant.instrument, share, limit=limit, session=session)
+        yield PortfolioPlan(entrant.rank, entrant.instrument, entrant.symbol, limit, shares)
+
+
 def _proposals(
-    plans: Sequence[Plan],
+    plans: Sequence[Plan | PortfolioPlan],
     data: StoredMarketData,
     tick_sizes: TickSizes,
     sectors: dict[str, str],
