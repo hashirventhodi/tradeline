@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -22,6 +23,7 @@ import psycopg
 
 from tradeline import queries, revision
 from tradeline import universe as universe_service
+from tradeline.benchmark import load_benchmark_funds
 from tradeline.cited_actions import load_cited_actions
 from tradeline.collect import collect_daily as collect_daily_service
 from tradeline.compare_adjusted import compare_adjusted as compare_adjusted_service
@@ -37,6 +39,7 @@ from tradeline.environment import Environment
 from tradeline.freeze import freeze_protocol
 from tradeline.holdout import run_fresh_period, run_holdout
 from tradeline.ingest.announcements import ingest_announcements
+from tradeline.ingest.benchmark import ingest_benchmark
 from tradeline.ingest.candles import CurrentUniverse, ingest_candles
 from tradeline.ingest.cited_actions import ingest_cited_actions
 from tradeline.ingest.corporate_actions import ingest_corporate_actions
@@ -144,6 +147,8 @@ def ingest(ctx: Context, args: argparse.Namespace) -> int:
         return _ingest_delistings(ctx, args)
     if args.source == "cited-actions":
         return _ingest_cited_actions(ctx)
+    if args.source == "benchmark":
+        return _ingest_benchmark(ctx, args)
     end = args.start if args.end is None else args.end
     with _scope(args.start, end, getattr(args, "symbols", None)):
         return _ingest_range(ctx, args, end)
@@ -254,6 +259,26 @@ def _ingest_cited_actions(ctx: Context) -> int:
         extra=result.summary(),
     )
     return 1 if result.refused else 0
+
+
+def _ingest_benchmark(ctx: Context, args: argparse.Namespace) -> int:
+    """The Benchmark's and the factor fund's AMFI scheme lines and NAVs to ``--to`` (today in
+    India by default); played-back fixtures are not spaced out as live calls are."""
+    end = datetime.now(IST).date() if args.end is None else args.end
+    funds = load_benchmark_funds(Path(ctx.config.benchmark.funds))
+    transport = _transport(ctx, args)
+    sleep = (lambda _seconds: None) if args.play_fixtures is not None else time.sleep
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = ingest_benchmark(
+            conn,
+            transport,
+            funds=funds,
+            factor_fund=ctx.config.benchmark.factor_fund,
+            end=end,
+            sleep=sleep,
+        )
+    log.info("ingest benchmark finished", extra=result.summary())
+    return 0
 
 
 def _feeds(ctx: Context, names: Sequence[str] | None = None) -> list[Feed]:
@@ -945,6 +970,19 @@ def build_parser() -> argparse.ArgumentParser:
         "delistings",
         parents=[fixtures],
         help="NSE's list of delisted securities as it stands today, stored as published",
+    )
+    benchmark = sources.add_parser(
+        "benchmark",
+        parents=[fixtures],
+        help="AMFI's scheme master lines and NAV history of the Benchmark and the factor fund;"
+        " fails unless AMFI names the Benchmark's scheme Direct and Growth",
+    )
+    benchmark.add_argument(
+        "--to",
+        dest="end",
+        metavar="DATE",
+        type=date.fromisoformat,
+        help="the last NAV date to load; defaults to today in India",
     )
     news = sources.add_parser(
         "news",

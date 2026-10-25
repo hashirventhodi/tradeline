@@ -160,6 +160,17 @@ class Config:
         cited: str = "cited_corporate_actions.csv"
 
     @dataclass(frozen=True)
+    class Benchmark:
+        """The Benchmark and the factor fund (ADR 0015 amendment, ``tradeline.benchmark``)."""
+
+        # The checked-in file naming the Benchmark's AMFI scheme from each recorded
+        # fund-change event, relative to the working directory. Nothing else names it.
+        funds: str = "benchmark_funds.csv"
+        # AMFI's code of the fund for the same factor, reported beside the Benchmark and
+        # never gated: the ICICI Prudential Nifty 100 Low Vol 30 ETF.
+        factor_fund: int = 141596
+
+    @dataclass(frozen=True)
     class LimitSet:
         """One family's Limits of ``docs/risk-controls.md`` (``tradeline.risk``), fractions
         of Equity where they are, each on with its value or off, written ``false`` (ADR
@@ -400,6 +411,7 @@ class Config:
     news: News = field(default_factory=News)
     instruments: Instruments = field(default_factory=Instruments)
     corporate_actions: CorporateActions = field(default_factory=CorporateActions)
+    benchmark: Benchmark = field(default_factory=Benchmark)
     integrity: Integrity = field(default_factory=Integrity)
     risk: Risk = field(default_factory=Risk)
     costs: Costs = field(default_factory=Costs)

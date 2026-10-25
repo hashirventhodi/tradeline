@@ -33,6 +33,20 @@ Protocol's freeze, #81), since the question is whether the Strategy clears the
 costs it will pay from now on; a contract note, or a paper Fill, is priced on
 the rates in force on its own day.
 
+Fund units, the Benchmark's (ADR 0015 amendment), are bought and redeemed at
+NAV with the fund house, not on the exchange, so they pay none of the charges
+above. Their own rows in the same file (``FUND_CHARGES``) give, to the paisa:
+
+- stamp duty: ``fund_stamp_duty`` times the amount invested, on a purchase (the
+  fund house deducts it and allots units for the rest);
+- STT: ``fund_stt`` times the redemption value, on a redemption;
+- exit load: ``fund_exit_load`` times the redemption value, when the units are
+  redeemed on or before ``fund_exit_load_days`` days from allotment (a count of
+  days, not a fraction, in the rate column).
+
+The fund-unit rows start on their own first date, which must give each of them;
+``CostSchedule.fund_rates`` refuses a day before it.
+
 Real contract notes the Operator supplies are kept in ``contract_notes.csv``
 (``load_contract_notes``), each a test against the rates on its trade date.
 """
@@ -50,6 +64,7 @@ from tradeline.reviewed_csv import FirstLines, Line, parse_date, read_lines, req
 
 Side = Literal["buy", "sell"]
 CHARGES = ("stt", "stamp_duty", "exchange", "sebi", "gst", "dp_charge")
+FUND_CHARGES = ("fund_stamp_duty", "fund_stt", "fund_exit_load", "fund_exit_load_days")
 COLUMNS = ("in_force_from", "charge", "rate", "citation")
 NOTE_COLUMNS = (
     "trade_date",
@@ -90,12 +105,49 @@ class Rate:
 
 
 @dataclass(frozen=True)
+class FundCharges:
+    """One purchase or redemption of fund units: its costs beyond the NAV, in rupees."""
+
+    stamp_duty: Decimal
+    stt: Decimal
+    exit_load: Decimal
+
+    @property
+    def total(self) -> Decimal:
+        return self.stamp_duty + self.stt + self.exit_load
+
+
+@dataclass(frozen=True)
+class FundRates:
+    """The fund-unit rates in force on one day."""
+
+    stamp_duty: Decimal
+    stt: Decimal
+    exit_load: Decimal
+    # Units redeemed on or before this many days from allotment pay the exit load.
+    exit_load_days: int
+
+    def charges(self, side: str, *, value: Decimal, bought_on: date, day: date) -> FundCharges:
+        """What buying (on ``day``) or redeeming (units bought on ``bought_on``) fund units
+        worth ``value`` at NAV costs."""
+        if side == "buy":
+            return FundCharges(paisa(value * self.stamp_duty), _ZERO, _ZERO)
+        if side != "sell":
+            raise ValueError(f"side {side!r} is not buy or sell")
+        loaded = (day - bought_on).days <= self.exit_load_days
+        return FundCharges(
+            _ZERO, paisa(value * self.stt), paisa(value * self.exit_load) if loaded else _ZERO
+        )
+
+
+@dataclass(frozen=True)
 class CostSchedule:
     rates_by_date: tuple[Rate, ...]
 
     @property
     def first(self) -> date:
-        return min(r.in_force_from for r in self.rates_by_date)
+        """The first date of the equity delivery rates."""
+        return min(r.in_force_from for r in self.rates_by_date if r.charge in CHARGES)
 
     def rates(self, day: date) -> Rates:
         """The rate of each charge in force on ``day``."""
@@ -104,13 +156,35 @@ class CostSchedule:
                 f"{day} is before the cost schedule's first date {self.first};"
                 " add the rates in force then, with citations, to price it"
             )
+        latest = self._latest(day)
+        return Rates(**{charge: latest[charge].rate for charge in CHARGES})
+
+    def fund_rates(self, day: date) -> FundRates:
+        """The fund-unit rates in force on ``day``."""
+        first = min(
+            (r.in_force_from for r in self.rates_by_date if r.charge in FUND_CHARGES), default=None
+        )
+        if first is None or day < first:
+            raise ValueError(
+                f"{day} is before the fund-unit rates' first date {first};"
+                " add the rates in force then, with citations, to price it"
+            )
+        latest = self._latest(day)
+        return FundRates(
+            stamp_duty=latest["fund_stamp_duty"].rate,
+            stt=latest["fund_stt"].rate,
+            exit_load=latest["fund_exit_load"].rate,
+            exit_load_days=int(latest["fund_exit_load_days"].rate),
+        )
+
+    def _latest(self, day: date) -> dict[str, Rate]:
         latest: dict[str, Rate] = {}
         for rate in self.rates_by_date:
             if rate.in_force_from <= day:
                 found = latest.get(rate.charge)
                 if found is None or found.in_force_from < rate.in_force_from:
                     latest[rate.charge] = rate
-        return Rates(**{charge: latest[charge].rate for charge in CHARGES})
+        return latest
 
 
 @dataclass(frozen=True)
@@ -214,20 +288,32 @@ def load_cost_schedule(path: Path) -> CostSchedule:
         rates.append(rate)
     if not rates:
         raise ValueError(f"{path}: no rates")
+    for group in (CHARGES, FUND_CHARGES):
+        _require_first_date(path, [r for r in rates if r.charge in group], group)
+    return CostSchedule(tuple(rates))
+
+
+def _require_first_date(path: Path, rates: list[Rate], group: tuple[str, ...]) -> None:
+    """Refuse the file unless the first date of ``group``'s rates gives each of them."""
+    if not rates:
+        raise ValueError(f"{path}: no rate for {group[0]}")
     first = min(r.in_force_from for r in rates)
-    for charge in CHARGES:
+    for charge in group:
         if not any(r.charge == charge and r.in_force_from == first for r in rates):
             raise ValueError(f"{path}: the first date {first} has no rate for {charge}")
-    return CostSchedule(tuple(rates))
 
 
 def _rate(line: Line) -> Rate:
     day_text, charge, rate_text, citation = line.columns(COLUMNS)
     day = parse_date(line.where, "in_force_from", day_text)
     where = f"{line.where}: {day}"
-    if charge not in CHARGES:
-        raise ValueError(f"{where}: unknown charge {charge!r}; one of {', '.join(CHARGES)}")
+    if charge not in CHARGES + FUND_CHARGES:
+        raise ValueError(
+            f"{where}: unknown charge {charge!r}; one of {', '.join(CHARGES + FUND_CHARGES)}"
+        )
     rate = _amount(where, "rate", rate_text)
+    if charge == "fund_exit_load_days" and rate != rate.to_integral_value():
+        raise ValueError(f"{where}: fund_exit_load_days {rate_text!r} is not a whole number")
     if not citation:
         raise ValueError(f"{where}: no citation; cite where the rate is published")
     return Rate(day, charge, rate, citation)

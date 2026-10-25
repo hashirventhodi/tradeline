@@ -2236,6 +2236,45 @@ def position_events(
     ]
 
 
+@dataclass(frozen=True)
+class DividendCredit:
+    """A dividend a Position was credited on its Ex-Date (ADR 0020): its shares then times
+    the amount per share its subject states; for an unparsed subject, no amount and no
+    cash, with the reason."""
+
+    mode: EngineMode
+    backtest_id: uuid.UUID | None
+    day: date
+    seq: int
+    position_id: uuid.UUID
+    instrument: str
+    symbol: str
+    ex_date: date
+    subject: str
+    shares: int
+    per_share: Decimal | None
+    cash: Decimal | None
+    reason: str | None
+
+
+def dividend_credits(
+    conn: psycopg.Connection,
+    *,
+    mode: EngineMode,
+    backtest_id: uuid.UUID | None,
+    dry_run: bool = False,
+) -> list[DividendCredit]:
+    """Every dividend an account's Positions were credited, in the order credited."""
+    rows = conn.execute(
+        "SELECT mode, backtest_id, day, seq, position_id, instrument, symbol, ex_date, subject,"
+        " shares, per_share, cash, reason FROM dividend_credits"
+        f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
+        " AND dry_run = %(dry_run)s ORDER BY day, seq",
+        {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
+    ).fetchall()
+    return [DividendCredit(*row) for row in rows]
+
+
 def account_cash_flows(
     conn: psycopg.Connection,
     *,
@@ -2243,9 +2282,10 @@ def account_cash_flows(
     backtest_id: uuid.UUID | None,
     dry_run: bool = False,
 ) -> Decimal:
-    """The net cash an account's Fills and restatements moved: every sale's value less its
-    charges, every purchase's value and its charges taken away, plus cash paid in lieu of
-    fractional shares. An account's cash is its starting Equity plus this."""
+    """The net cash an account's Fills, restatements and dividends moved: every sale's value
+    less its charges, every purchase's value and its charges taken away, plus cash paid in
+    lieu of fractional shares and every dividend credited. An account's cash is its
+    starting Equity plus this."""
     charges = " + ".join(f"coalesce({c}, 0)" for c in _CHARGE_COLUMNS)
     row = conn.execute(
         "SELECT coalesce((SELECT sum(CASE side WHEN 'sell' THEN price * shares"
@@ -2253,6 +2293,9 @@ def account_cash_flows(
         f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
         " AND dry_run = %(dry_run)s), 0)"
         " + coalesce((SELECT sum(cash_in_lieu) FROM positions"
+        f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
+        " AND dry_run = %(dry_run)s), 0)"
+        " + coalesce((SELECT sum(cash) FROM dividend_credits"
         f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
         " AND dry_run = %(dry_run)s), 0)",
         {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},

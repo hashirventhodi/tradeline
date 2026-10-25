@@ -1,0 +1,59 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://www.amfiindia.com/api/nav-history?query_type=historical_period&from_date=2019-09-11&to_date=2023-09-10&sd_id=141596",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "server",
+        "nginx"
+      ],
+      [
+        "date",
+        "Sun, 25 Oct 2026 06:55:37 GMT"
+      ],
+      [
+        "content-type",
+        "application/json; charset=utf-8"
+      ],
+      [
+        "connection",
+        "keep-alive"
+      ],
+      [
+        "x-powered-by",
+        "Express"
+      ],
+      [
+        "etag",
+        "W/\"2ab81-vzH5e02Vs5Oy4I/j8LuJg9iabWg\""
+      ],
+      [
+        "strict-transport-security",
+        "max-age=63072000; includeSubDomains; preload"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "x-xss-protection",
+        "1; mode=block"
+      ],
+      [
+        "referrer-policy",
+        "strict-origin-when-cross-origin"
+      ]
+    ],
+    "body": "{\"data\":{\"mf_name\":\"ICICI Prudential Mutual Fund\",\"scheme_name\":\"ICICI Prudential Nifty 100 Low Volatility 30 ETF\",\"date_range\":\"From 11-Sep-2019 to 10-Sep-2023\",\"nav_groups\":[{\"nav_name\":\"ICICI Prudential Nifty 100 Low Volatility 30 ETF\",\"historical_records\":[{\"date\":\"2019-09-11\",\"nav\":87.55,\"upload_time\":\"2019-09-11T23:04:59.000Z\",\"upload_time_display\":\"11 Sep 2019 23:04:59\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2019-09-12\",\"nav\":87.02,\"upload_time\":\"2019-09-12T20:50:21.000Z\",\"upload_time_display\":\"12 Sep 2019 20:50:21\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2019-09-13\",\"nav\":87.65,\"upload_time\":\"2019-09-13T20:54:11.000Z\",\"upload_time_display\":\"13 Sep 2019 20:54:11\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2019-09-16\",\"nav\":87.49,\"upload_time\":\"2019-09-16T20:51:02.000Z\",\"upload_time_display\":\"16 Sep 2019 20:51:02\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2019-09-17\",\"nav\":85.99,\"upload_time\":\"2019-09-17T21:44:08.000Z\",\"upload_time_display\":\"17 Sep 2019 21:44:08\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2019-09-18\",\"nav\":86.12,\"upload_time\":\"2019-09-18T20:54:16.000Z\",\"upload_time_display\":\"18 Sep 2019 20:54:16\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2019-09-19\",\"nav\":85.44,\"upload_time\":\"2019-09-19T20:48:06.000Z\",\"upload_time_display\":\"19 Sep 2019 20:48:06\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2019-09-20\",\"nav\":89.75,\"upload_time\":\"2019-09-20T20:55:08.000Z\",\"upload_time_display\":\"20 Sep 2019 20:55:08\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2019-09-23\",\"nav\":91.41,\"upload_time\":\"2019-09-23T22:26:00.000Z\",\"upload_time_display\":\"23 Sep 2019 22:26:00\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2019-09-24\",\"nav\":91.38,\"upload_time\":\"2019-09-24T22:28:31.000Z\",\"upload_time_display\":\"24 Sep 2019 22:28:31\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2019-09-25\",\"nav\":90.41,\"upload_time\":\"2019-09-25T22:33:42.000Z\",\"upload_time_display\":\"25 Sep 2019 22:33:42\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2019-09-26\",\"nav\":91.23,\"upload_time\":\"2019-09-26T22:56:09.000Z\",\"upload_time_display\":\"26 Sep 2019 22:56:09\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2019-09-27\",\"nav\":90.88,\"upload_time\":\"2019-09-27T22:54:39.000Z\",\"upload_time_display\":\"27 Sep 2019 22:54:39\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2019-09-30\",\"nav\":90.79,\"upload_time\":\"2019-09-30T22:55:55.000Z\",\"upload_time_display\":\"30 Sep 2019 22:55:55\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2019-10-01\",\"nav\":89.84,\"upload_time\":\"2019-10-01T22:37:23.000Z\",\"upload_time_display\":\"01 Oct 2019 22:37:23\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2019-10-03\",\"nav\":89.44,\"upload_time\":\"2019-10-03T22:30:25.000Z\",\"upload_time_display\":\"03 Oct 2019 22:30:25\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2019-10-04\",\"nav\":88.4,\"upload_time\":\"2019-10-05T04:31:59.000Z\",\"upload_time_display\":\"05 Oct 2019 04:31:59\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2019-10-07\",\"nav\":88.01,\"upload_time\":\"2019-10-07T21:02:43.000Z\",\"upload_time_display\":\"07 Oct 2019 21:02:43\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2019-10-09\",\"nav\":89.07,\"upload_time\":\"2019-10-09T21:44:18.000Z\",\"upload_time_display\":\"09 Oct 2019 21:44:18\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2019-10-10\",\"nav\":88.78,\"upload_time\":\"2019-10-10T22:04:22.000Z\",\"upload_time_display\":\"10 Oct 2019 22:04:22\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2019-10-11\",\"nav\":89.52,\"upload_time\":\"2019-10-11T21:54:05.000Z\",\"upload_time_display\":\"11 Oct 2019 21:54:05\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2019-10-14\",\"nav\":90.04,\"upload_time\":\"2019-10-14T21:43:12.000Z\",\"upload_time_display\":\"14 Oct 2019 21:43:12\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2019-10-15\",\"nav\":90.96,\"upload_time\":\"2019-10-15T22:07:17.000Z\",\"upload_time_display\":\"15 Oct 2019 22:07:17\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2019-10-16\",\"nav\":91.05,\"upload_time\":\"2019-10-16T22:19:36.000Z\",\"upload_time_display\":\"16 Oct 2019 22:19:36\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2019-10-17\",\"nav\":91.81,\"upload_time\":\"2019-10-17T22:54:02.000Z\",\"upload_time_display\":\"17 Oct 2019 22:54:02\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2023-08-04\",\"nav\":162.2753,\"upload_time\":\"2023-08-04T22:07:56.000Z\",\"upload_time_display\":\"04 Aug 2023 22:07:56\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2023-08-07\",\"nav\":162.6797,\"upload_time\":\"2023-08-07T22:33:26.000Z\",\"upload_time_display\":\"07 Aug 2023 22:33:26\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2023-08-08\",\"nav\":162.8817,\"upload_time\":\"2023-08-08T22:58:10.000Z\",\"upload_time_display\":\"08 Aug 2023 22:58:10\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2023-08-09\",\"nav\":163.4719,\"upload_time\":\"2023-08-09T22:40:35.000Z\",\"upload_time_display\":\"09 Aug 2023 22:40:35\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2023-08-10\",\"nav\":162.2119,\"upload_time\":\"2023-08-10T22:47:54.000Z\",\"upload_time_display\":\"10 Aug 2023 22:47:54\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2023-08-11\",\"nav\":161.4021,\"upload_time\":\"2023-08-11T22:44:26.000Z\",\"upload_time_display\":\"11 Aug 2023 22:44:26\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2023-08-14\",\"nav\":161.4068,\"upload_time\":\"2023-08-14T22:48:33.000Z\",\"upload_time_display\":\"14 Aug 2023 22:48:33\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2023-08-16\",\"nav\":162.0867,\"upload_time\":\"2023-08-16T21:37:07.000Z\",\"upload_time_display\":\"16 Aug 2023 21:37:07\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2023-08-17\",\"nav\":161.3008,\"upload_time\":\"2023-08-17T22:51:56.000Z\",\"upload_time_display\":\"17 Aug 2023 22:51:56\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2023-08-18\",\"nav\":160.5618,\"upload_time\":\"2023-08-18T22:32:51.000Z\",\"upload_time_display\":\"18 Aug 2023 22:32:51\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2023-08-21\",\"nav\":161.2515,\"upload_time\":\"2023-08-21T22:54:20.000Z\",\"upload_time_display\":\"21 Aug 2023 22:54:20\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2023-08-22\",\"nav\":161.3872,\"upload_time\":\"2023-08-22T22:52:02.000Z\",\"upload_time_display\":\"22 Aug 2023 22:52:02\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2023-08-23\",\"nav\":161.49,\"upload_time\":\"2023-08-23T22:51:35.000Z\",\"upload_time_display\":\"23 Aug 2023 22:51:35\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2023-08-24\",\"nav\":161.489,\"upload_time\":\"2023-08-24T22:34:56.000Z\",\"upload_time_display\":\"24 Aug 2023 22:34:56\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2023-08-25\",\"nav\":160.2277,\"upload_time\":\"2023-08-25T22:51:03.000Z\",\"upload_time_display\":\"25 Aug 2023 22:51:03\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2023-08-28\",\"nav\":160.4899,\"upload_time\":\"2023-08-28T22:46:16.000Z\",\"upload_time_display\":\"28 Aug 2023 22:46:16\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2023-08-29\",\"nav\":161.1024,\"upload_time\":\"2023-08-29T22:24:00.000Z\",\"upload_time_display\":\"29 Aug 2023 22:24:00\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2023-08-30\",\"nav\":161.0347,\"upload_time\":\"2023-08-30T22:39:01.000Z\",\"upload_time_display\":\"30 Aug 2023 22:39:01\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2023-08-31\",\"nav\":159.9619,\"upload_time\":\"2023-08-31T22:54:54.000Z\",\"upload_time_display\":\"31 Aug 2023 22:54:54\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2023-09-01\",\"nav\":160.667,\"upload_time\":\"2023-09-01T22:57:31.000Z\",\"upload_time_display\":\"01 Sep 2023 22:57:31\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2023-09-04\",\"nav\":161.7778,\"upload_time\":\"2023-09-04T22:36:19.000Z\",\"upload_time_display\":\"04 Sep 2023 22:36:19\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2023-09-05\",\"nav\":162.3268,\"upload_time\":\"2023-09-05T22:51:49.000Z\",\"upload_time_display\":\"05 Sep 2023 22:51:49\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2023-09-06\",\"nav\":162.9858,\"upload_time\":\"2023-09-06T22:18:17.000Z\",\"upload_time_display\":\"06 Sep 2023 22:18:17\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2023-09-07\",\"nav\":163.5634,\"upload_time\":\"2023-09-07T22:49:17.000Z\",\"upload_time_display\":\"07 Sep 2023 22:49:17\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null},{\"date\":\"2023-09-08\",\"nav\":164.1128,\"upload_time\":\"2023-09-08T22:36:19.000Z\",\"upload_time_display\":\"08 Sep 2023 22:36:19\",\"repurchase\":\"\",\"reissue\":\"\",\"Plan\":null,\"Option\":null}]}]}}",
+    "body_encoding": "utf-8"
+  }
+}

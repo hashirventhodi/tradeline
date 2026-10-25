@@ -4,8 +4,8 @@ Each row is tagged with its account (``queries.Account``: the Engine Mode, the
 backtest id in backtest mode, and whether a paper Run is a dry run). A Run
 writes its Strategy version, the Run, its Candidates, Plans, Passes and Blocks
 and a Verdict on each Candidate; the account's session and Orders write
-Orders, Fills and Positions as event rows, each with the day and a sequence
-number that orders it within the account. Nothing here decides anything: the
+Orders, Fills, Positions and dividend credits as event rows, each with the day
+and a sequence number that orders it within the account. Nothing here decides anything: the
 engine (``tradeline.engine``) decides, and these functions write what it
 decided. Reads are ``tradeline.queries``.
 """
@@ -26,6 +26,7 @@ import psycopg
 from tradeline import queries
 from tradeline.costs import Charges
 from tradeline.dates import month_of
+from tradeline.dividends import Dividend
 from tradeline.paper_broker import OrderPurpose
 from tradeline.queries import EngineMode
 from tradeline.risk import Decision, Pass, PortfolioPlan, Proposal
@@ -168,6 +169,41 @@ def insert_position(
             position.exit_reason,
             None if factor is None else f"{factor.numerator}/{factor.denominator}",
             cash_in_lieu,
+        ),
+    )
+
+
+def insert_dividend_credit(
+    conn: psycopg.Connection,
+    account: queries.Account,
+    position: queries.LedgerPosition,
+    dividend: Dividend,
+    *,
+    day: date,
+    seq: int,
+) -> None:
+    """The Position's credit of ``dividend`` on ``day``: its shares times the amount per
+    share, or nothing, with the reason, when the subject is unparsed."""
+    per_share = dividend.per_share
+    conn.execute(
+        "INSERT INTO dividend_credits (mode, backtest_id, dry_run, day, seq, position_id,"
+        " instrument, symbol, ex_date, subject, shares, per_share, cash, reason)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (
+            account["mode"],
+            account["backtest_id"],
+            account["dry_run"],
+            day,
+            seq,
+            position.id,
+            position.instrument,
+            position.symbol,
+            dividend.ex_date,
+            dividend.subject,
+            position.shares,
+            per_share,
+            None if per_share is None else per_share * position.shares,
+            dividend.reason,
         ),
     )
 

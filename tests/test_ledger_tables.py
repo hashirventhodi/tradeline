@@ -20,6 +20,7 @@ LEDGER_TABLES = (
     "orders",
     "fills",
     "positions",
+    "dividend_credits",
 )
 INSERTS = {
     "strategies": "INSERT INTO strategies (mode, backtest_id, family, name, code_revision,"
@@ -51,6 +52,10 @@ INSERTS = {
     " run_id, rank, instrument, symbol, opened_on, shares, entry, stop, target,"
     " time_stop_days) VALUES (%s, %s, gen_random_uuid(), 'opened', '2023-06-16', 2,"
     " gen_random_uuid(), 1, 'A', 'A', '2023-06-16', 50, 100, 94, 112, 10)",
+    "dividend_credits": "INSERT INTO dividend_credits (mode, backtest_id, day, seq,"
+    " position_id, instrument, symbol, ex_date, subject, shares, per_share, cash)"
+    " VALUES (%s, %s, '2023-06-16', 1, gen_random_uuid(), 'A', 'A', '2023-06-16',"
+    " 'Dividend - Rs 5 Per Share', 50, 5, 250)",
 }
 
 
