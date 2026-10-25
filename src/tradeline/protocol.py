@@ -4,10 +4,11 @@ A Protocol states the parameter grid, the objective and its tie-break, the
 Walk-Forward Windows and the Holdout as trading days from the Trading Calendar,
 the cost schedule's date with the rates in force on it and Slippage's
 parameters, the exit band, the Limits (the Participation Cap among them), the
-daily-loss and drawdown Halt fractions a backtest reports against, the
-starting Equity, the risk-free rate, the Gate thresholds, the Universe Rule
-version, the Strategy family, name and code revision, the git commit it was
-frozen at, and the data snapshot: each Universe month's mode and build, and the
+daily-loss and drawdown Halt fractions a backtest reports against, whether
+dividends are credited (stated only when they are), the starting Equity, the
+risk-free rate, the Gate thresholds, the Universe Rule version, the Strategy
+family, name and code revision, the git commit it was frozen at, and the data
+snapshot: each Universe month's mode and build, and the
 hash of the Adjusted Series of every member over the Protocol's range.
 
 Its identity is the SHA-256 of its canonical serialisation: JSON with sorted
@@ -109,6 +110,8 @@ class Terms:
     # Trading days before the first Window whose Adjusted Series the snapshot also hashes:
     # the bars the first Runs read.
     warm_up_trading_days: int
+    # Whether a holder is credited each dividend in cash on its Ex-Date (ADR 0020).
+    dividends: bool = False
 
 
 @dataclass(frozen=True)
@@ -163,6 +166,10 @@ class Protocol:
     rule_version: str
     warm_up_trading_days: int
     snapshot: DataSnapshot
+    # Whether a holder at the close before a dividend's Ex-Date is credited it in cash on the
+    # Ex-Date (ADR 0020). Stated in the content only when on, so a Protocol frozen before
+    # it existed (``pullback_v1``'s) reads back to the same hash, with dividends off.
+    dividends: bool = False
 
     @property
     def first(self) -> date:
@@ -190,7 +197,7 @@ class Protocol:
 
     def content(self) -> dict[str, Any]:
         snapshot = self.snapshot
-        return {
+        content: dict[str, Any] = {
             "format": FORMAT,
             "strategy": {
                 "family": self.family,
@@ -229,6 +236,9 @@ class Protocol:
                 "adjusted_series": dict(snapshot.adjusted_series),
             },
         }
+        if self.dividends:
+            content["dividends"] = True
+        return content
 
     @classmethod
     def from_content(cls, content: Mapping[str, Any]) -> Protocol:
@@ -274,6 +284,7 @@ class Protocol:
                 months=tuple(_read_month(m) for m in snapshot["months"]),
                 adjusted_series=dict(snapshot["adjusted_series"]),
             ),
+            dividends=content.get("dividends", False),
         )
 
     def boundaries_text(self) -> str:

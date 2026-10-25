@@ -149,6 +149,7 @@ def freeze_protocol(
             last=last,
             calendar=calendar,
         ),
+        dividends=terms.dividends,
     )
     content = canonical(protocol.content())
     found = content_hash(protocol.content())
