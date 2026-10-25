@@ -588,7 +588,10 @@ def limits_content(limits: Limits) -> dict[str, Any]:
     """Every Limit as a Protocol states it: its value, or null when off. ``stop_required``
     appears only when off: every Protocol frozen before Limits were declared (ADR 0020)
     required a stop and does not name it, so its absence is the stop required, and those
-    Protocols serialise, and hash, as they were frozen."""
+    Protocols serialise, and hash, as they were frozen. It is the one exception to refusing
+    a Protocol that leaves a Limit unstated (``docs/risk-controls.md``). A freeze writes it
+    the same way, not always naming it: one that did would freeze ``pullback_v1``'s terms
+    again under a hash other than ``41e47fd39af3``."""
     limits.require_stated()
     content = {f.name: getattr(limits, f.name) for f in dataclasses.fields(limits)}
     if content.pop(STOP_REQUIRED):
