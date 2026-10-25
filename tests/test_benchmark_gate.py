@@ -58,6 +58,7 @@ from synthetic_eod import (
 )
 from tradeline import queries
 from tradeline.cli import main
+from tradeline.config import NOT_INDEPENDENT_REASON
 from tradeline.costs import load_cost_schedule
 from tradeline.db import app_connection
 from tradeline.demergers import load_demergers
@@ -232,6 +233,7 @@ def test_the_gate_checks_excess_and_drawdown_on_both_curves_and_the_rebalance_co
         "drawdown_margin": "0.02",
         "min_stitched_rebalances": 8,
         "rebalances_counted": REBALANCES_COUNTED,
+        "min_fresh_period_rebalances": 2,
     }
     assert [(c["curve"], c["metric"], c["rule"]) for c in gate["checks"]] == [
         ("stitched_curve", "annualised_excess", "above"),
@@ -243,8 +245,10 @@ def test_the_gate_checks_excess_and_drawdown_on_both_curves_and_the_rebalance_co
     rebalances = gate["checks"][2]
     # Decided on 2022-09-30 and 2023-03-31; the Initial Buy is not one.
     assert (rebalances["value"], rebalances["threshold"], rebalances["passed"]) == (2, 8, False)
-    assert gate["outcome"] == "fail"
-    assert "stitched_curve rebalances" in gate["reason"]
+    # lowvol_v1 is Not Independent (#99), so with no Fresh Period it cannot pass whatever
+    # its checks; the missed minimum is still recorded.
+    assert gate["outcome"] == "cannot pass"
+    assert NOT_INDEPENDENT_REASON in gate["reason"]
     assert gate["holdout_rebalances"] == 0
     # The checks read the curves' comparison of Liquidation Values after tax.
     for check in gate["checks"][:2]:
@@ -408,8 +412,9 @@ def test_the_report_states_its_caveats_and_the_benchmarks_tax(reported: Reported
     assert "surcharge" in notes["surcharge"]
     assert "buffer of 60" in notes["buffer_scale"]
     assert notes["rebalances_counted"] == REBALANCES_COUNTED
-    # lowvol_v1's Holdout run here is the family's first: independent.
-    assert notes["not_independent"] is None
+    # lowvol_v1's Holdout run is the family's first and Not Independent, with its reason.
+    assert notes["not_independent"] == report["gate"]["standing"]["reason"]
+    assert NOT_INDEPENDENT_REASON in notes["not_independent"]
     for curve in ("stitched_curve", "holdout"):
         liquidation = report[curve]["liquidation"]
         assert liquidation["benchmark"]["taxed_as"] in ("short_term", "long_term")

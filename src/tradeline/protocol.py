@@ -18,9 +18,11 @@ with how it counts Rebalances), any notes it makes of itself, the Machinery
 Correction it was frozen as with the Protocol it corrects and the evidence (stated
 only when it is one), the Universe
 Rule version, the Strategy family, name and code revision, the git commit it was
-frozen at, and the data snapshot: each Universe month's mode and build, the hash
-of the Adjusted Series of every member over the Protocol's range, and,
-only when demergers are credited, the hash of the demerger table.
+frozen at, why its Holdout run is Not Independent when its family was chosen after
+reading results covering the Holdout's years (stated only then), and the data
+snapshot: each Universe month's mode and build, the hash of the Adjusted Series of
+every member over the Protocol's range, and, only when demergers are credited, the
+hash of the demerger table.
 
 Its identity is the SHA-256 of its canonical serialisation: JSON with sorted
 keys and no spaces, every decimal number written in one fixed form (no
@@ -123,12 +125,16 @@ class BenchmarkGate:
     the Stitched Curve and the Holdout, the annualised excess of Liquidation Value over the
     Benchmark's above ``excess_above`` and the drawdown of Liquidation Value no more than
     the Benchmark's plus ``drawdown_margin``; at least ``min_stitched_rebalances``
-    Rebalances on the Stitched Curve, counted as ``rebalances_counted`` says."""
+    Rebalances on the Stitched Curve, counted as ``rebalances_counted`` says. A Not
+    Independent run's Fresh Period carries it only once it holds at least
+    ``min_fresh_period_rebalances`` Rebalances after its Initial Buy, counted the same way
+    (ADR 0007 amendment of 2026-10-25)."""
 
     excess_above: Decimal
     drawdown_margin: Decimal
     min_stitched_rebalances: int
     rebalances_counted: str = REBALANCES_COUNTED
+    min_fresh_period_rebalances: int = 2
 
 
 AnyGate = Gate | BenchmarkGate
@@ -187,6 +193,7 @@ def read_gate(raw: Mapping[str, Any]) -> AnyGate:
             drawdown_margin=Decimal(raw["drawdown_margin"]),
             min_stitched_rebalances=raw["min_stitched_rebalances"],
             rebalances_counted=raw["rebalances_counted"],
+            min_fresh_period_rebalances=raw["min_fresh_period_rebalances"],
         )
     return Gate(
         sharpe_above=Decimal(raw["sharpe_above"]),
@@ -221,6 +228,9 @@ class Terms:
     tax: bool = False
     # What the Protocol says of itself beyond its numbers, by name (``Protocol.notes``).
     notes: Mapping[str, str] = dataclasses.field(default_factory=dict)
+    # Why the version's Holdout run is Not Independent though no earlier version consumed
+    # the Holdout (``Protocol.not_independent``); None for none.
+    not_independent: str | None = None
 
 
 @dataclass(frozen=True)
@@ -293,6 +303,11 @@ class Protocol:
     # ``buffer_scale``, NSE's buffer kept at a different scale. In the content only when
     # there is one, as ``dividends`` is.
     notes: Mapping[str, str] = dataclasses.field(default_factory=dict)
+    # Why the version's Holdout run is Not Independent whatever ran before it (ADR 0007
+    # amendment of 2026-10-25): its family was chosen after reading published results that
+    # cover the Holdout's years, as ``lowvol``'s was. It then passes the Backtest Gate only
+    # with a Fresh Period. In the content only when there is one, as ``dividends`` is.
+    not_independent: str | None = None
     # The Machinery Correction this Protocol was frozen as, at the fixed commit: the
     # Protocol it corrects and the evidence. In the content only when there is one.
     correction: Correction | None = None
@@ -401,6 +416,8 @@ class Protocol:
                 ]
         if self.notes:
             content["notes"] = dict(self.notes)
+        if self.not_independent is not None:
+            content["not_independent"] = self.not_independent
         if self.correction is not None:
             content["correction"] = dataclasses.asdict(self.correction)
         return content
@@ -449,6 +466,7 @@ class Protocol:
             tax=None if "tax" not in content else _read_tax(content["tax"]),
             benchmark=None if "benchmark" not in content else _read_benchmark(content["benchmark"]),
             notes=dict(content.get("notes", {})),
+            not_independent=content.get("not_independent"),
             correction=None if "correction" not in content else _read_correction(content),
         )
 

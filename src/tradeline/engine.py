@@ -984,6 +984,23 @@ def _step(
     ]
 
 
+def require_fresh_period(
+    conn: psycopg.Connection,
+    strategy: AnyStrategy,
+    frozen: queries.FrozenProtocol,
+    *,
+    start: date,
+    end: date,
+) -> None:
+    """Refuse a Fresh Period from ``start`` to ``end`` under ``frozen`` as ``backtest_span``
+    would, before any of it runs: at a commit other than the frozen one, for another
+    Strategy or code revision, or starting inside the Protocol's range. Its data snapshot is
+    the caller's (``holdout.run_fresh_period``)."""
+    _protocol_for(
+        conn, strategy, frozen.hash, start=start, end=end, verify=False, fresh_period=True
+    )
+
+
 def _protocol_for(
     conn: psycopg.Connection,
     strategy: AnyStrategy,

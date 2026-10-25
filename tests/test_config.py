@@ -359,3 +359,16 @@ def test_lowvol_without_tax_is_refused_since_its_gate_compares_liquidation_value
 
     with pytest.raises(ConfigError, match="lowvol.protocol: .*tax"):
         load_config(path)
+
+
+def test_lowvol_v1_is_frozen_not_independent_with_its_reason_and_an_empty_one_is_refused(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text("")
+    reason = load_config(path).lowvol.protocol.terms().not_independent
+    assert reason is not None and "published results covering the Holdout's years" in reason
+
+    path.write_text('[lowvol.protocol]\nnot_independent = " "\n')
+    with pytest.raises(ConfigError, match="lowvol.protocol: not_independent"):
+        load_config(path)

@@ -196,6 +196,7 @@ class ProtocolReport:
                     "drawdown_margin",
                     "min_stitched_rebalances",
                     "rebalances_counted",
+                    "min_fresh_period_rebalances",
                 )
             },
             "checks": checks,
@@ -839,6 +840,7 @@ def _lineage_json(lineage: queries.Lineage) -> dict[str, Any]:
                 "name": v.name,
                 "code_revision": v.code_revision,
                 "frozen_at": v.frozen_at.astimezone(IST).isoformat(),
+                "not_independent": v.not_independent,
                 "holdout": None
                 if v.holdout is None
                 else {
@@ -982,7 +984,9 @@ class _Markdown:
             f" {thresholds['drawdown_margin']} on both curves; at least"
             f" {thresholds['min_stitched_rebalances']} Rebalances on the Stitched Curve"
             f" ({thresholds['rebalances_counted']}). The Holdout's"
-            f" {gate['holdout_rebalances']} Rebalances are reported, not gated."
+            f" {gate['holdout_rebalances']} Rebalances are reported, not gated. A Not"
+            " Independent run's Fresh Period carries the Gate only once it holds at least"
+            f" {thresholds['min_fresh_period_rebalances']} Rebalances after its Initial Buy."
         )
         self._table(
             ["Curve", "Metric", "Value", "Rule", "Holds"],

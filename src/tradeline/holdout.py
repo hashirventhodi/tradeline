@@ -13,7 +13,9 @@ passed at the commit it runs at; until then it is refused, naming each unmet
 check, and no attempt is recorded (the checks are, in ``holdout_checks``). Every
 other request is recorded in ``holdout_attempts``. A second run by the same
 version is refused and the refusal recorded. The family's first run consumes
-its Holdout; a later version's run is Not Independent. So is any run after a
+its Holdout; a later version's run is Not Independent. So is a first version's whose
+Protocol says so, with its reason (its family chosen after reading published results
+covering the Holdout's years: ``lowvol_v1``), though it consumes it. So is any run after a
 data correction on a period an earlier run saw: when a Universe month's or a
 member's Adjusted Series hash an earlier Holdout run verified (its Protocol's
 snapshot, over that run's Holdout) no longer matches the rows stored now,
@@ -26,7 +28,12 @@ months long (``fresh_period``, ``standing``). ``run_fresh_period`` runs it: the
 parameters the Holdout ran at, in a fresh account at the Protocol's starting
 Equity, over the Fresh Period's days to the last with data, recorded
 (``fresh_periods``) and extended as more data is collected; the Backtest Gate
-scores it with the Holdout's thresholds (``protocol_report``).
+scores it with the Holdout's thresholds (``protocol_report``). It is a backtest at
+the frozen commit, refused at any other, and refused when the frozen data its
+warm-up reads (the Protocol's last months) or the demerger table has changed. A
+portfolio Strategy's account starts with an Initial Buy decided on the trading day
+before its first, and the Benchmark is bought the day its entrants are; it carries
+the Gate once it also holds two Rebalances after it (``gate``).
 
 A Machinery Correction (ADR 0007 amendment) runs no Holdout of its own: the
 Holdout run of the Protocol it corrects stands as recorded (``holdout_run_of``),
@@ -51,8 +58,8 @@ import psycopg
 
 from tradeline import queries
 from tradeline.dates import IST
-from tradeline.engine import SeriesCache, backtest_span
-from tradeline.freeze import run_members, verify_snapshot
+from tradeline.engine import SeriesCache, backtest_span, require_fresh_period
+from tradeline.freeze import run_members, verify_snapshot, warm_up_start
 from tradeline.holdout_checks import require_passed
 from tradeline.paper_broker import FILL_MODEL, FillModel
 from tradeline.protocol import months_between
@@ -326,6 +333,8 @@ def standing(
         data_last=stored[-1] if stored else None,
     )
     why = []
+    if attempt.not_independent is not None:
+        why.append(attempt.not_independent)
     if not attempt.consumes:
         why.append(f"the family's Holdout was consumed by Protocol {consumer.hash[:12]}")
     if attempt.corrected_since:
@@ -412,6 +421,9 @@ def run_fresh_period(
             f"Protocol {short}'s Fresh Period has no trading day of data yet"
             f" (it starts after {holdout.last} and after the version's freeze)"
         )
+    parameters = {a: Decimal(v) for a, v in attempt.parameters.items()}
+    require_fresh_period(conn, strategy(parameters), frozen, start=period.first, end=period.last)
+    _verify_read_snapshot(conn, frozen, period.first, calendar)
     found = queries.fresh_period_run(conn, frozen.hash)
     if found is None:
         with conn.transaction():
@@ -453,6 +465,18 @@ def run_fresh_period(
     result = FreshPeriodResult(found, period, len(results), time.monotonic() - began)
     log.info("fresh period finished", extra=result.summary())
     return result
+
+
+def _verify_read_snapshot(
+    conn: psycopg.Connection, frozen: queries.FrozenProtocol, first: date, calendar: TradingCalendar
+) -> None:
+    """Refuse a Fresh Period from ``first`` if the frozen data it reads is not the rows
+    stored now: the Universe months and Adjusted Series of its warm-up's bars, which lie in
+    the Protocol's range (its own days lie after it, and the Protocol cannot cover them),
+    and the demerger table it credits."""
+    terms = frozen.protocol
+    start = max(terms.first, warm_up_start(calendar, first, terms.warm_up_trading_days))
+    verify_snapshot(conn, frozen, start=start, end=terms.holdout.last)
 
 
 class _Hashes:
@@ -561,8 +585,8 @@ def _record(
             consumes = not any(a.consumes for a in queries.holdout_attempts(conn, family=family))
         conn.execute(
             "INSERT INTO holdout_attempts (id, protocol, family, outcome, backtest_id,"
-            " parameters, consumes, corrected_since, reason)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            " parameters, consumes, corrected_since, reason, not_independent)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 attempt_id,
                 frozen.hash,
@@ -573,6 +597,7 @@ def _record(
                 consumes,
                 None if corrected_since is None else list(corrected_since),
                 reason,
+                frozen.protocol.not_independent if outcome == "ran" else None,
             ),
         )
     conn.commit()

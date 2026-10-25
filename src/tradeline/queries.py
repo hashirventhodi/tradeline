@@ -2758,8 +2758,9 @@ def walk_forward_windows(conn: psycopg.Connection, protocol: str) -> list[WalkFo
 class HoldoutAttempt:
     """One request by a Strategy version (its Protocol) to run the Holdout: ``ran``, with
     the account it ran in, its parameters, whether it consumed the family's Holdout and the
-    earlier runs whose data has been corrected since; or ``refused``, with the reason.
-    ``consumes`` and ``independent`` are None for a refusal."""
+    earlier runs whose data has been corrected since, and the reason its Protocol states for
+    its being Not Independent (``not_independent``, None for none); or ``refused``, with the
+    reason. ``consumes`` and ``independent`` are None for a refusal."""
 
     id: uuid.UUID
     protocol: str
@@ -2772,6 +2773,7 @@ class HoldoutAttempt:
     corrected_since: tuple[uuid.UUID, ...]
     independent: bool | None
     reason: str | None
+    not_independent: str | None = None
 
 
 def holdout_attempts(
@@ -2781,7 +2783,7 @@ def holdout_attempts(
     Family ``family`` when named, in the order made."""
     rows = conn.execute(
         "SELECT id, protocol, family, attempted_at, outcome, backtest_id, parameters, consumes,"
-        " corrected_since, independent, reason FROM holdout_attempts"
+        " corrected_since, independent, reason, not_independent FROM holdout_attempts"
         " WHERE (%(protocol)s::text IS NULL OR protocol = %(protocol)s)"
         " AND (%(family)s::text IS NULL OR family = %(family)s)"
         " ORDER BY attempted_at, id",
@@ -2800,6 +2802,7 @@ def holdout_attempts(
             corrected_since=tuple(row[8] or ()),
             independent=row[9],
             reason=row[10],
+            not_independent=row[11],
         )
         for row in rows
     ]
@@ -2875,13 +2878,15 @@ def fresh_period_run(conn: psycopg.Connection, protocol: str) -> FreshPeriodRun 
 @dataclass(frozen=True)
 class LineageVersion:
     """A Strategy version in a lineage: its Protocol, Strategy and code revision, when it was
-    frozen, and its Holdout run, if it has one."""
+    frozen, its Holdout run, if it has one, and why its Protocol records it Not Independent,
+    if it does."""
 
     protocol: str
     name: str
     code_revision: str
     frozen_at: datetime
     holdout: HoldoutAttempt | None
+    not_independent: str | None = None
 
 
 @dataclass(frozen=True)
@@ -2922,7 +2927,12 @@ def lineage(conn: psycopg.Connection, protocol: str) -> Lineage:
             name,
             tuple(
                 LineageVersion(
-                    v.hash, v.protocol.name, v.protocol.code_revision, v.frozen_at, ran.get(v.hash)
+                    v.hash,
+                    v.protocol.name,
+                    v.protocol.code_revision,
+                    v.frozen_at,
+                    ran.get(v.hash),
+                    v.protocol.not_independent,
                 )
                 for v in versions
             ),

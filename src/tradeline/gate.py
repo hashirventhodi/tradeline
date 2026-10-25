@@ -22,7 +22,9 @@ Liquidation Value is at most the Benchmark's plus the Protocol's margin (2
 points); the Stitched Curve holds at least the minimum number of Rebalances, and
 the Holdout's are reported, never gated. The information ratio is read with them
 and reported, never gated. A Not Independent run's Fresh Period clears the same
-thresholds on its own curve.
+thresholds on its own curve, and carries the Gate only once it holds the Protocol's
+minimum of Rebalances after its Initial Buy (two): short of them the outcome is
+``cannot pass``, whatever its thresholds, as a Fresh Period short of twelve months is.
 
 After a Machinery Correction (ADR 0007 amendment) the Holdout's recorded outcome
 stands; ``correction_sensitivity`` flags it sensitive to the correction when its
@@ -122,8 +124,16 @@ def evaluate(
     or is not independent. Each curve is the kind its Gate reads."""
     checks = [*_checks(gate, "stitched_curve", stitched), *_checks(gate, "holdout", holdout)]
     checks.insert(len(checks) // 2, _minimum(gate, stitched))
+    short: Check | None = None
     if not independent and may_pass and fresh_period is not None:
         checks += _checks(gate, "fresh_period", fresh_period)
+        if isinstance(gate, BenchmarkGate):
+            assert isinstance(fresh_period, BenchmarkCurve)
+            least, held = gate.min_fresh_period_rebalances, fresh_period.rebalances
+            checks.append(
+                Check("fresh_period", "rebalances", held, "at least", least, held >= least)
+            )
+            short = None if held >= least else checks[-1]
     missed = [f"{c.curve} {c.metric}" for c in checks if not c.passed]
     outcome: Outcome
     if not independent and not may_pass:
@@ -133,6 +143,14 @@ def evaluate(
         reason = (
             f"{standing}; the Fresh Period has not been run over twelve months"
             " (`tradeline backtest fresh` runs it)"
+        )
+    elif short is not None:
+        count = short.value
+        outcome = "cannot pass"
+        reason = (
+            f"{standing}; the Fresh Period holds {count} Rebalance{'' if count == 1 else 's'}"
+            f" after its Initial Buy, short of {short.threshold}, so it cannot carry the Gate"
+            " yet (`tradeline backtest fresh` extends it as data arrives)"
         )
     elif missed:
         outcome, reason = "fail", "missed: " + ", ".join(missed)
