@@ -1,0 +1,47 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://portal.amfiindia.com/spages/NAVAll.txt",
+    "body": null,
+    "body_encoding": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "content-type",
+        "text/plain"
+      ],
+      [
+        "content-encoding",
+        "gzip"
+      ],
+      [
+        "last-modified",
+        "Sun, 25 Oct 2026 06:51:02 GMT"
+      ],
+      [
+        "accept-ranges",
+        "bytes"
+      ],
+      [
+        "etag",
+        "W/\"04fe3324d64dd1:0\""
+      ],
+      [
+        "vary",
+        "Accept-Encoding"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "date",
+        "Sun, 25 Oct 2026 06:54:32 GMT"
+      ]
+    ],
+    "body": "U2NoZW1lIENvZGU7SVNJTiBEaXYgUGF5b3V0LyBJU0lOIEdyb3d0aDtJU0lOIERpdiBSZWludmVzdG1lbnQ7U2NoZW1lIE5hbWU7UGxhbjtPcHRpb247TmV0IEFzc2V0IFZhbHVlO0RhdGUNCiANCk9wZW4gRW5kZWQgU2NoZW1lcyhDaGlsZHJlbuKAmXMgRnVuZCAtIENoaWxkcmVucycgRnVuZCkNCiANCkF4aXMgTXV0dWFsIEZ1bmQNCiANCg0KTW90aWxhbCBPc3dhbCBNdXR1YWwgRnVuZA0KDQoxNDc2MjU7SU5GMjQ3TDAxOTU3Oy07TW90aWxhbCBPc3dhbCBOaWZ0eSA1MDAgSW5kZXggRnVuZDtEaXJlY3QgUGxhbjtHcm93dGg7MjUuMDY3NzsyMy1PY3QtMjAyNg0KMTQ3NjI2O0lORjI0N0wwMTk0MDstO01vdGlsYWwgT3N3YWwgTmlmdHkgNTAwIEluZGV4IEZ1bmQ7UmVndWxhciBQbGFuO0dyb3d0aDsyMy44NzgyOzIzLU9jdC0yMDI2DQoNCklDSUNJIFBydWRlbnRpYWwgTXV0dWFsIEZ1bmQNCg0KMTQxNTk2O0lORjEwOUtDMTlVNTstO0lDSUNJIFBydWRlbnRpYWwgTmlmdHkgMTAwIExvdyBWb2xhdGlsaXR5IDMwIEVURjs7OzIwLjQ3NDk7MjMtT2N0LTIwMjYNCg==",
+    "body_encoding": "base64"
+  }
+}

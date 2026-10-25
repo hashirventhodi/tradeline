@@ -41,3 +41,23 @@ in_force_from,charge,rate,citation
 # NSE rolled back its 2023 IPFT contribution and revised transaction charges from
 # 2026-03-01; Zerodha's charges page lists 0.00307% (its calculator: 0.00297% + 0.0001% IPFT).
 2026-03-01,exchange,0.0000307,NSE/FA/73061; zerodha.com/charges
+#
+# Fund units (the Benchmark's, ADR 0015 amendment): bought and redeemed at NAV
+# with the fund house, so none of the exchange's charges above apply. Their
+# rows start on 2020-08-07, the first date every one of them can be cited for
+# (the Benchmark's exit load before then, 1% within three months of allotment
+# at its launch, is not recorded); a fund trade before it is refused.
+#
+#   fund_stamp_duty      a fraction of the amount invested, on a purchase
+#   fund_stt             a fraction of the redemption value, paid by the seller
+#   fund_exit_load       a fraction of the redemption value, the Benchmark scheme's
+#   fund_exit_load_days  a whole number of days: units redeemed on or before this
+#                        many days from allotment pay fund_exit_load
+#
+# Indian Stamp Act 1899 as amended by Finance Act 2019, in force from 2020-07-01: 0.005% on the issue of mutual fund units.
+2020-08-07,fund_stamp_duty,0.00005,Indian Stamp Act 1899 Schedule I as amended by Finance Act 2019 (0.005% on issue of units from 2020-07-01); Department of Revenue notification; morningstar.in/posts/58771
+# Finance (No. 2) Act 2004 s. 98 as amended by Finance Act 2013, from 2013-06-01: 0.001% on the sale of units of an equity-oriented fund to the fund, payable by the seller.
+2020-08-07,fund_stt,0.00001,Finance (No. 2) Act 2004 s. 98 as amended by Finance Act 2013 (0.001% on redemption of equity-oriented fund units)
+# Motilal Oswal Nifty 500 Index Fund (AMFI 147625): 1% if redeemed on or before 15 days from allotment, nil after, from 2020-08-07 (read 2026-10-25; platforms list it unchanged).
+2020-08-07,fund_exit_load,0.01,Motilal Oswal MF exit load change effective 2020-08-07 (morningstar.in/posts/59443); mstock.com scheme page (read 2026-10-25)
+2020-08-07,fund_exit_load_days,15,Motilal Oswal MF exit load change effective 2020-08-07 (morningstar.in/posts/59443); mstock.com scheme page (read 2026-10-25)

@@ -770,3 +770,30 @@ def test_rebuild_instruments_with_a_manual_link_lacking_a_citation_fails_naming_
     failure = json_lines(capsys.readouterr().out)[-1]
     assert failure["level"] == "ERROR"
     assert "manual_links.csv line 2: RUCHI to PATANJALI" in str(failure["msg"])
+
+
+BENCHMARK_FIXTURES = REPO_ROOT / "tests" / "fixtures" / "ingest_benchmark"
+
+
+def test_ingest_benchmark_plays_the_configured_funds_and_factor_fund_and_logs_the_run(
+    fresh_database_url: str,
+    repo_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", fresh_database_url)
+
+    code = main(
+        ["ingest", "benchmark", "--to", "2026-10-23", "--play-fixtures", str(BENCHMARK_FIXTURES)]
+    )
+
+    assert code == 0
+    lines = json_lines(capsys.readouterr().out)
+    (finished,) = [line for line in lines if line["msg"] == "ingest run finished"]
+    assert (finished["source"], finished["range_start"], finished["range_end"]) == (
+        "amfi",
+        "2019-09-11",
+        "2026-10-23",
+    )
+    assert lines[-1]["msg"] == "ingest benchmark finished"
+    assert (lines[-1]["rows_seen"], lines[-1]["rows_written"]) == (202, 202)

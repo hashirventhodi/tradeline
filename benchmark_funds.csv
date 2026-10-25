@@ -1,0 +1,19 @@
+# The Benchmark's fund, dated (ADR 0015 amendment, #94).
+#
+# Every row is reviewed like code. The first row names the scheme the
+# Benchmark starts with, event `chosen`. A later row changes the scheme from
+# its date, and only on an event in the fund itself: `merger`, `closure` or
+# `index_change`, citing the fund house's or SEBI's notice. A cheaper or
+# better fund is not an event. Nothing else names the Benchmark's scheme:
+# `tradeline.benchmark` reads this file, at `benchmark.funds` in tradeline.toml.
+#
+# `scheme_code` is AMFI's. `tradeline ingest benchmark` fails unless AMFI's
+# scheme master names every scheme here with both "Direct" and "Growth".
+#
+# 147625 is the Direct Plan, Growth option, of the Motilal Oswal Nifty 500
+# Index Fund: AMFI's NAVAll.txt of 2026-10-23 lists it as "Motilal Oswal Nifty
+# 500 Index Fund;Direct Plan;Growth" with the one ISIN INF247L01957 (147626 is
+# the Regular Plan), and its NAV history starts 2019-09-11 (docs/research.md,
+# "Benchmark, index method and demerger facts").
+in_force_from,scheme_code,event,citation
+2019-09-11,147625,chosen,ADR 0015 amendment of 2026-10-25; AMFI NAVAll.txt (portal.amfiindia.com/spages/NAVAll.txt) read 2026-10-25
