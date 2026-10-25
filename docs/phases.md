@@ -115,7 +115,7 @@ The rule, frozen before any backtest:
 - **Ranked:** by the sample standard deviation of those log returns, lowest first, ties by Symbol.
 - **Held:** 30 names at equal weight. At a Rebalance a held name leaves if it ranks below 60th (NSE's buffer of twice the count, kept literally although our eligible set is larger than NSE's, as the Protocol notes), has become ineligible, or has left the Universe; empty slots are filled with the best-ranked names not held, in rank order, until 30 are held. A name that leaves the Universe between Rebalances is held until the next one.
 - **Rebalances:** decided after the close of the last trading day of March and of September. Leavers are sold at the next open; entrants are bought the trading day after, splitting the cash then held, each at most 15 percent of Equity. Continuing names are never trimmed. An account starts with an Initial Buy on its first trading day, which is not a Rebalance.
-- **Grid:** one cell. The Stitched Curve is one continuous backtest over 2019-10 to 2024-09 (10 Rebalances); the Holdout 2024-10-01 to 2026-09-30 holds 4.
+- **Grid:** one cell. The Stitched Curve is one continuous backtest over 2019-10 to 2024-09; the Holdout 2024-10-01 to 2026-09-30. Ten Rebalances are decided on the Stitched Curve and four on the Holdout, but the Gate counts a Rebalance only when it is decided before its curve's last day, so that its sales fall inside the curve (#98): the one decided on each curve's last day (2024-09-30, 2026-09-30) would trade only after the curve ends, so 9 count on the Stitched Curve against the minimum of 8, and 3 on the Holdout, reported only.
 
 Accept when:
 

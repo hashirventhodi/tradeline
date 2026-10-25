@@ -31,7 +31,7 @@ def test_the_gate_passes_when_every_threshold_holds_on_both_curves_however_few_h
     )
 
     assert found.outcome == "pass"
-    assert found.holdout_trades == 3
+    assert found.holdout_count == 3
     assert all(c.passed for c in found.checks)
     assert [(c.curve, c.metric) for c in found.checks] == [
         ("stitched_curve", "sharpe"),

@@ -207,6 +207,8 @@ class Account:
     # Benchmark's, and every tax debit. Empty otherwise.
     liquidation: tuple[queries.LiquidationDay, ...] = ()
     tax_debits: tuple[queries.TaxDebit, ...] = ()
+    # Every Run of the account, an Initial Buy's decision included, in day order.
+    runs: tuple[queries.LedgerRun, ...] = ()
 
     def liquidation_json(
         self, tax: TaxTerms | None, benchmark: BenchmarkTerms | None, *, invested: Decimal
@@ -370,6 +372,7 @@ def read_account(conn: psycopg.Connection, backtest_id: uuid.UUID) -> Account:
         tuple(p for ranked in passes.values() for p in ranked.values()),
         liquidation=tuple(queries.liquidation_values(conn, **tags)),
         tax_debits=tuple(queries.tax_debits(conn, **tags)),
+        runs=tuple(runs),
     )
 
 

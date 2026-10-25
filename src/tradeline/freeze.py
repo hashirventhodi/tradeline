@@ -22,6 +22,7 @@ named in the refusal.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -30,7 +31,7 @@ from typing import Any
 import psycopg
 
 from tradeline import queries
-from tradeline.benchmark import BenchmarkFunds, BenchmarkTerms
+from tradeline.benchmark import BenchmarkFunds, BenchmarkTerms, UnitSplit
 from tradeline.costs import CostSchedule, Slippage
 from tradeline.dates import IST
 from tradeline.metrics import HaltLimits
@@ -110,6 +111,7 @@ def freeze_protocol(
     dividend_rate: Decimal = DEFAULT_DIVIDEND_RATE,
     benchmark_funds: BenchmarkFunds | None = None,
     factor_fund: int | None = None,
+    unit_splits: Sequence[UnitSplit] = (),
     costs_as_of_for_tests: date | None = None,
 ) -> FreezeResult:
     """Freeze the Protocol these state, with the data snapshot read now, at ``commit``, its
@@ -118,7 +120,8 @@ def freeze_protocol(
     When ``terms`` keep tax, the Protocol also states ``tax_schedule``'s rates as of the
     freeze with ``dividend_rate``. When they keep tax or ``halts`` has a Relative Drawdown
     Halt, it states the Benchmark: ``benchmark_funds``, ``factor_fund`` and ``schedule``'s
-    fund-unit rates as of the freeze. Otherwise none is read.
+    fund-unit rates as of the freeze, with the factor fund's ``unit_splits``. Otherwise
+    none is read.
 
     ``costs_as_of_for_tests`` replaces that day, so a test's hand-worked costs do not move
     with the day it runs; nothing else passes it.
@@ -158,7 +161,12 @@ def freeze_protocol(
         and factor_fund is not None
         and (terms.tax or halts.relative_drawdown is not None)
     ):
-        benchmark = BenchmarkTerms(benchmark_funds, factor_fund, schedule.fund_rates(costs_as_of))
+        benchmark = BenchmarkTerms(
+            benchmark_funds,
+            factor_fund,
+            schedule.fund_rates(costs_as_of),
+            tuple(s for s in unit_splits if s.scheme_code == factor_fund),
+        )
     protocol = Protocol(
         family=strategy.family,
         name=strategy.name,
@@ -193,6 +201,7 @@ def freeze_protocol(
         dividends=terms.dividends,
         tax=tax,
         benchmark=benchmark,
+        notes=terms.notes,
     )
     content = canonical(protocol.content())
     found = content_hash(protocol.content())

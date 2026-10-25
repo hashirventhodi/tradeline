@@ -7,6 +7,7 @@ import pytest
 from limits import LOWVOL, PULLBACK
 from tradeline.config import Config, ConfigError, UniverseRule, load_config
 from tradeline.metrics import HaltLimits
+from tradeline.protocol import BenchmarkGate, Gate
 
 
 def test_loads_settings_from_the_toml_file(tmp_path: Path) -> None:
@@ -269,7 +270,7 @@ def test_the_committed_config_states_the_specs_protocol_terms() -> None:
     }
     assert terms.layout.holdout_start == date(2024, 10, 1)
     assert (terms.layout.windows, terms.layout.in_sample_months) == (5, 24)
-    assert terms.gate.sharpe_above == Decimal("1.0")
+    assert isinstance(terms.gate, Gate) and terms.gate.sharpe_above == Decimal("1.0")
     assert terms.risk_free_rate == Decimal("0.065")
 
 
@@ -344,3 +345,17 @@ def test_the_committed_config_states_lowvols_limits_and_one_cell_protocol() -> N
     assert terms.layout.holdout_start == date(2024, 10, 1)
     assert (terms.layout.holdout_months, terms.layout.windows) == (24, 5)
     assert terms.layout.out_of_sample_months == 12
+    # The Benchmark Gate (ADR 0015 amendment), with tax, dividends and demergers on.
+    assert terms.gate == BenchmarkGate(Decimal(0), Decimal("0.02"), 8)
+    assert terms.tax and terms.dividends and terms.demergers
+    assert "buffer of 60" in terms.notes["buffer_scale"]
+
+
+def test_lowvol_without_tax_is_refused_since_its_gate_compares_liquidation_values(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text("[lowvol.protocol]\ntax = false\n")
+
+    with pytest.raises(ConfigError, match="lowvol.protocol: .*tax"):
+        load_config(path)

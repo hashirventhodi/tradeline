@@ -21,7 +21,7 @@ from typing import Any, ClassVar, Literal, get_args, get_origin, get_type_hints
 from tradeline.costs import Slippage
 from tradeline.dates import parse_month
 from tradeline.metrics import HaltLimits
-from tradeline.protocol import Gate, Layout, Terms
+from tradeline.protocol import BenchmarkGate, Gate, Layout, Terms
 from tradeline.risk import Limits
 
 CONFIG_PATH_VAR = "TRADELINE_CONFIG"
@@ -32,6 +32,15 @@ DEFAULT_CONFIG_PATH = Path("tradeline.toml")
 
 class ConfigError(ValueError):
     pass
+
+
+# ``lowvol_v1``'s buffer against NSE's (``tradeline.strategy.lowvol``), noted in its Protocol.
+BUFFER_SCALE_NOTE = (
+    "the buffer of 60 is NSE's NIFTY100 Low Volatility 30 rule of twice the count, kept"
+    " literally; NSE applies it to about 100 eligible names, and lowvol_v1's eligible set"
+    " (about 150 to 200 of the Universe) is larger, so a held name stays among a smaller"
+    " share of the eligible than in the index"
+)
 
 
 RankBy = Literal["symbol", "instrument"]
@@ -175,6 +184,9 @@ class Config:
         # AMFI's code of the fund for the same factor, reported beside the Benchmark and
         # never gated: the ICICI Prudential Nifty 100 Low Vol 30 ETF.
         factor_fund: int = 141596
+        # The checked-in file of its unit splits, which AMFI's NAVs are not adjusted for
+        # (``tradeline.benchmark.load_unit_splits``), relative to the working directory.
+        unit_splits: str = "fund_unit_splits.csv"
 
     @dataclass(frozen=True)
     class Tax:
@@ -304,15 +316,29 @@ class Config:
         band: float = 0.01
         # 253 trading days of bars before the Initial Buy's decision day, and a margin.
         warm_up_trading_days: int = 260
-        # ``pullback_v1``'s Backtest Gate, until the Gate against the Benchmark (#98).
-        sharpe_above: float = 1.0
-        drawdown_below: float = 0.15
-        profit_factor_above: float = 1.3
-        min_stitched_trades: int = 150
-        # The tax ledger, and the Liquidation Value against the Benchmark (ADR 0015 amendment).
+        # The Backtest Gate against the Benchmark (ADR 0015 amendment): on both curves the
+        # annualised excess of Liquidation Value over the Benchmark's above this, and its
+        # drawdown at most the Benchmark's plus the margin; this many Rebalances on the
+        # Stitched Curve at least.
+        excess_above: float = 0.0
+        drawdown_margin: float = 0.02
+        min_stitched_rebalances: int = 8
+        # The tax ledger, and the Liquidation Value against the Benchmark (ADR 0015
+        # amendment); the Benchmark Gate needs it.
         tax: bool = True
+        # Dividends credited in cash on the Ex-Date, and the demerger table's Demerger
+        # Credits (ADR 0020): the Benchmark is a Total Return comparison.
+        dividends: bool = True
+        demergers: bool = True
+        # What the Protocol notes of the rule beyond its numbers (``Protocol.notes``).
+        buffer_scale_note: str = BUFFER_SCALE_NOTE
 
         def __post_init__(self) -> None:
+            if not self.tax:
+                raise ConfigError(
+                    "lowvol.protocol: the Benchmark Gate compares Liquidation Values after"
+                    " tax, so tax = false is refused"
+                )
             try:
                 self.terms()
             except (ValueError, InvalidOperation) as error:
@@ -332,14 +358,16 @@ class Config:
                 band=Decimal(str(self.band)),
                 starting_equity=Decimal(self.starting_equity),
                 risk_free_rate=Decimal(str(self.risk_free_rate)),
-                gate=Gate(
-                    sharpe_above=Decimal(str(self.sharpe_above)),
-                    drawdown_below=Decimal(str(self.drawdown_below)),
-                    profit_factor_above=Decimal(str(self.profit_factor_above)),
-                    min_stitched_trades=self.min_stitched_trades,
+                gate=BenchmarkGate(
+                    excess_above=Decimal(str(self.excess_above)),
+                    drawdown_margin=Decimal(str(self.drawdown_margin)),
+                    min_stitched_rebalances=self.min_stitched_rebalances,
                 ),
                 warm_up_trading_days=self.warm_up_trading_days,
                 tax=self.tax,
+                dividends=self.dividends,
+                demergers=self.demergers,
+                notes={"buffer_scale": self.buffer_scale_note},
             )
 
     @dataclass(frozen=True)

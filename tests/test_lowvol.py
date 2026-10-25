@@ -47,6 +47,7 @@ from synthetic_eod import (
     compute_universe_months,
     config_text,
     load_benchmark,
+    load_demerger_table,
     load_index_history,
     load_market,
     lowvol_benchmark_navs,
@@ -82,8 +83,7 @@ def _config(directory: Path) -> Path:
         f"windows = {layout.windows}\n"
         f"out_of_sample_months = {layout.out_of_sample_months}\n"
         f"in_sample_months = {layout.in_sample_months}\n"
-        # No tax ledger here: tests/test_account_tax.py keeps one.
-        "tax = false\n"
+        f'[tax]\nschedule = "{REPO_ROOT / "tax_rates.csv"}"\n'
         f'[benchmark]\nfunds = "{REPO_ROOT / "benchmark_funds.csv"}"\n'
     )
     return config
@@ -113,6 +113,7 @@ def stitched(
         load_market(conn, fixtures, market)
         compute_universe_months(conn, market, *LOWVOL_RANGE)
         load_benchmark(conn, navs, end=LOWVOL_RANGE[1])
+        load_demerger_table(conn)
         load_index_history(conn)
     config = _config(directory)
     _cli(database_url, config, "protocol", "freeze", "--strategy", "lowvol_v1")
@@ -299,22 +300,6 @@ def test_walk_forward_selects_nothing_and_the_stitched_curve_is_one_backtest(
     # The Initial Buy's decision is the day before; the curve starts on the first day.
     assert (curve["from"], curve["to"]) == (FIRST_DAY.isoformat(), LAST_DAY.isoformat())
     assert curve["trading_days"] == len(list(CALENDAR.trading_days(FIRST_DAY, LAST_DAY)))
-
-
-def test_with_tax_off_the_account_keeps_no_tax_ledger_and_the_report_no_liquidation(
-    stitched: tuple[str, queries.FrozenProtocol, dict[str, Any], uuid.UUID],
-) -> None:
-    database_url, frozen, report, backtest_id = stitched
-    tags: dict[str, Any] = {"mode": "backtest", "backtest_id": backtest_id}
-    with app_connection(database_url) as conn:
-        debits = queries.tax_debits(conn, **tags)
-        values = queries.liquidation_values(conn, **tags)
-
-    # The Benchmark is still stated, for the Relative Drawdown Halt alone.
-    assert frozen.protocol.tax is None
-    assert frozen.protocol.benchmark is not None
-    assert (debits, values) == ([], [])
-    assert "liquidation" not in report["stitched_curve"]
 
 
 def test_the_protocol_freezes_the_relative_drawdown_halt_from_the_recorded_index_history(

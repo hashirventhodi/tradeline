@@ -65,11 +65,13 @@ from tradeline.benchmark import load_benchmark_funds
 from tradeline.config import UniverseRule
 from tradeline.costs import CostModel, Slippage, load_cost_schedule
 from tradeline.dates import IST, calendar_days, month_of, next_month
+from tradeline.demergers import load_demergers
 from tradeline.freeze import FreezeResult
 from tradeline.freeze import freeze_protocol as freeze
 from tradeline.holdout_checks import TaxTestOutcome, check_holdout
 from tradeline.ingest.benchmark import ingest_benchmark
 from tradeline.ingest.corporate_actions import ingest_corporate_actions, year_chunks
+from tradeline.ingest.demergers import ingest_demergers
 from tradeline.ingest.eod import ingest_eod
 from tradeline.ingest.index_history import ingest_index_history
 from tradeline.metrics import HaltLimits
@@ -1147,3 +1149,10 @@ def pass_holdout_checks(conn: psycopg.Connection, protocol: str) -> None:
 def load_index_history(conn: psycopg.Connection) -> None:
     """Load the recorded index history through ``ingest index-history``."""
     ingest_index_history(conn, PlaybackTransport(INDEX_HISTORY_FIXTURES), sleep=lambda _s: None)
+
+
+def load_demerger_table(conn: psycopg.Connection) -> None:
+    """Store the checked-in demerger table through ``ingest_demergers``: a Protocol crediting
+    demergers (``lowvol_v1``'s) freezes its hash, and a synthetic Market holds none of its
+    parents."""
+    ingest_demergers(conn, load_demergers(REPO_ROOT / "demergers.csv"))

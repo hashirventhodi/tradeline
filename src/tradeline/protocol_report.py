@@ -23,10 +23,19 @@ Window's selection and out-of-sample result, the Stitched Curve's and the
 Holdout's metrics, their Gapped Stops with the realised loss, where the Limits
 bound (Candidates beyond the Passes, the Participation Cap, Unclassified), the c
 sensitivity, every Universe month's mode, the family lineage and the
-contract-note status. It holds no backtest id and no timing, so two runs of one
-Protocol over one data read the same. The Markdown, for posting on the Phase 2
-issue, renders it in that order and adds the runtime: the time between the
-Ledger's first and last write for each stage, which includes any pause.
+contract-note status. Under a portfolio family's Benchmark Gate (ADR 0015
+amendment of 2026-10-25) the Gate reads each curve's Liquidation Values against
+the Benchmark's and its Rebalances, the information ratio is stated in the Gate
+beside the outcome, and each curve adds what ``tradeline.portfolio_report``
+reads (against the Benchmark after and before tax, the factor fund, the sector
+weights and cash at every Rebalance, the largest name, the dividends, Demerger
+Credits and rights issues), with the report's notes (the surcharge, how
+Rebalances are counted, the Protocol's own notes, a Not Independent run's
+reason). ``pullback_v1``'s report is unchanged. It holds no backtest id and no
+timing, so two runs of one Protocol over one data read the same. The Markdown,
+for posting on the Phase 2 issue, renders it in that order and adds the runtime: the time
+between the Ledger's first and last write for each stage, which includes any
+pause.
 """
 
 from __future__ import annotations
@@ -46,10 +55,18 @@ import psycopg
 from tradeline import queries
 from tradeline.dates import IST
 from tradeline.freeze import verify_snapshot
-from tradeline.gate import CurveMetrics, GateOutcome, evaluate
+from tradeline.gate import AnyCurve, BenchmarkCurve, CurveMetrics, GateOutcome, evaluate
 from tradeline.holdout import FreshPeriod, holdout_run, rerun_holdout, standing
 from tradeline.metrics import HaltDay, RelativeDrawdownDay
 from tradeline.paper_broker import FILL_MODEL, FillModel
+from tradeline.portfolio_report import (
+    against_benchmark,
+    benchmark_gate_curve,
+    factor_fund_json,
+    notes_json,
+    portfolio_json,
+)
+from tradeline.protocol import BenchmarkGate, Protocol, fixed_decimal, gate_content
 from tradeline.report import (
     FRACTION,
     RATIO,
@@ -100,27 +117,30 @@ class ProtocolReport:
     stages: tuple[Stage, ...]
     # Each curve's Relative Drawdown Halt days; None when the Protocol has no such Halt.
     relative_drawdown_days: Mapping[str, tuple[RelativeDrawdownDay, ...]] | None = None
+    # Under a Benchmark Gate: what each curve adds (``tradeline.portfolio_report``), by
+    # curve and section, and the report's notes. None under ``pullback_v1``'s Gate.
+    portfolio: Mapping[str, Mapping[str, Any]] | None = None
+    notes: Mapping[str, Any] | None = None
 
     def _accounts(self) -> dict[str, Account]:
         return {"stitched_curve": self.stitched, "holdout": self.holdout}
 
-    def _halts(self) -> dict[str, list[HaltDay]]:
-        halts = self.frozen.protocol.halts
-        return {curve: account.halt_days(halts) for curve, account in self._accounts().items()}
-
-    def as_json(self) -> dict[str, Any]:
-        frozen, terms, evaluation = self.frozen, self.frozen.protocol, self.evaluation
-        rate = terms.risk_free_rate
-        accounts = self._accounts()
-        halts = self._halts()
-        return {
-            "protocol": frozen.hash,
-            "strategy": {
-                "family": terms.family,
-                "name": terms.name,
-                "code_revision": terms.code_revision,
-            },
-            "gate": {
+    def _gate_json(self) -> dict[str, Any]:
+        evaluation = self.evaluation
+        standing = {
+            name: evaluation.standing[name]
+            for name in (
+                "independent",
+                "consumes",
+                "corrected_since",
+                "may_pass",
+                "reason",
+                "fresh_period",
+            )
+        }
+        checks = [_check_json(c) for c in evaluation.checks]
+        if self.portfolio is None:
+            return {
                 "outcome": evaluation.outcome,
                 "reason": evaluation.reason,
                 "thresholds": {
@@ -132,21 +152,58 @@ class ProtocolReport:
                         "min_stitched_trades",
                     )
                 },
-                "checks": [_check_json(c) for c in evaluation.checks],
+                "checks": checks,
                 "holdout_trades": evaluation.inputs["holdout"]["trades"],
                 "fresh_period_trades": evaluation.inputs.get("fresh_period", {}).get("trades"),
-                "standing": {
-                    name: evaluation.standing[name]
-                    for name in (
-                        "independent",
-                        "consumes",
-                        "corrected_since",
-                        "may_pass",
-                        "reason",
-                        "fresh_period",
-                    )
-                },
+                "standing": standing,
+            }
+        inputs = evaluation.inputs
+        return {
+            "outcome": evaluation.outcome,
+            "reason": evaluation.reason,
+            "information_ratio": {
+                curve: None
+                if inputs[curve]["information_ratio"] is None
+                else rounded(Decimal(inputs[curve]["information_ratio"]), RATIO)
+                # In the curves' order: the recorded inputs come back with their keys sorted.
+                for curve in (*CURVES, "fresh_period")
+                if curve in inputs
             },
+            "thresholds": {
+                name: evaluation.thresholds[name]
+                for name in (
+                    "excess_above",
+                    "drawdown_margin",
+                    "min_stitched_rebalances",
+                    "rebalances_counted",
+                )
+            },
+            "checks": checks,
+            "holdout_rebalances": inputs["holdout"]["rebalances"],
+            "fresh_period_rebalances": inputs.get("fresh_period", {}).get("rebalances"),
+            "standing": standing,
+        }
+
+    def _curve_json(self, curve: str) -> dict[str, Any]:
+        return {} if self.portfolio is None else dict(self.portfolio[curve])
+
+    def _halts(self) -> dict[str, list[HaltDay]]:
+        halts = self.frozen.protocol.halts
+        return {curve: account.halt_days(halts) for curve, account in self._accounts().items()}
+
+    def as_json(self) -> dict[str, Any]:
+        frozen, terms, evaluation = self.frozen, self.frozen.protocol, self.evaluation
+        rate = terms.risk_free_rate
+        accounts = self._accounts()
+        halts = self._halts()
+        found = {
+            "protocol": frozen.hash,
+            "strategy": {
+                "family": terms.family,
+                "name": terms.name,
+                "code_revision": terms.code_revision,
+            },
+            "gate": self._gate_json(),
             "halt_would_have_fired": self._halts_json(halts),
             "windows": [
                 window_json(number, window, found, terms)
@@ -159,6 +216,7 @@ class ProtocolReport:
                 "metrics": self.stitched.scores(risk_free_rate=rate).as_json(),
                 "boundary_exits": sum(t.exit_reason == "boundary" for t in self.stitched.closed),
                 **liquidation(self.stitched, terms),
+                **self._curve_json("stitched_curve"),
             },
             "holdout": {
                 **_span_json(self.holdout),
@@ -166,6 +224,7 @@ class ProtocolReport:
                 "metrics": self.holdout.scores(risk_free_rate=rate).as_json(),
                 "open_positions": [p.as_json() for p in self.holdout.open],
                 **liquidation(self.holdout, terms),
+                **self._curve_json("holdout"),
             },
             "gapped_stops": {c: a.gapped_stops_json() for c, a in accounts.items()},
             "limits": {c: a.limits_json() for c, a in accounts.items()},
@@ -191,6 +250,9 @@ class ProtocolReport:
             "contract_notes": _contract_notes_json(evaluation.contract_notes),
             "closed_positions": {c: [t.as_json() for t in a.closed] for c, a in accounts.items()},
         }
+        if self.notes is not None:
+            found["notes"] = dict(self.notes)
+        return found
 
     def _halts_json(self, halts: dict[str, list[HaltDay]]) -> dict[str, Any]:
         """The days a Halt would have fired on each curve: the Relative Drawdown Halt's
@@ -219,9 +281,12 @@ class ProtocolReport:
         return _Markdown(self).text()
 
 
-def read_protocol_report(conn: psycopg.Connection, protocol: str) -> ProtocolReport:
+def read_protocol_report(
+    conn: psycopg.Connection, protocol: str, *, calendar: TradingCalendar | None = None
+) -> ProtocolReport:
     """The report on the Protocol ``protocol`` (its hash, or 12 or more characters of it)
-    as the Ledger holds it, its Gate as last evaluated."""
+    as the Ledger holds it, its Gate as last evaluated. A Benchmark Gate's report reads the
+    Trading Calendar (``calendar``) for its rights issues."""
     frozen = _frozen(conn, protocol)
     short = frozen.hash[:12]
     evaluations = queries.gate_evaluations(conn, protocol=frozen.hash)
@@ -259,6 +324,21 @@ def read_protocol_report(conn: psycopg.Connection, protocol: str) -> ProtocolRep
         for curve, account in (("stitched_curve", stitched), ("holdout", holdout)):
             days = relative_drawdown_days_of(conn, frozen.protocol, account)
             relative[curve] = () if days is None else tuple(days)
+    portfolio: dict[str, dict[str, Any]] | None = None
+    notes = None
+    if isinstance(frozen.protocol.gate, BenchmarkGate):
+        if calendar is None:
+            raise ValueError("a Benchmark Gate's report reads the Trading Calendar; give it")
+        portfolio = {
+            "stitched_curve": _portfolio(
+                conn, frozen.protocol, stitched, walked.backtest_id, calendar
+            ),
+            "holdout": _portfolio(conn, frozen.protocol, holdout, attempt.backtest_id, calendar),
+        }
+        notes = notes_json(
+            frozen.protocol,
+            not_independent=None if attempt.independent else str(evaluation.standing["reason"]),
+        )
     return ProtocolReport(
         frozen=frozen,
         windows=windows,
@@ -270,7 +350,25 @@ def read_protocol_report(conn: psycopg.Connection, protocol: str) -> ProtocolRep
         lineage=queries.lineage(conn, frozen.hash),
         stages=tuple(stages),
         relative_drawdown_days=relative,
+        portfolio=portfolio,
+        notes=notes,
     )
+
+
+def _portfolio(
+    conn: psycopg.Connection,
+    terms: Protocol,
+    account: Account,
+    backtest_id: uuid.UUID,
+    calendar: TradingCalendar,
+) -> dict[str, Any]:
+    """What one curve adds under a Benchmark Gate."""
+    tags: queries.Account = {"mode": "backtest", "backtest_id": backtest_id, "dry_run": False}
+    return {
+        "against_benchmark": against_benchmark(account, terms),
+        "factor_fund": factor_fund_json(conn, account, terms),
+        "portfolio": portfolio_json(conn, account, terms, tags, calendar=calendar),
+    }
 
 
 @dataclass(frozen=True)
@@ -355,7 +453,10 @@ def report_protocol(
         )
     outcome = _evaluate(conn, frozen, walked, attempt, calendar, contract_notes)
     result = ProtocolReportResult(
-        read_protocol_report(conn, frozen.hash), outcome, len(pending), time.monotonic() - began
+        read_protocol_report(conn, frozen.hash, calendar=calendar),
+        outcome,
+        len(pending),
+        time.monotonic() - began,
     )
     log.info("protocol report finished", extra=result.summary())
     return result
@@ -372,9 +473,9 @@ def _evaluate(
     """The Backtest Gate on the two curves, recorded with what it read."""
     terms = frozen.protocol
     assert attempt.backtest_id is not None
-    curves = {
-        "stitched_curve": _metrics(read_account(conn, walked.backtest_id), terms.risk_free_rate),
-        "holdout": _metrics(read_account(conn, attempt.backtest_id), terms.risk_free_rate),
+    curves: dict[str, AnyCurve] = {
+        "stitched_curve": _metrics(read_account(conn, walked.backtest_id), terms),
+        "holdout": _metrics(read_account(conn, attempt.backtest_id), terms),
     }
     found = standing(conn, frozen.hash, calendar=calendar)
     period = found.fresh_period
@@ -409,6 +510,25 @@ def _evaluate(
         },
     }
     gate = terms.gate
+    thresholds = (
+        {
+            name: value if isinstance(value, int | str) else fixed_decimal(value)
+            for name, value in gate_content(gate).items()
+        }
+        if isinstance(gate, BenchmarkGate)
+        else {
+            "sharpe_above": str(gate.sharpe_above),
+            "drawdown_below": str(gate.drawdown_below),
+            "profit_factor_above": str(gate.profit_factor_above),
+            "min_stitched_trades": gate.min_stitched_trades,
+        }
+    )
+    benchmark_gate = isinstance(gate, BenchmarkGate)
+
+    def written(value: Decimal | int) -> str:
+        """A check's number as recorded: exact and in one form under a Benchmark Gate."""
+        return fixed_decimal(value) if benchmark_gate and isinstance(value, Decimal) else str(value)
+
     with conn.transaction():
         conn.execute(
             "INSERT INTO gate_evaluations (id, gate, protocol, stitched_backtest_id,"
@@ -419,14 +539,7 @@ def _evaluate(
                 frozen.hash,
                 walked.backtest_id,
                 attempt.id,
-                json.dumps(
-                    {
-                        "sharpe_above": str(gate.sharpe_above),
-                        "drawdown_below": str(gate.drawdown_below),
-                        "profit_factor_above": str(gate.profit_factor_above),
-                        "min_stitched_trades": gate.min_stitched_trades,
-                    }
-                ),
+                json.dumps(thresholds),
                 json.dumps({curve: _metrics_json(m) for curve, m in curves.items()}),
                 json.dumps(standing_json),
                 json.dumps(
@@ -434,9 +547,9 @@ def _evaluate(
                         {
                             "curve": c.curve,
                             "metric": c.metric,
-                            "value": None if c.value is None else str(c.value),
+                            "value": None if c.value is None else written(c.value),
                             "rule": c.rule,
-                            "threshold": str(c.threshold),
+                            "threshold": written(c.threshold),
                             "passed": c.passed,
                         }
                         for c in outcome.checks
@@ -456,7 +569,7 @@ def _fresh_period_metrics(
     frozen: queries.FrozenProtocol,
     period: FreshPeriod | None,
     calendar: TradingCalendar,
-) -> CurveMetrics | None:
+) -> AnyCurve | None:
     """The version's Fresh Period account scored, once it has run its first twelve months;
     None before (or for an independent run, which has none)."""
     run = queries.fresh_period_run(conn, frozen.hash)
@@ -466,15 +579,27 @@ def _fresh_period_metrics(
     runs = queries.runs(conn, mode="backtest", backtest_id=run.backtest_id)
     if not due or not runs or runs[-1].as_of < due[-1]:
         return None
-    return _metrics(read_account(conn, run.backtest_id), frozen.protocol.risk_free_rate)
+    return _metrics(read_account(conn, run.backtest_id), frozen.protocol)
 
 
-def _metrics(account: Account, rate: Decimal) -> CurveMetrics:
-    scores = account.scores(risk_free_rate=rate)
+def _metrics(account: Account, terms: Protocol) -> AnyCurve:
+    """What the Protocol's Gate reads of the account."""
+    if isinstance(terms.gate, BenchmarkGate):
+        return benchmark_gate_curve(account, terms)
+    scores = account.scores(risk_free_rate=terms.risk_free_rate)
     return CurveMetrics(scores.trades, scores.sharpe, scores.max_drawdown, scores.profit_factor)
 
 
-def _metrics_json(metrics: CurveMetrics) -> dict[str, Any]:
+def _metrics_json(metrics: AnyCurve) -> dict[str, Any]:
+    if isinstance(metrics, BenchmarkCurve):
+        ratio = metrics.information_ratio
+        return {
+            "rebalances": metrics.rebalances,
+            "excess": fixed_decimal(metrics.excess),
+            "drawdown": fixed_decimal(metrics.drawdown),
+            "benchmark_drawdown": fixed_decimal(metrics.benchmark_drawdown),
+            "information_ratio": None if ratio is None else fixed_decimal(ratio),
+        }
     return {
         "trades": metrics.trades,
         "sharpe": None if metrics.sharpe is None else str(metrics.sharpe),
@@ -550,19 +675,25 @@ def _span_json(account: Account) -> dict[str, Any]:
 
 def _check_json(check: dict[str, Any]) -> dict[str, Any]:
     """A recorded check with its value rounded as the report rounds that metric."""
-    value = check["value"]
-    if value is not None and check["metric"] != "trades":
-        places = FRACTION if check["metric"] == "max_drawdown" else RATIO
+    value, metric = check["value"], check["metric"]
+    counted = metric in ("trades", "rebalances")
+    if value is not None and not counted:
+        places = FRACTION if metric in ("max_drawdown", "drawdown", "annualised_excess") else RATIO
         value = rounded(Decimal(value), places)
     elif value is not None:
         value = int(value)
     threshold = check["threshold"]
+    if counted:
+        threshold = int(threshold)
+    elif metric == "drawdown":
+        # The Benchmark's drawdown plus the margin: a measured number, rounded as one.
+        threshold = rounded(Decimal(threshold), FRACTION)
     return {
         "curve": check["curve"],
-        "metric": check["metric"],
+        "metric": metric,
         "value": value,
         "rule": check["rule"],
-        "threshold": int(threshold) if check["metric"] == "trades" else threshold,
+        "threshold": threshold,
         "passed": check["passed"],
     }
 
@@ -635,6 +766,11 @@ class _Markdown:
         self._halts()
         self._windows()
         self._metrics()
+        if report.portfolio is not None:
+            self._against_benchmark()
+            self._factor_fund()
+            self._rebalances()
+            self._credits()
         self._gapped()
         self._limits()
         self._sensitivity()
@@ -643,6 +779,8 @@ class _Markdown:
         self._section("Contract notes")
         notes = data["contract_notes"]
         self._line(f"**{notes['status']}**: {notes['says']}.")
+        if "notes" in data:
+            self._notes()
         self._section("Runtime")
         self._line(
             "Each stage from its first write to the Ledger to its last, so a stage that was"
@@ -661,6 +799,9 @@ class _Markdown:
         gate = self._json["gate"]
         self._section(f"Backtest Gate: {gate['outcome'].upper()}")
         self._line(gate["reason"][:1].upper() + gate["reason"][1:] + ".")
+        if "information_ratio" in gate:
+            self._benchmark_gate(gate)
+            return
         thresholds = gate["thresholds"]
         self._line(
             f"Thresholds (the Protocol's): Sharpe above {thresholds['sharpe_above']}, max"
@@ -689,8 +830,217 @@ class _Markdown:
         )
         self._line(f"Holdout run: {gate['standing']['reason']}.")
 
+    def _benchmark_gate(self, gate: dict[str, Any]) -> None:
+        ratios = ", ".join(
+            f"{CURVE_NAMES.get(c, 'Fresh Period')} {_cell(r)}"
+            for c, r in gate["information_ratio"].items()
+        )
+        self._line(
+            f"Information ratio (Liquidation Value against the Benchmark's, reported and never"
+            f" gated): {ratios}."
+        )
+        thresholds = gate["thresholds"]
+        self._line(
+            "Thresholds (the Protocol's, against the Benchmark after all costs and tax):"
+            f" annualised excess of Liquidation Value over the Benchmark's above"
+            f" {thresholds['excess_above']} and its drawdown at most the Benchmark's plus"
+            f" {thresholds['drawdown_margin']} on both curves; at least"
+            f" {thresholds['min_stitched_rebalances']} Rebalances on the Stitched Curve"
+            f" ({thresholds['rebalances_counted']}). The Holdout's"
+            f" {gate['holdout_rebalances']} Rebalances are reported, not gated."
+        )
+        self._table(
+            ["Curve", "Metric", "Value", "Rule", "Holds"],
+            [
+                [
+                    CURVE_NAMES.get(c["curve"], "Fresh Period"),
+                    c["metric"],
+                    _cell(c["value"]),
+                    f"{c['rule']} {c['threshold']}",
+                    "yes" if c["passed"] else "**no**",
+                ]
+                for c in gate["checks"]
+            ],
+        )
+        self._line(f"Holdout run: {gate['standing']['reason']}.")
+
+    def _against_benchmark(self) -> None:
+        self._section("Against the Benchmark")
+        self._line(
+            "Each curve's Liquidation Value against the Benchmark's, after tax (what the Gate"
+            " reads) and before it (the tax paid and owed added back to each); returns are"
+            " annualised over 252 trading days a year."
+        )
+        rows = []
+        for curve in CURVES:
+            for when, found in self._json[curve]["against_benchmark"].items():
+                rows.append(
+                    [
+                        CURVE_NAMES[curve],
+                        when.replace("_", " "),
+                        _cell(found["strategy_value"]),
+                        _cell(found["benchmark_value"]),
+                        _cell(found["strategy_return"]),
+                        _cell(found["benchmark_return"]),
+                        _cell(found["excess"]),
+                        _cell(found["drawdown"]),
+                        _cell(found["benchmark_drawdown"]),
+                        _cell(found["information_ratio"]),
+                        _cell(found["sharpe"]),
+                    ]
+                )
+        self._table(
+            [
+                "Curve",
+                "Tax",
+                "Strategy (Rs)",
+                "Benchmark (Rs)",
+                "Strategy a year",
+                "Benchmark a year",
+                "Excess",
+                "Drawdown",
+                "Benchmark drawdown",
+                "Information ratio",
+                "Sharpe",
+            ],
+            rows,
+        )
+        for curve in CURVES:
+            held = self._json[curve]["liquidation"]["benchmark"]
+            dropped = self._json[curve]["liquidation"]["losses_dropped"]
+            self._line(
+                f"{CURVE_NAMES[curve]}: the Benchmark's gain was taxed as {held['taxed_as']}"
+                f" at {held['tax_rate']}; losses dropped unused at liquidation: short-term"
+                f" Rs {dropped['short_term']}, long-term Rs {dropped['long_term']}."
+            )
+
+    def _factor_fund(self) -> None:
+        self._section("Factor fund")
+        first = self._json["stitched_curve"]["factor_fund"]
+        self._line(f"AMFI scheme {first['scheme_code']}: {first['says']}.")
+        rows = []
+        for curve in CURVES:
+            fund = self._json[curve]["factor_fund"]
+            splits = ", ".join(f"{s['ex_date']} ({s['ratio']} for 1)" for s in fund["unit_splits"])
+            rows.append(
+                [
+                    CURVE_NAMES[curve],
+                    _cell(fund["value"]),
+                    _cell(fund["return"]),
+                    _cell(fund["drawdown"]),
+                    _cell(fund["strategy_before_tax_return"]),
+                    _cell(fund["excess"]),
+                    _cell(fund["information_ratio"]),
+                    splits or "none",
+                ]
+            )
+        self._table(
+            [
+                "Curve",
+                "Fund (Rs)",
+                "Fund a year",
+                "Fund drawdown",
+                "Strategy before tax a year",
+                "Excess",
+                "Information ratio",
+                "Unit splits chained",
+            ],
+            rows,
+        )
+
+    def _rebalances(self) -> None:
+        self._section("Rebalances: sector weights and cash")
+        self._line(
+            "At the Initial Buy and each Rebalance, the day its entrants are first held: cash"
+            " and each sector as a share of Equity, and each sector's peak until the next."
+        )
+        rows = []
+        for curve in CURVES:
+            for r in self._json[curve]["portfolio"]["rebalances"]:
+                peaks = {p["sector"]: p for p in r["peak_until_next"]}
+                rows.append(
+                    [
+                        CURVE_NAMES[curve],
+                        r["step"].replace("_", " "),
+                        r["decided"],
+                        _cell(r["held_from"]),
+                        _cell(r["cash"]),
+                        "; ".join(
+                            f"{s['sector']} {s['weight']} (peak {peaks[s['sector']]['weight']}"
+                            f" on {peaks[s['sector']]['day']})"
+                            for s in r["sectors"]
+                        )
+                        or "n/a",
+                    ]
+                )
+        self._table(["Curve", "Step", "Decided", "Held from", "Cash", "Sectors"], rows)
+        for curve in CURVES:
+            largest = self._json[curve]["portfolio"]["largest_name_weight"]
+            if largest is not None:
+                self._line(
+                    f"{CURVE_NAMES[curve]}: the largest name weight was {largest['symbol']}"
+                    f" at {largest['weight']} on {largest['day']}."
+                )
+
+    def _credits(self) -> None:
+        self._section("Dividends, Demerger Credits and rights issues")
+        for curve in CURVES:
+            found = self._json[curve]["portfolio"]
+            dividends = found["dividends"]
+            self._line(
+                f"{CURVE_NAMES[curve]}: {dividends['parsed']} dividends credited, Rs"
+                f" {dividends['credited']}; {dividends['unparsed']} unparsed and credited"
+                " nothing."
+            )
+        rows = [
+            [
+                CURVE_NAMES[curve],
+                "unparsed dividend",
+                d["symbol"],
+                d["ex_date"],
+                d["subject"],
+                _cell(d["reason"]),
+            ]
+            for curve in CURVES
+            for d in self._json[curve]["portfolio"]["dividends"]["unparsed_subjects"]
+        ]
+        rows += [
+            [
+                CURVE_NAMES[curve],
+                "Demerger Credit",
+                f"{c['parent']} to {c['child']}",
+                c["day"],
+                f"Rs {c['cash']}",
+                f"{c['effect_on_excess']} of starting Equity",
+            ]
+            for curve in CURVES
+            for c in self._json[curve]["portfolio"]["demerger_credits"]
+        ]
+        rows += [
+            [
+                CURVE_NAMES[curve],
+                "rights issue",
+                r["symbol"],
+                r["ex_date"],
+                r["subject"],
+                f"gap {_cell(r['gap'])}, {_cell(r['effect_on_excess'])} of starting Equity",
+            ]
+            for curve in CURVES
+            for r in self._json[curve]["portfolio"]["rights_issues"]
+        ]
+        if rows:
+            self._table(["Curve", "Kind", "Symbol", "Day", "What", "Effect on excess"], rows)
+
+    def _notes(self) -> None:
+        self._section("Notes")
+        for name, text in self._json["notes"].items():
+            if name == "not_independent":
+                text = "independent" if text is None else f"Not Independent: {text}"
+            self._line(f"- **{name.replace('_', ' ')}**: {_cell(text)}.")
+
     def _halts(self) -> None:
         halts = self._json["halt_would_have_fired"]
+
         self._section("Halt would have fired")
         if self._report.relative_drawdown_days is not None:
             self._relative_drawdown_halts(halts, self._report.relative_drawdown_days)

@@ -11,12 +11,13 @@ dividends are credited (stated only when they are), whether the account keeps
 the tax ledger (stated only when it does, with the tax rates as of the freeze
 and the dividend rate), the Benchmark that a tax-keeping account is compared
 with and a Relative Drawdown is measured against (stated only when either is
-on: its funds, the factor fund and the fund-unit rates as of the freeze), the
-starting Equity, the
-risk-free rate, the Gate thresholds, the Universe Rule version, the Strategy
-family, name and code revision, the git commit it was frozen at, and the data
-snapshot: each Universe month's mode and build, the
-hash of the Adjusted Series of every member over the Protocol's range, and,
+on: its funds, the factor fund with its unit splits and the fund-unit rates as
+of the freeze), the starting Equity, the risk-free rate, the Gate thresholds
+(``pullback_v1``'s absolute ones, or a portfolio family's against the Benchmark
+with how it counts Rebalances), any notes it makes of itself, the Universe
+Rule version, the Strategy family, name and code revision, the git commit it was
+frozen at, and the data snapshot: each Universe month's mode and build, the hash
+of the Adjusted Series of every member over the Protocol's range, and,
 only when demergers are credited, the hash of the demerger table.
 
 Its identity is the SHA-256 of its canonical serialisation: JSON with sorted
@@ -41,7 +42,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from tradeline.benchmark import BenchmarkFunds, BenchmarkTerms, FundChange
+from tradeline.benchmark import BenchmarkFunds, BenchmarkTerms, FundChange, UnitSplit
 from tradeline.costs import CHARGES, CostModel, CostSchedule, FundRates, Rate, Rates, Slippage
 from tradeline.dates import month_end, month_of, next_month
 from tradeline.metrics import HaltLimits, IndexHistory, RelativeDrawdownHalt
@@ -106,6 +107,52 @@ class Gate:
     min_stitched_trades: int
 
 
+# How the Benchmark Gate counts a curve's Rebalances, frozen with its thresholds.
+REBALANCES_COUNTED = (
+    "a Rebalance counts when it is decided on a trading day of the curve before its last, so"
+    " that its sales fall inside the curve; one decided on the curve's last day would trade"
+    " only after the curve ends and is not counted, and neither is the Initial Buy"
+)
+
+
+@dataclass(frozen=True)
+class BenchmarkGate:
+    """The Backtest Gate of a portfolio family (ADR 0015 amendment of 2026-10-25): on both
+    the Stitched Curve and the Holdout, the annualised excess of Liquidation Value over the
+    Benchmark's above ``excess_above`` and the drawdown of Liquidation Value no more than
+    the Benchmark's plus ``drawdown_margin``; at least ``min_stitched_rebalances``
+    Rebalances on the Stitched Curve, counted as ``rebalances_counted`` says."""
+
+    excess_above: Decimal
+    drawdown_margin: Decimal
+    min_stitched_rebalances: int
+    rebalances_counted: str = REBALANCES_COUNTED
+
+
+AnyGate = Gate | BenchmarkGate
+
+
+def gate_content(gate: AnyGate) -> dict[str, Any]:
+    """The Gate as a Protocol states it; a Benchmark Gate is told apart by its keys."""
+    return dataclasses.asdict(gate)
+
+
+def read_gate(raw: Mapping[str, Any]) -> AnyGate:
+    if "excess_above" in raw:
+        return BenchmarkGate(
+            excess_above=Decimal(raw["excess_above"]),
+            drawdown_margin=Decimal(raw["drawdown_margin"]),
+            min_stitched_rebalances=raw["min_stitched_rebalances"],
+            rebalances_counted=raw["rebalances_counted"],
+        )
+    return Gate(
+        sharpe_above=Decimal(raw["sharpe_above"]),
+        drawdown_below=Decimal(raw["drawdown_below"]),
+        profit_factor_above=Decimal(raw["profit_factor_above"]),
+        min_stitched_trades=raw["min_stitched_trades"],
+    )
+
+
 @dataclass(frozen=True)
 class Terms:
     """What the Operator chooses for a Protocol: everything in it but the costs and Limits,
@@ -118,7 +165,7 @@ class Terms:
     band: Decimal
     starting_equity: Decimal
     risk_free_rate: Decimal
-    gate: Gate
+    gate: AnyGate
     # Trading days before the first Window whose Adjusted Series the snapshot also hashes:
     # the bars the first Runs read.
     warm_up_trading_days: int
@@ -129,6 +176,8 @@ class Terms:
     # Whether the account keeps the tax ledger, its Liquidation Value and the Benchmark's
     # computed daily (ADR 0015 amendment).
     tax: bool = False
+    # What the Protocol says of itself beyond its numbers, by name (``Protocol.notes``).
+    notes: Mapping[str, str] = dataclasses.field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -182,7 +231,7 @@ class Protocol:
     halts: HaltLimits
     starting_equity: Decimal
     risk_free_rate: Decimal
-    gate: Gate
+    gate: AnyGate
     rule_version: str
     warm_up_trading_days: int
     snapshot: DataSnapshot
@@ -197,10 +246,19 @@ class Protocol:
     # Halt alone. Each is in the content only when there is one, as ``dividends`` is.
     tax: TaxTerms | None = None
     benchmark: BenchmarkTerms | None = None
+    # What the Protocol says of itself that its numbers do not, by name: ``lowvol_v1``'s
+    # ``buffer_scale``, NSE's buffer kept at a different scale. In the content only when
+    # there is one, as ``dividends`` is.
+    notes: Mapping[str, str] = dataclasses.field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.tax is not None and self.benchmark is None:
             raise ValueError("a Protocol keeping the tax ledger states the Benchmark")
+        if isinstance(self.gate, BenchmarkGate) and self.tax is None:
+            raise ValueError(
+                "the Benchmark Gate compares Liquidation Values, so its Protocol keeps the"
+                " tax ledger"
+            )
 
     @property
     def demergers(self) -> bool:
@@ -264,7 +322,7 @@ class Protocol:
             "halts": halts_content(self.halts),
             "starting_equity": self.starting_equity,
             "risk_free_rate": self.risk_free_rate,
-            "gate": dataclasses.asdict(self.gate),
+            "gate": gate_content(self.gate),
             "universe_rule_version": self.rule_version,
             "warm_up_trading_days": self.warm_up_trading_days,
             "data_snapshot": {
@@ -291,6 +349,12 @@ class Protocol:
                 "factor_fund": self.benchmark.factor_fund,
                 "fund_rates": dataclasses.asdict(self.benchmark.rates),
             }
+            if self.benchmark.factor_fund_splits:
+                content["benchmark"]["factor_fund_splits"] = [
+                    dataclasses.asdict(s) for s in self.benchmark.factor_fund_splits
+                ]
+        if self.notes:
+            content["notes"] = dict(self.notes)
         return content
 
     @classmethod
@@ -323,12 +387,7 @@ class Protocol:
             halts=read_halts(content["halts"]),
             starting_equity=Decimal(content["starting_equity"]),
             risk_free_rate=Decimal(content["risk_free_rate"]),
-            gate=Gate(
-                sharpe_above=Decimal(content["gate"]["sharpe_above"]),
-                drawdown_below=Decimal(content["gate"]["drawdown_below"]),
-                profit_factor_above=Decimal(content["gate"]["profit_factor_above"]),
-                min_stitched_trades=content["gate"]["min_stitched_trades"],
-            ),
+            gate=read_gate(content["gate"]),
             rule_version=content["universe_rule_version"],
             warm_up_trading_days=content["warm_up_trading_days"],
             snapshot=DataSnapshot(
@@ -341,6 +400,7 @@ class Protocol:
             dividends=content.get("dividends", False),
             tax=None if "tax" not in content else _read_tax(content["tax"]),
             benchmark=None if "benchmark" not in content else _read_benchmark(content["benchmark"]),
+            notes=dict(content.get("notes", {})),
         )
 
     def boundaries_text(self) -> str:
@@ -519,6 +579,15 @@ def _read_benchmark(raw: Mapping[str, Any]) -> BenchmarkTerms:
             stt=Decimal(rates["stt"]),
             exit_load=Decimal(rates["exit_load"]),
             exit_load_days=rates["exit_load_days"],
+        ),
+        factor_fund_splits=tuple(
+            UnitSplit(
+                s["scheme_code"],
+                date.fromisoformat(s["ex_date"]),
+                Decimal(s["ratio"]),
+                s["citation"],
+            )
+            for s in raw.get("factor_fund_splits", ())
         ),
     )
 

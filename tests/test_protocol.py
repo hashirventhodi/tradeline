@@ -173,6 +173,7 @@ def test_a_protocol_frozen_from_the_same_terms_in_another_decimal_form_is_the_sa
 ) -> None:
     first = freeze_protocol(conn, MARKET, FIRST, LAST)
     terms = protocol_terms(FIRST, LAST)
+    assert isinstance(terms.gate, Gate)
     written_otherwise = replace(
         terms,
         grid={axis: tuple(v.quantize(D("0.01")) for v in values) for axis, values in GRID.items()},

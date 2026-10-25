@@ -1,0 +1,15 @@
+# Unit splits of the factor fund, which AMFI's NAVs are not adjusted for (#98).
+#
+# Every row is reviewed like code. From `ex_date`, the first NAV AMFI gives on
+# the new units, one unit held before is `ratio` units, so the factor-fund
+# comparison (`tradeline.benchmark.chained_navs`) multiplies each NAV from then
+# by the ratio. The factor fund is reported beside the Benchmark and never
+# gated; `tradeline protocol freeze` freezes its rows into the Protocol, read
+# at `benchmark.unit_splits` in tradeline.toml.
+#
+# 141596, the ICICI Prudential Nifty 100 Low Vol 30 ETF: AMFI's NAV falls from
+# 196.363 on 2024-03-01 to 19.7146 on 2024-03-04 (docs/research.md, #94), a
+# split of 1 unit into 10. The fund house's notice of the split was not read;
+# the ratio is inferred from the NAVs, whose ratio is 9.96.
+scheme_code,ex_date,ratio,citation
+141596,2024-03-04,10,AMFI NAV history (amfiindia.com/api/nav-history; sd_id=141596) read 2026-10-25: 196.363 on 2024-03-01 and 19.7146 on 2024-03-04; fund house notice not read

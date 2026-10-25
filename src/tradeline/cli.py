@@ -23,7 +23,7 @@ import psycopg
 
 from tradeline import queries, revision
 from tradeline import universe as universe_service
-from tradeline.benchmark import load_benchmark_funds
+from tradeline.benchmark import load_benchmark_funds, load_unit_splits
 from tradeline.cited_actions import load_cited_actions
 from tradeline.collect import collect_daily as collect_daily_service
 from tradeline.compare_adjusted import compare_adjusted as compare_adjusted_service
@@ -642,6 +642,7 @@ def _tax_inputs(ctx: Context, terms: Terms, *, benchmark: bool) -> dict[str, Any
     if benchmark:
         inputs["benchmark_funds"] = load_benchmark_funds(Path(ctx.config.benchmark.funds))
         inputs["factor_fund"] = ctx.config.benchmark.factor_fund
+        inputs["unit_splits"] = load_unit_splits(Path(ctx.config.benchmark.unit_splits))
     return inputs
 
 
