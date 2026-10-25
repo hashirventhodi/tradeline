@@ -23,7 +23,7 @@ import psycopg
 
 from tradeline import queries, revision
 from tradeline import universe as universe_service
-from tradeline.benchmark import load_benchmark_funds, load_unit_splits
+from tradeline.benchmark import BenchmarkFunds, UnitSplit, load_benchmark_funds, load_unit_splits
 from tradeline.cited_actions import load_cited_actions
 from tradeline.collect import collect_daily as collect_daily_service
 from tradeline.compare_adjusted import compare_adjusted as compare_adjusted_service
@@ -93,7 +93,7 @@ from tradeline.sources.kite import (
 from tradeline.strategy.lowvol import LowvolV1
 from tradeline.strategy.portfolio import AnyStrategy
 from tradeline.strategy.pullback import PullbackV1
-from tradeline.tax import load_tax_schedule
+from tradeline.tax import DEFAULT_DIVIDEND_RATE, TaxSchedule, load_tax_schedule
 from tradeline.tick_sizes import load_tick_sizes
 from tradeline.trading_calendar import load_trading_calendar
 from tradeline.transport import (
@@ -619,6 +619,7 @@ def protocol(ctx: Context, args: argparse.Namespace) -> int:
         windows, holdout = window_boundaries(terms.layout, calendar)
         sys.stderr.write(windows_text(windows, holdout))
         return 0
+    inputs = _tax_inputs(ctx, terms, benchmark=terms.tax or limit_set.relative_drawdown_halt)
     with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
         halts = limit_set.halts()
         if limit_set.relative_drawdown_halt:
@@ -637,7 +638,11 @@ def protocol(ctx: Context, args: argparse.Namespace) -> int:
             slippage=ctx.config.costs.slippage(),
             calendar=calendar,
             commit=revision.running_commit(),
-            **_tax_inputs(ctx, terms, benchmark=terms.tax or limit_set.relative_drawdown_halt),
+            tax_schedule=inputs.tax_schedule,
+            dividend_rate=inputs.dividend_rate,
+            benchmark_funds=inputs.benchmark_funds,
+            factor_fund=inputs.factor_fund,
+            unit_splits=inputs.unit_splits,
             correction=correction,
         )
     sys.stderr.write(result.text())
@@ -668,17 +673,35 @@ def _correction(args: argparse.Namespace) -> Correction | None:
     )
 
 
-def _tax_inputs(ctx: Context, terms: Terms, *, benchmark: bool) -> dict[str, Any]:
+@dataclass(frozen=True)
+class _TaxInputs:
+    """What a Protocol freezes beyond its Terms, as ``freeze_protocol`` takes it: each at
+    ``freeze_protocol``'s default when not read."""
+
+    tax_schedule: TaxSchedule | None = None
+    dividend_rate: Decimal = DEFAULT_DIVIDEND_RATE
+    benchmark_funds: BenchmarkFunds | None = None
+    factor_fund: int | None = None
+    unit_splits: tuple[UnitSplit, ...] = ()
+
+
+def _tax_inputs(ctx: Context, terms: Terms, *, benchmark: bool) -> _TaxInputs:
     """What a Protocol freezes beyond its Terms: ``[tax]`` when it keeps tax, and
     ``[benchmark]`` when it keeps tax or has a Relative Drawdown Halt (``benchmark``)."""
-    inputs: dict[str, Any] = {}
+    inputs = _TaxInputs()
     if terms.tax:
-        inputs["tax_schedule"] = load_tax_schedule(Path(ctx.config.tax.schedule))
-        inputs["dividend_rate"] = Decimal(str(ctx.config.tax.dividend_rate))
+        inputs = replace(
+            inputs,
+            tax_schedule=load_tax_schedule(Path(ctx.config.tax.schedule)),
+            dividend_rate=Decimal(str(ctx.config.tax.dividend_rate)),
+        )
     if benchmark:
-        inputs["benchmark_funds"] = load_benchmark_funds(Path(ctx.config.benchmark.funds))
-        inputs["factor_fund"] = ctx.config.benchmark.factor_fund
-        inputs["unit_splits"] = load_unit_splits(Path(ctx.config.benchmark.unit_splits))
+        inputs = replace(
+            inputs,
+            benchmark_funds=load_benchmark_funds(Path(ctx.config.benchmark.funds)),
+            factor_fund=ctx.config.benchmark.factor_fund,
+            unit_splits=tuple(load_unit_splits(Path(ctx.config.benchmark.unit_splits))),
+        )
     return inputs
 
 
