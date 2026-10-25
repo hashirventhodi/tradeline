@@ -11,8 +11,9 @@ with the tax rates as of the freeze, the dividend rate, the Benchmark's funds,
 the factor fund and the fund-unit rates as of the freeze), the starting Equity, the
 risk-free rate, the Gate thresholds, the Universe Rule version, the Strategy
 family, name and code revision, the git commit it was frozen at, and the data
-snapshot: each Universe month's mode and build, and the
-hash of the Adjusted Series of every member over the Protocol's range.
+snapshot: each Universe month's mode and build, the
+hash of the Adjusted Series of every member over the Protocol's range, and,
+only when demergers are credited, the hash of the demerger table.
 
 Its identity is the SHA-256 of its canonical serialisation: JSON with sorted
 keys and no spaces, every decimal number written in one fixed form (no
@@ -119,6 +120,8 @@ class Terms:
     warm_up_trading_days: int
     # Whether a holder is credited each dividend in cash on its Ex-Date (ADR 0020).
     dividends: bool = False
+    # Whether a holder is credited each demerger of the demerger table (ADR 0020).
+    demergers: bool = False
     # Whether the account keeps the tax ledger, its Liquidation Value and the Benchmark's
     # computed daily (ADR 0015 amendment).
     tax: bool = False
@@ -149,6 +152,9 @@ class DataSnapshot:
     end: date
     months: tuple[MonthSnapshot, ...]
     adjusted_series: Mapping[str, str]
+    # The hash of the demerger table its runs credit (``tradeline.demergers``); None, and
+    # absent from the content, when the Protocol credits no demerger.
+    demergers: str | None = None
 
 
 @dataclass(frozen=True)
@@ -189,6 +195,13 @@ class Protocol:
     def __post_init__(self) -> None:
         if (self.tax is None) != (self.benchmark is None):
             raise ValueError("a Protocol keeping the tax ledger states the Benchmark, and only it")
+
+    @property
+    def demergers(self) -> bool:
+        """Whether a holder at the close before a demerger's Ex-Date is credited the child's
+        shares in cash on its first listing day (ADR 0020): stated by the data snapshot's
+        hash of the demerger table, present only when on."""
+        return self.snapshot.demergers is not None
 
     @property
     def first(self) -> date:
@@ -257,6 +270,8 @@ class Protocol:
         }
         if self.dividends:
             content["dividends"] = True
+        if snapshot.demergers is not None:
+            content["data_snapshot"]["demergers"] = snapshot.demergers
         if self.tax is not None and self.benchmark is not None:
             rates = self.tax.schedule.rates(self.tax.rates_as_of)
             content["tax"] = {
@@ -314,6 +329,7 @@ class Protocol:
                 end=date.fromisoformat(snapshot["end"]),
                 months=tuple(_read_month(m) for m in snapshot["months"]),
                 adjusted_series=dict(snapshot["adjusted_series"]),
+                demergers=snapshot.get("demergers"),
             ),
             dividends=content.get("dividends", False),
             tax=None if "tax" not in content else _read_tax(content["tax"]),

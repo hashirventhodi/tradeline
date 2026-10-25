@@ -21,6 +21,7 @@ LEDGER_TABLES = (
     "fills",
     "positions",
     "dividend_credits",
+    "demerger_credits",
     "tax_debits",
     "liquidation_values",
 )
@@ -58,6 +59,11 @@ INSERTS = {
     " position_id, instrument, symbol, ex_date, subject, shares, per_share, cash)"
     " VALUES (%s, %s, '2023-06-16', 1, gen_random_uuid(), 'A', 'A', '2023-06-16',"
     " 'Dividend - Rs 5 Per Share', 50, 5, 250)",
+    "demerger_credits": "INSERT INTO demerger_credits (mode, backtest_id, day, seq,"
+    " position_id, instrument, parent, child, ex_date, bought, shares, ratio_numerator,"
+    " ratio_denominator, close, cash, basis) VALUES (%s, %s, '2023-08-21', 1,"
+    " gen_random_uuid(), 'A', 'A', 'B', '2023-07-20', '2023-06-16', 50, 1, 1, 250, 12500,"
+    " 300)",
     "tax_debits": "INSERT INTO tax_debits (mode, backtest_id, id, day, financial_year,"
     " short_term_gain, long_term_gain, dividends, tax, settled)"
     " VALUES (%s, %s, gen_random_uuid(), '2024-04-01', 2023, 1000, 0, 0, 208, false)",

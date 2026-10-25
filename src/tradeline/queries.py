@@ -34,6 +34,7 @@ from tradeline.adjust import (
 )
 from tradeline.costs import Charges
 from tradeline.dates import IST, month_end
+from tradeline.demergers import Demerger, table_hash
 from tradeline.instruments import (
     LISTING_SERIES,
     Anomaly,
@@ -45,6 +46,7 @@ from tradeline.instruments import (
 from tradeline.paper_broker import ExitReason, OrderPurpose
 from tradeline.protocol import Protocol
 from tradeline.sources.nse import Delisting, SymbolChange
+from tradeline.tax import DemergerCredit as TaxDemergerCredit
 from tradeline.trading_calendar import TradingCalendar
 
 
@@ -2237,6 +2239,41 @@ def position_events(
 
 
 @dataclass(frozen=True)
+class HeldAtClose:
+    """A Position open after a day's close, with its shares then and the day it opened."""
+
+    position_id: uuid.UUID
+    instrument: str
+    symbol: str
+    shares: int
+    opened_on: date
+
+
+def held_at_close(
+    events: Sequence[LedgerPositionEvent], instrument: str, day: date
+) -> list[HeldAtClose]:
+    """The Positions in ``instrument`` held at the close of ``day``, among an account's
+    ``events`` (``position_events``): opened on or before it and not closed by its close,
+    with their shares after their last event by then."""
+    held: dict[uuid.UUID, HeldAtClose] = {}
+    for event in events:
+        if event.day > day or event.instrument != instrument:
+            continue
+        if event.event == "closed":
+            held.pop(event.position_id, None)
+            continue
+        opened = held.get(event.position_id)
+        held[event.position_id] = HeldAtClose(
+            event.position_id,
+            event.instrument,
+            event.symbol,
+            event.shares,
+            event.day if opened is None else opened.opened_on,
+        )
+    return list(held.values())
+
+
+@dataclass(frozen=True)
 class DividendCredit:
     """A dividend a Position was credited on its Ex-Date (ADR 0020): its shares then times
     the amount per share its subject states; for an unparsed subject, no amount and no
@@ -2275,11 +2312,121 @@ def dividend_credits(
     return [DividendCredit(*row) for row in rows]
 
 
+def demergers(conn: psycopg.Connection) -> list[Demerger]:
+    """The demerger table in force: the rows of the latest successful ``ingest demergers``
+    run, oldest Ex-Date first; none before the first."""
+    rows = conn.execute(
+        "WITH latest AS (SELECT id FROM ingest_runs WHERE source = 'demergers'"
+        " AND error IS NULL ORDER BY finished_at DESC, id LIMIT 1)"
+        " SELECT parent, child, ratio_numerator, ratio_denominator, ex_date, listed_on,"
+        " parent_basis, child_basis, citation, line"
+        " FROM demergers d JOIN latest ON d.ingest_run_id = latest.id"
+        " ORDER BY ex_date, parent, child"
+    ).fetchall()
+    return [
+        Demerger(parent, child, Fraction(num, den), ex, listed, pb, cb, citation, line)
+        for parent, child, num, den, ex, listed, pb, cb, citation, line in rows
+    ]
+
+
+def demerger_table_hash(conn: psycopg.Connection) -> str:
+    """The hash of the demerger table in force (``demergers.table_hash``), as a Protocol
+    crediting demergers freezes it."""
+    return table_hash(demergers(conn))
+
+
+@dataclass(frozen=True)
+class DemergerCredit:
+    """A Demerger Credit (ADR 0020): a Position held at the close before ``ex_date`` credited
+    on ``day``, the child's first listing day, ``shares`` times the ratio at the child's
+    ``close`` in the Raw Series; ``basis`` is the child's share of the Position's basis."""
+
+    mode: EngineMode
+    backtest_id: uuid.UUID | None
+    day: date
+    seq: int
+    position_id: uuid.UUID
+    instrument: str
+    parent: str
+    child: str
+    ex_date: date
+    # The day the Position opened, since which the child's shares are held.
+    bought: date
+    shares: int
+    ratio: Fraction
+    close: Decimal
+    cash: Decimal
+    basis: Decimal
+
+    def tax_credit(self) -> TaxDemergerCredit:
+        """The credit as the tax ledger takes it: a sale of the child's shares."""
+        return TaxDemergerCredit(
+            day=self.day, parent_bought=self.bought, amount=self.cash, basis=self.basis
+        )
+
+
+def demerger_credits(
+    conn: psycopg.Connection,
+    *,
+    mode: EngineMode,
+    backtest_id: uuid.UUID | None,
+    dry_run: bool = False,
+) -> list[DemergerCredit]:
+    """Every Demerger Credit of an account's Positions, in the order credited."""
+    rows = conn.execute(
+        "SELECT mode, backtest_id, day, seq, position_id, instrument, parent, child, ex_date,"
+        " bought, shares, ratio_numerator, ratio_denominator, close, cash, basis"
+        f" FROM demerger_credits WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
+        " AND dry_run = %(dry_run)s ORDER BY day, seq",
+        {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
+    ).fetchall()
+    return [
+        DemergerCredit(
+            mode=row[0],
+            backtest_id=row[1],
+            day=row[2],
+            seq=row[3],
+            position_id=row[4],
+            instrument=row[5],
+            parent=row[6],
+            child=row[7],
+            ex_date=row[8],
+            bought=row[9],
+            shares=row[10],
+            ratio=Fraction(row[11], row[12]),
+            close=row[13],
+            cash=row[14],
+            basis=row[15],
+        )
+        for row in rows
+    ]
+
+
+def position_bases(
+    conn: psycopg.Connection,
+    *,
+    mode: EngineMode,
+    backtest_id: uuid.UUID | None,
+    dry_run: bool = False,
+) -> dict[uuid.UUID, Decimal]:
+    """Each of an account's Positions' basis for tax: its buy Fills' value and charges, less
+    the child's share of it each Demerger Credit moved to the credit."""
+    account: Account = {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run}
+    bases: dict[uuid.UUID, Decimal] = {}
+    for fill in fills(conn, **account):
+        if fill.side == "buy":
+            bases[fill.position_id] = bases.get(fill.position_id, Decimal(0)) - fill.cash_flow
+    for credit in demerger_credits(conn, **account):
+        bases[credit.position_id] -= credit.basis
+    return bases
+
+
 @dataclass(frozen=True)
 class PositionLot:
     """A Position as the tax ledger takes it (``tradeline.tax``): bought on ``opened_on``
     for ``basis`` (its buys' value and charges, less any cash paid in lieu of a fractional
-    share, which is already in cash), and, once closed, sold on ``closed_on`` for
+    share, which is already in cash, and less the child's share each Demerger Credit moved
+    to the credit), and, once closed, sold on ``closed_on`` for
     ``proceeds`` (its sales' value less charges)."""
 
     position_id: uuid.UUID
@@ -2299,7 +2446,8 @@ def position_lots(
     """Every Position of an account as a lot, open or closed, in the order they opened."""
     charges = " + ".join(f"coalesce({c}, 0)" for c in _CHARGE_COLUMNS)
     rows = conn.execute(
-        "SELECT p.position_id, p.opened_on, p.closed_on, f.basis - p.in_lieu, f.proceeds"
+        "SELECT p.position_id, p.opened_on, p.closed_on,"
+        " f.basis - p.in_lieu - coalesce(d.moved, 0), f.proceeds"
         " FROM (SELECT position_id, min(opened_on) AS opened_on,"
         "   max(day) FILTER (WHERE event = 'closed') AS closed_on,"
         "   coalesce(sum(cash_in_lieu), 0) AS in_lieu FROM positions"
@@ -2311,6 +2459,9 @@ def position_lots(
         "  FROM fills"
         f"  WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
         "  AND dry_run = %(dry_run)s GROUP BY position_id) f USING (position_id)"
+        " LEFT JOIN (SELECT position_id, sum(basis) AS moved FROM demerger_credits"
+        f"  WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
+        "  AND dry_run = %(dry_run)s GROUP BY position_id) d USING (position_id)"
         " ORDER BY p.opened_on, p.position_id",
         {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
     ).fetchall()
@@ -2436,10 +2587,10 @@ def account_cash_flows(
     backtest_id: uuid.UUID | None,
     dry_run: bool = False,
 ) -> Decimal:
-    """The net cash an account's Fills, restatements, dividends and tax moved: every sale's
-    value less its charges, every purchase's value and its charges taken away, plus cash
-    paid in lieu of fractional shares and every dividend credited, less every tax debited.
-    An account's cash is its starting Equity plus this."""
+    """The net cash an account's Fills, restatements and credits moved: every sale's value
+    less its charges, every purchase's value and its charges taken away, plus cash paid in
+    lieu of fractional shares, every dividend and every Demerger Credit, less every tax
+    debited. An account's cash is its starting Equity plus this."""
     charges = " + ".join(f"coalesce({c}, 0)" for c in _CHARGE_COLUMNS)
     row = conn.execute(
         "SELECT coalesce((SELECT sum(CASE side WHEN 'sell' THEN price * shares"
@@ -2450,6 +2601,9 @@ def account_cash_flows(
         f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
         " AND dry_run = %(dry_run)s), 0)"
         " + coalesce((SELECT sum(cash) FROM dividend_credits"
+        f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
+        " AND dry_run = %(dry_run)s), 0)"
+        " + coalesce((SELECT sum(cash) FROM demerger_credits"
         f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
         " AND dry_run = %(dry_run)s), 0)"
         " - coalesce((SELECT sum(tax) FROM tax_debits"

@@ -76,10 +76,21 @@ the Ex-Date's open held nothing at the close before and is credited nothing; one
 sold that day is credited. An unparsed subject credits nothing and is written
 with its reason. The credit is part of the account's cash, so of Equity.
 
+When the Protocol credits demergers (ADR 0020), on a child's first listing day
+in the demerger table (``tradeline.demergers``) each Position held at the close
+before the demerger's Ex-Date, open or since sold, is credited in cash its
+shares then times the entitlement ratio times the child's close that day in the
+Raw Series; the day must be the child's first row since the Ex-Date, or the run
+is refused. The child's share of the Position's basis moves to the credit
+(``queries.position_bases``). Between the Ex-Date and the listing the
+entitlement is in neither cash nor Equity, and an account ending before the
+listing is credited nothing.
+
 When the Protocol keeps tax (ADR 0015 amendment), the account keeps the tax ledger
 (``tradeline.tax``) over its realised events as the Ledger holds them: each closed
-Position a lot, bought for its buys' value and charges and sold for its sales' value
-less charges, each dividend credited. On the first trading day after March 31,
+Position a lot, bought for its buys' value and charges (less the share a Demerger
+Credit moved) and sold for its sales' value less charges, each Demerger Credit a sale
+of the child's shares, each dividend credited. On the first trading day after March 31,
 before the session, the financial year just ended is debited its net tax; a
 Boundary Exit liquidates the account and settles its final partial year that day,
 dropping the losses left unused. After the session each day records the account's
@@ -122,6 +133,7 @@ from tradeline.benchmark import (
 )
 from tradeline.costs import CostModel, paisa
 from tradeline.dates import IST, month_of
+from tradeline.demergers import Demerger
 from tradeline.dividends import dividends as dividends_of
 from tradeline.freeze import verify_snapshot
 from tradeline.paper_broker import (
@@ -508,6 +520,7 @@ def run(
     commit: bool = True,
     initial_buy: bool = False,
     dividends: bool = False,
+    demergers: Sequence[Demerger] = (),
     tax: TaxTerms | None = None,
     benchmark: BenchmarkTerms | None = None,
 ) -> RunResult:
@@ -577,6 +590,7 @@ def run(
         tick_sizes=tick_sizes,
         fill_model=fill_model,
         dividends=dividends,
+        demergers=demergers,
         tax=tax,
     )
     tags: queries.Account = {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run}
@@ -838,6 +852,8 @@ def backtest_span(
         "impact": impact,
         "commit": commit,
         "dividends": terms.dividends,
+        # Verified against the Protocol's snapshot by the caller (``verify_snapshot``).
+        "demergers": tuple(queries.demergers(conn)) if terms.demergers else (),
         "tax": terms.tax,
         "benchmark": terms.benchmark,
     }
@@ -1127,10 +1143,12 @@ class _Account:
         tick_sizes: TickSizes,
         fill_model: FillModel,
         dividends: bool = False,
+        demergers: Sequence[Demerger] = (),
         tax: TaxTerms | None = None,
     ) -> None:
         self._conn = conn
         self._dividends = dividends
+        self._demergers = demergers
         self._tax = tax
         # The tax debited before today's session.
         self._debited = Decimal(0)
@@ -1188,6 +1206,7 @@ class _Account:
         ]
         if self._dividends:
             self._credit_dividends()
+        self._credit_demergers()
         if self._tax is not None:
             self._debit_tax(self._tax)
         fills = 0
@@ -1222,6 +1241,52 @@ class _Account:
                     seq=self._next_seq(),
                 )
 
+    def _credit_demergers(self) -> None:
+        """On a child's first listing day, credit each Position held at the close before its
+        demerger's Ex-Date, open or since closed, its entitlement at the child's close that
+        day in the Raw Series, moving the child's share of the Position's basis to it."""
+        listing = [d for d in self._demergers if d.listed_on == self._day]
+        if not listing:
+            return
+        bases = queries.position_bases(self._conn, **self._account)
+        events = queries.position_events(self._conn, **self._account)
+        for demerger in listing:
+            close = self._first_close(demerger)
+            held_on = _previous_session(self._calendar, demerger.ex_date)
+            parent = queries.instrument_key(self._conn, demerger.parent, as_of=held_on)
+            for held in queries.held_at_close(events, parent, held_on):
+                basis = bases[held.position_id]
+                child_basis = paisa(basis * demerger.child_basis / 100)
+                bases[held.position_id] = basis - child_basis
+                ledger.insert_demerger_credit(
+                    self._conn,
+                    self._account,
+                    held,
+                    demerger,
+                    close=close,
+                    cash=paisa(held.shares * demerger.ratio * Fraction(close)),
+                    basis=child_basis,
+                    day=self._day,
+                    seq=self._next_seq(),
+                )
+
+    def _first_close(self, demerger: Demerger) -> Decimal:
+        """The child's close on the day, which must be its first in the Raw Series since the
+        Ex-Date, as the table states."""
+        rows = queries.end_of_day(
+            self._conn, demerger.child, start=demerger.ex_date, end=self._day, as_of=self._day
+        )
+        days = sorted({r.trade_date for r in rows})
+        if days != [self._day] or len(rows) != 1 or rows[0].close is None:
+            raise ValueError(
+                f"the demerger table lists {demerger.child} (from {demerger.parent}) on"
+                f" {self._day}, and its Raw Series from the Ex-Date {demerger.ex_date} has"
+                f" {len(rows)} rows on {', '.join(map(str, days)) or 'no day'}; correct the"
+                " table's listed_on"
+            )
+        close: Decimal = rows[0].close
+        return close
+
     def _debit_tax(self, terms: TaxTerms) -> None:
         """On the first trading day after a March 31, debit the financial year it ended its
         net tax, from the events realised before the day."""
@@ -1238,13 +1303,19 @@ class _Account:
     def _tax_events(
         self, *, through: date
     ) -> tuple[list[Sale], list[TaxedDividend], dict[uuid.UUID, queries.PositionLot]]:
-        """The account's lots sold and dividends credited through ``through``, as the tax
-        ledger takes them, and every lot by its Position."""
+        """The account's lots sold, its Demerger Credits (each a sale of the child's shares)
+        and its dividends credited through ``through``, as the tax ledger takes them, and
+        every lot by its Position."""
         lots = queries.position_lots(self._conn, **self._account)
         sales = [
             Sale(lot.opened_on, lot.closed_on, lot.basis, lot.proceeds)
             for lot in lots
             if lot.closed_on is not None and lot.proceeds is not None and lot.closed_on <= through
+        ]
+        sales += [
+            credit.tax_credit().sale()
+            for credit in queries.demerger_credits(self._conn, **self._account)
+            if credit.day <= through
         ]
         dividends = [
             TaxedDividend(credit.day, credit.cash)

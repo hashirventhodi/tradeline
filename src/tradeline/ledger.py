@@ -26,6 +26,7 @@ import psycopg
 from tradeline import queries
 from tradeline.costs import Charges
 from tradeline.dates import month_of
+from tradeline.demergers import Demerger
 from tradeline.dividends import Dividend
 from tradeline.paper_broker import OrderPurpose
 from tradeline.queries import EngineMode
@@ -205,6 +206,47 @@ def insert_dividend_credit(
             per_share,
             None if per_share is None else per_share * position.shares,
             dividend.reason,
+        ),
+    )
+
+
+def insert_demerger_credit(
+    conn: psycopg.Connection,
+    account: queries.Account,
+    held: queries.HeldAtClose,
+    demerger: Demerger,
+    *,
+    close: Decimal,
+    cash: Decimal,
+    basis: Decimal,
+    day: date,
+    seq: int,
+) -> None:
+    """The Demerger Credit on ``day`` of a Position ``held`` at the close before the Ex-Date:
+    ``cash`` for its entitlement at the child's ``close``, and the child's ``basis``."""
+    conn.execute(
+        "INSERT INTO demerger_credits (mode, backtest_id, dry_run, day, seq, position_id,"
+        " instrument, parent, child, ex_date, bought, shares, ratio_numerator,"
+        " ratio_denominator, close, cash, basis)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (
+            account["mode"],
+            account["backtest_id"],
+            account["dry_run"],
+            day,
+            seq,
+            held.position_id,
+            held.instrument,
+            demerger.parent,
+            demerger.child,
+            demerger.ex_date,
+            held.opened_on,
+            held.shares,
+            demerger.ratio.numerator,
+            demerger.ratio.denominator,
+            close,
+            cash,
+            basis,
         ),
     )
 
