@@ -41,6 +41,7 @@ from synthetic_eod import (
     compute_universe_months,
     config_text,
     load_benchmark,
+    load_demerger_table,
     load_index_history,
     lowvol_market,
     pass_holdout_checks,
@@ -148,14 +149,9 @@ def version(database_url: str, tmp_path_factory: pytest.TempPathFactory) -> Vers
         compute_universe_months(conn, market, date(2022, 7, 1), ONE_REBALANCE)
         load_benchmark(conn, amfi, end=TWO_REBALANCES)
         load_index_history(conn)
-        # The checked-in table's RELIANCE to JIOFIN lists inside this Market's span, without
-        # the stocks; this one's only row is before it.
-        table = directory / "demergers.csv"
-        table.write_text(
-            "parent,child,ratio,ex_date,listed_on,parent_basis,child_basis,citation\n"
-            "PARENT,CHILD,1:10,2020-06-01,2020-06-15,90,10,NSE/CMTR/00001\n"
-        )
-        ingest_demergers(conn, load_demergers(table))
+        # The checked-in table's RELIANCE to JIOFIN lists inside this Market's span; nothing
+        # holds RELIANCE, so the child's listing is never read.
+        load_demerger_table(conn)
     config = _config(directory)
     _cli(database_url, config, "protocol", "freeze", "--strategy", "lowvol_v1")
     with app_connection(database_url) as conn:

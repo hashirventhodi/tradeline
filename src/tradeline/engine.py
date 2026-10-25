@@ -1283,17 +1283,24 @@ class _Account:
     def _credit_demergers(self) -> None:
         """On a child's first listing day, credit each Position held at the close before its
         demerger's Ex-Date, open or since closed, its entitlement at the child's close that
-        day in the Raw Series, moving the child's share of the Position's basis to it."""
+        day in the Raw Series, moving the child's share of the Position's basis to it. The
+        child's first close is read, and checked against the table, only when some Position
+        was held then."""
         listing = [d for d in self._demergers if d.listed_on == self._day]
         if not listing:
             return
         bases = queries.position_bases(self._conn, **self._account)
         events = queries.position_events(self._conn, **self._account)
         for demerger in listing:
-            close = self._first_close(demerger)
             held_on = _previous_session(self._calendar, demerger.ex_date)
             parent = queries.instrument_key(self._conn, demerger.parent, as_of=held_on)
-            for held in queries.held_at_close(events, parent, held_on):
+            holders = queries.held_at_close(events, parent, held_on)
+            # The child's listing is read only for a demerger the account is credited: a
+            # row of a parent it never held refuses nothing.
+            if not holders:
+                continue
+            close = self._first_close(demerger)
+            for held in holders:
                 basis = bases[held.position_id]
                 child_basis = paisa(basis * demerger.child_basis / 100)
                 bases[held.position_id] = basis - child_basis

@@ -279,3 +279,23 @@ def test_each_position_held_through_a_rights_issue_is_listed_with_its_ex_date_ga
         before.close - D(5),
         D(-5) / before.close,
     )
+
+
+def test_a_demerger_of_a_parent_nothing_held_is_not_read_and_refuses_nothing(
+    database_url: str,
+    loaded: dict[str, str],
+    clone_database: Callable[[str], str],
+    tmp_path: Path,
+) -> None:
+    """BIRCH is never held, and its child BIRCHNEW has no row in the Raw Series at all: a
+    table row the account has no Position for credits nothing, so its child's listing is
+    never read and cannot refuse the run."""
+    table = _table(tmp_path, ROW + "BIRCH,BIRCHNEW,1:2,2022-08-10,2022-08-22,90,10,NSE/CMTR/1\n")
+    copy = clone_database(database_url)
+    with app_connection(copy) as conn:
+        ingest_demergers(conn, load_demergers(table))
+        frozen = freeze_protocol(conn, MARKET, START, END, terms=replace(TERMS, demergers=True))
+        _backtest(conn, frozen.hash)
+        credits = queries.demerger_credits(conn, **_account(conn, frozen.hash))
+
+    assert [(c.parent, c.child, c.cash) for c in credits] == [("ASTER", "ASTERNEW", D("11100.00"))]
