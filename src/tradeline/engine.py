@@ -602,7 +602,7 @@ def run(
     )
     tags: queries.Account = {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run}
     next_session = _next_session(calendar, as_of)
-    step: str | None = None
+    step: queries.PortfolioStep | None = None
     candidates: list[Candidate] = []
     plans: list[Plan | PortfolioPlan] = []
     if isinstance(strategy, PortfolioStrategy):
@@ -1863,7 +1863,7 @@ def _portfolio_step(
     next_session: date,
     initial_buy: bool,
     entries: bool,
-) -> str | None:
+) -> queries.PortfolioStep | None:
     """What a portfolio Strategy's Run as of ``as_of`` does: its account's Initial Buy; a
     Rebalance, on the last trading day of a Rebalance month; the Rebalance's buys, on the
     trading day after the account Rebalanced; or nothing. A Run that places no entries
@@ -1886,7 +1886,7 @@ def _portfolio_step(
 def _portfolio_decision(
     conn: psycopg.Connection,
     strategy: PortfolioStrategy,
-    step: str | None,
+    step: queries.PortfolioStep | None,
     held: Sequence[queries.LedgerPosition],
     members: Sequence[Member],
     data: StoredMarketData,

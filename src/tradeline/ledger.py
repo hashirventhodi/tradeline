@@ -29,7 +29,7 @@ from tradeline.dates import month_of
 from tradeline.demergers import Demerger
 from tradeline.dividends import Dividend
 from tradeline.paper_broker import OrderPurpose
-from tradeline.queries import EngineMode
+from tradeline.queries import EngineMode, PortfolioStep
 from tradeline.risk import Decision, Pass, PortfolioPlan, Proposal
 from tradeline.strategy import Candidate, Plan
 from tradeline.strategy.portfolio import AnyStrategy
@@ -377,7 +377,7 @@ def insert_run(
     cash: Decimal,
     equity: Decimal,
     impact: Decimal | None,
-    portfolio_step: str | None = None,
+    portfolio_step: PortfolioStep | None = None,
 ) -> None:
     conn.execute(
         "INSERT INTO runs (id, mode, backtest_id, dry_run, strategy_id, as_of, universe_month,"

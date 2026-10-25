@@ -1712,6 +1712,9 @@ def sectors_for_run(conn: psycopg.Connection, symbols: list[str], *, as_of: date
 # --- The Ledger (ADR 0019) --------------------------------------------------
 
 EngineMode = Literal["backtest", "paper", "live"]
+# What a portfolio Strategy's Run does (``tradeline.engine``): its account's Initial Buy, a
+# Rebalance's decision and sales, or the Rebalance's buys the trading day after.
+PortfolioStep = Literal["initial_buy", "rebalance", "rebalance_buys"]
 
 
 @dataclass(frozen=True)
@@ -1751,9 +1754,8 @@ class LedgerRun:
     # The Slippage impact c it was priced with in place of its Protocol's (a report's c
     # sensitivity, #79); None for the Protocol's own.
     impact: Decimal | None = None
-    # A portfolio Strategy's Run: ``initial_buy``, ``rebalance`` or ``rebalance_buys``
-    # (``tradeline.engine``); None on any other day and for any other Strategy.
-    portfolio_step: str | None = None
+    # A portfolio Strategy's Run's step; None on any other day and for any other Strategy.
+    portfolio_step: PortfolioStep | None = None
 
 
 @dataclass(frozen=True)

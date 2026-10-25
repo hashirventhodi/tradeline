@@ -348,7 +348,7 @@ def _rebalances(
     their buys' decision), its cash and sector weights then, each sector's peak until the
     next one's, and every buy its buys' Run placed that the open did not fill."""
     days = list(account.days)
-    found: list[tuple[str, date, date | None, uuid.UUID | None]] = []
+    found: list[tuple[queries.PortfolioStep, date, date | None, uuid.UUID | None]] = []
     runs = list(account.runs)
     for i, run in enumerate(runs):
         if run.portfolio_step not in ("initial_buy", "rebalance"):
