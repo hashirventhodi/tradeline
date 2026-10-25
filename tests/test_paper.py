@@ -33,6 +33,7 @@ from unittest import mock
 import psycopg
 import pytest
 
+from limits import PULLBACK
 from synthetic_eod import (
     EXIT_BAND,
     REPO_ROOT,
@@ -54,14 +55,14 @@ from tradeline.costs import CostModel
 from tradeline.db import app_connection
 from tradeline.engine import CollectedMarketData, WallClock, backtest, paper, run
 from tradeline.paper_broker import FillModel
-from tradeline.risk import Limits, RiskEngine
+from tradeline.risk import RiskEngine
 from tradeline.strategy.pullback import PullbackV1
 from tradeline.tick_sizes import load_tick_sizes
 
 MARKET = base_market()
 NEXT_DAY = date(2023, 6, 16)
 DAYS = tuple(repo_calendar().trading_days(RUN_DAY, date(2023, 7, 5)))
-LIMITS = Limits()
+LIMITS = PULLBACK
 TICK_SIZES = load_tick_sizes(REPO_ROOT / "tick_sizes.csv")
 # A backtest runs under a Protocol: one whose Holdout is the month the days end in.
 PROTOCOL_FROM = date(2023, 4, 1)

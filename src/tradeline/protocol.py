@@ -3,7 +3,7 @@
 A Protocol states the parameter grid, the objective and its tie-break, the
 Walk-Forward Windows and the Holdout as trading days from the Trading Calendar,
 the cost schedule's date with the rates in force on it and Slippage's
-parameters, the exit band, the Limits (the Participation Cap among them), the
+parameters, the exit band, every Limit on with its value or off (ADR 0020), the
 daily-loss and drawdown Halt fractions a backtest reports against, the
 starting Equity, the risk-free rate, the Gate thresholds, the Universe Rule
 version, the Strategy family, name and code revision, the git commit it was
@@ -45,6 +45,8 @@ OBJECTIVE = (
     "in-sample Sharpe after costs, averaged with the cell's grid neighbours along each axis;"
     " a cell with fewer than min_in_sample_trades in-sample trades is ineligible"
 )
+# The one Limit a Protocol states by leaving it out, when on (``limits_content``).
+STOP_REQUIRED = "stop_required"
 TIE_BREAK = ("higher raw Sharpe", "more trades", "smaller k", "smaller r", "smaller n")
 
 
@@ -215,7 +217,7 @@ class Protocol:
                 "slippage": dataclasses.asdict(self.slippage),
             },
             "band": self.band,
-            "limits": dataclasses.asdict(self.limits),
+            "limits": limits_content(self.limits),
             "halts": dataclasses.asdict(self.halts),
             "starting_equity": self.starting_equity,
             "risk_free_rate": self.risk_free_rate,
@@ -256,7 +258,7 @@ class Protocol:
             rates=Rates(**{name: Decimal(v) for name, v in costs["rates"].items()}),
             slippage=Slippage(**{name: Decimal(v) for name, v in costs["slippage"].items()}),
             band=Decimal(content["band"]),
-            limits=Limits(**_limits(content["limits"])),
+            limits=read_limits(content["limits"]),
             halts=HaltLimits(**{name: Decimal(v) for name, v in content["halts"].items()}),
             starting_equity=Decimal(content["starting_equity"]),
             risk_free_rate=Decimal(content["risk_free_rate"]),
@@ -382,9 +384,38 @@ def fixed_decimal(value: Decimal) -> str:
     return f"{value.normalize():f}"
 
 
-def _limits(raw: Mapping[str, Any]) -> dict[str, Any]:
-    """Each Limit read back: a count stays an integer, a fraction or an amount is a decimal."""
-    return {name: v if isinstance(v, int) else Decimal(v) for name, v in raw.items()}
+def limits_content(limits: Limits) -> dict[str, Any]:
+    """Every Limit as a Protocol states it: its value, or null when off. ``stop_required``
+    appears only when off: every Protocol frozen before Limits were declared (ADR 0020)
+    required a stop and does not name it, so its absence is the stop required, and those
+    Protocols serialise, and hash, as they were frozen."""
+    limits.require_stated()
+    content = {f.name: getattr(limits, f.name) for f in dataclasses.fields(limits)}
+    if content.pop(STOP_REQUIRED):
+        return content
+    return {**content, STOP_REQUIRED: False}
+
+
+def read_limits(raw: Mapping[str, Any]) -> Limits:
+    """The Limits a Protocol states, refusing one it leaves unstated: a count stays an
+    integer, a fraction or an amount is a decimal, and null is off."""
+    stated = dict(raw)
+    if stated.get(STOP_REQUIRED, False) is not False:
+        raise ValueError(
+            f"a Protocol states {STOP_REQUIRED} by leaving it out, or as false when off,"
+            f" not as {stated[STOP_REQUIRED]!r}"
+        )
+    stop_required = stated.pop(STOP_REQUIRED, True)
+    names = {f.name for f in dataclasses.fields(Limits)}
+    unknown = sorted(set(stated) - names)
+    if unknown:
+        raise ValueError(f"a Protocol states no Limit named {', '.join(unknown)}")
+    values: dict[str, Any] = {
+        name: v if v is None or isinstance(v, int) else Decimal(v) for name, v in stated.items()
+    }
+    limits = Limits(stop_required=stop_required, **values)
+    limits.require_stated()
+    return limits
 
 
 def _span(span: Span) -> dict[str, date]:

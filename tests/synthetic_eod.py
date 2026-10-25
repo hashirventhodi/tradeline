@@ -58,6 +58,7 @@ from typing import Any
 import psycopg
 
 from checkout import TEST_COMMIT
+from limits import PULLBACK
 from tradeline.config import UniverseRule
 from tradeline.costs import CostModel, Slippage, load_cost_schedule
 from tradeline.dates import IST, calendar_days, month_of, next_month
@@ -537,7 +538,7 @@ def freeze_protocol(
         terms or protocol_terms(first, last),
         strategy=strategy or PullbackV1(),
         rule_version=market.rule.version,
-        limits=limits or Limits(),
+        limits=limits or PULLBACK,
         halts=halts or HaltLimits(daily_loss=D("0.03"), drawdown=D("0.10")),
         schedule=load_cost_schedule(REPO_ROOT / "cost_rates.csv"),
         slippage=Slippage(),

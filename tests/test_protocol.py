@@ -17,6 +17,7 @@ So the Protocol covers the Universe months 2023-01 to 2024-06, eighteen, whose
 members are ALPHA, BETA, DELTA, EPSILON and GAMMA (OMEGA trades too little).
 """
 
+import json
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import date
@@ -27,6 +28,7 @@ import psycopg
 import pytest
 
 from checkout import TEST_COMMIT, dirty_checkout
+from limits import LOWVOL, PULLBACK
 from synthetic_eod import (
     COSTS_AS_OF,
     GRID,
@@ -46,9 +48,9 @@ from tradeline.dates import IST
 from tradeline.db import app_connection
 from tradeline.engine import backtest
 from tradeline.metrics import HaltLimits
-from tradeline.protocol import TIE_BREAK, Gate, Span, Window, content_hash
+from tradeline.protocol import TIE_BREAK, Gate, Protocol, Span, Window, canonical, content_hash
 from tradeline.revision import code_revision
-from tradeline.risk import Limits
+from tradeline.risk import UNSTATED, UnstatedLimits
 from tradeline.strategy.pullback import PullbackV1
 from tradeline.tick_sizes import load_tick_sizes
 
@@ -184,6 +186,70 @@ def test_a_protocol_frozen_from_the_same_terms_in_another_decimal_form_is_the_sa
     assert not again.written
 
 
+# --- Every Limit stated on or off (ADR 0020) ------------------------------------
+
+# ``pullback_v1``'s Protocol as frozen by #85 at c5588e7, its content as the Ledger holds it.
+PULLBACK_V1 = "41e47fd39af3c4409203da0280ef64523d36c0e55d41fadfc2f5fb0f4e802969"
+PULLBACK_V1_CONTENT = REPO_ROOT / "tests" / "fixtures" / "frozen_protocols" / "41e47fd39af3.json"
+
+
+def test_pullback_v1s_frozen_protocol_recomputes_to_its_hash_with_every_limit_on() -> None:
+    stored = PULLBACK_V1_CONTENT.read_text()
+
+    protocol = Protocol.from_content(json.loads(stored))
+
+    assert protocol.hash == PULLBACK_V1
+    assert canonical(protocol.content()) == stored
+    # Written before Limits were declared: a stop was always required.
+    assert protocol.limits == PULLBACK
+    # Still the code it was frozen at, so the engine runs it at this commit.
+    assert code_revision(type(PullbackV1()).__module__) == protocol.code_revision
+
+
+def test_a_protocol_that_leaves_a_limit_unstated_is_refused_at_freeze_naming_it(
+    conn: psycopg.Connection,
+) -> None:
+    before = len(queries.protocols(conn))
+    unstated = replace(PULLBACK, max_gross=UNSTATED, stop_required=UNSTATED)
+
+    with pytest.raises(UnstatedLimits, match="stop_required, max_gross"):
+        freeze_protocol(conn, MARKET, FIRST, LAST, limits=unstated)
+
+    assert len(queries.protocols(conn)) == before
+
+
+def test_the_lowvol_limit_set_freezes_with_its_limits_off_and_reads_back(
+    conn: psycopg.Connection,
+) -> None:
+    frozen = freeze_protocol(conn, MARKET, FIRST, LAST, limits=LOWVOL)
+
+    found = queries.protocol(conn, frozen.hash)
+
+    assert found is not None
+    assert found.protocol.limits == LOWVOL
+    assert found.protocol.content()["limits"] == {
+        "stop_required": False,
+        "risk_per_trade": None,
+        "min_reward_to_risk": None,
+        "max_new_entries": None,
+        "max_sector": None,
+        "max_open_positions": 30,
+        "max_position": D("0.15"),
+        "max_gross": D(1),
+        "participation_cap": D("0.01"),
+        "min_order_value": D(5000),
+    }
+    assert frozen.hash != freeze_protocol(conn, MARKET, FIRST, LAST).hash
+
+
+def test_a_stored_protocol_missing_a_limit_is_refused_naming_it() -> None:
+    content = json.loads(PULLBACK_V1_CONTENT.read_text())
+    del content["limits"]["max_sector"]
+
+    with pytest.raises(UnstatedLimits, match="max_sector"):
+        Protocol.from_content(content)
+
+
 def test_every_protocol_field_is_readable_through_the_query_layer(
     conn: psycopg.Connection,
 ) -> None:
@@ -215,7 +281,7 @@ def test_every_protocol_field_is_readable_through_the_query_layer(
     assert protocol.rates == load_cost_schedule(REPO_ROOT / "cost_rates.csv").rates(COSTS_AS_OF)
     assert protocol.slippage == Slippage(margin=D("0.0005"), impact=D("0.1"))
     assert protocol.band == D("0.05")
-    assert protocol.limits == Limits()
+    assert protocol.limits == PULLBACK
     assert protocol.limits.participation_cap == D("0.01")
     assert protocol.halts == HaltLimits(daily_loss=D("0.03"), drawdown=D("0.10"))
     assert protocol.starting_equity == D(500000)

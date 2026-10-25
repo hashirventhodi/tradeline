@@ -105,6 +105,8 @@ def freeze_protocol(
 
     ``costs_as_of_for_tests`` replaces that day, so a test's hand-worked costs do not move
     with the day it runs; nothing else passes it."""
+    # A Protocol states every Limit on or off (ADR 0020).
+    limits.require_stated()
     costs_as_of = costs_as_of_for_tests or datetime.now(IST).date()
     parameters = set(strategy.parameters())
     if set(terms.grid) != parameters:

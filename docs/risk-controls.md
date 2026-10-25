@@ -28,7 +28,7 @@ The sector Limit reads NSE's classification as of the Run. A day before the firs
 
 ## Limits by family
 
-Every Limit above is declared on or off, with its value, in each family's Protocol, and the engine refuses a Protocol that leaves one unstated (ADR 0020). The table above is `pullback_v1`'s. For `lowvol`:
+Every Limit above is declared on or off, with its value, in each family's Protocol, and the engine refuses a Protocol that leaves one unstated (ADR 0020). The table above is `pullback_v1`'s. The Risk Engine's Limits (`tradeline.risk.Limits`) are the rows from risk per trade to min reward to risk without the two Halts, which the Protocol states apart; the order types, short selling and derivatives are fixed in code, not declared. A Limit off is written as null in the Protocol and skipped by the Risk Engine. Stop required is written only when off: the Protocols frozen before ADR 0020, `pullback_v1`'s `41e47fd39af3` among them, always required a stop without naming it, so its absence means on and they keep their hashes. Risk per trade and min reward to risk are read off the stop, so they can be on only while a stop is required; with them off a portfolio Plan, an entry and its caller's size, is checked against the rest. For `lowvol`:
 
 | Limit | `lowvol` |
 |---|---|

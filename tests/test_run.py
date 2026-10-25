@@ -32,6 +32,7 @@ from typing import Any
 import psycopg
 import pytest
 
+from limits import PULLBACK
 from synthetic_eod import (
     EXIT_BAND,
     REPO_ROOT,
@@ -51,14 +52,13 @@ from tradeline import queries
 from tradeline.cli import main
 from tradeline.db import app_connection
 from tradeline.engine import StoredMarketData, run
-from tradeline.risk import Limits
 from tradeline.strategy.pullback import PullbackV1
 from tradeline.tick_sizes import load_tick_sizes
 
 MARKET = base_market()
 NEXT_DAY = date(2023, 6, 16)
 RISK: dict[str, Any] = {
-    "limits": Limits(),
+    "limits": PULLBACK,
     "tick_sizes": load_tick_sizes(REPO_ROOT / "tick_sizes.csv"),
     "starting_equity": STARTING_EQUITY,
     "band": EXIT_BAND,

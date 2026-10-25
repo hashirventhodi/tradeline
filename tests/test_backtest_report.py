@@ -46,6 +46,7 @@ import io
 import json
 import statistics
 import uuid
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -53,6 +54,7 @@ from typing import Any
 
 import pytest
 
+from limits import PULLBACK
 from synthetic_eod import (
     RUN_DAY,
     TWO_YEARS,
@@ -298,7 +300,7 @@ def test_the_report_counts_the_candidates_beyond_the_passes(
         RUN_DAY,
         RUN_DAY,
         frozen_over=QUARTER,
-        limits=Limits(max_new_entries=1),
+        limits=replace(PULLBACK, max_new_entries=1),
     )
 
     assert report["candidates_beyond_passes"] == 2

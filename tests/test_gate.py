@@ -43,6 +43,7 @@ from typing import Any
 import psycopg
 import pytest
 
+from limits import PULLBACK
 from synthetic_eod import (
     REPO_ROOT,
     WALK_FORWARD_RANGE,
@@ -66,7 +67,6 @@ from tradeline.holdout import run_holdout
 from tradeline.metrics import HaltLimits
 from tradeline.protocol import Gate
 from tradeline.protocol_report import read_protocol_report, report_protocol
-from tradeline.risk import Limits
 from tradeline.strategy import Strategy
 from tradeline.strategy.pullback import PullbackV1
 from tradeline.tick_sizes import load_tick_sizes
@@ -75,7 +75,7 @@ from tradeline.walk_forward import walk_forward
 D = Decimal
 CALENDAR = repo_calendar()
 TICK_SIZES = load_tick_sizes(REPO_ROOT / "tick_sizes.csv")
-LIMITS = Limits(max_sector=D(1))
+LIMITS = replace(PULLBACK, max_sector=D(1))
 HALTS = HaltLimits(daily_loss=D("0.002"), drawdown=D("0.004"))
 PASSING = Gate(D("0.5"), D("0.15"), D("1.15"), 7)
 FAILING = replace(PASSING, profit_factor_above=D("1.2"))
