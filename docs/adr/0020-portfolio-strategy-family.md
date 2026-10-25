@@ -1,0 +1,26 @@
+---
+status: accepted
+date: 2026-10-25
+---
+# A portfolio Strategy declares its own Limits, Halts on Relative Drawdown, and is credited dividends and demergers
+
+`pullback_v1` failed the Backtest Gate (#85), and the only Strategies with published evidence of clearing Indian delivery costs are slow, long-only factor portfolios held one to six months (`docs/research.md`, "Swing and position strategies net of delivery costs"). The next family, `lowvol`, holds the 30 least volatile names of the Universe at equal weight and Rebalances twice a year. That shape does not fit controls built for a swing trade: it has no stop, no target and no reward to risk, it holds 30 names, and it is fully invested in the market by design. It is decided before Phases 3 to 6 so that the Risk Engine, scheduler and Halts are not hardened around the wrong portfolio. Grilled on 2026-10-25 (Phase 2b issue).
+
+## Every Limit is declared, per family, in the Protocol
+
+The Risk Engine's code is shared. Each family's Protocol states every Limit in `docs/risk-controls.md` as on, with its value, or off, and the engine refuses a Protocol that leaves any Limit unstated, so a Limit added later can never silently default to off for an existing family. `pullback_v1`'s frozen Protocol is unchanged. For `lowvol`: stop required, minimum reward to risk, risk per trade, maximum new entries per Run and the sector Limit are off; at most 30 Positions; per Position 15 percent of Equity at entry, gross exposure 100 percent, the Participation Cap at 1 percent and the Rs 5,000 minimum Order value are on. The sector Limit is off because NSE's NIFTY100 Low Volatility 30, the tested form and the comparison fund, has none; a 30 percent cap would bind in FMCG, pharma or IT and make a Strategy nobody has studied. Sector weights are reported at every Rebalance, with the largest weight any sector reached between them.
+
+## The performance Halt watches Relative Drawdown
+
+An absolute drawdown Halt would stop a fully invested portfolio for owning the market in a crash, which is the risk the Operator chose by benchmarking to an index fund. The daily-loss and drawdown Halts are off for this family, and one performance Halt replaces them: Relative Drawdown, the fall of the Strategy's value over the Benchmark's from its running peak, both before tax (an annual tax debit would be an artificial one-day step) and with dividends counted, computed daily. Its threshold is set before any backtest from the worst Relative Drawdown of the NIFTY100 Low Volatility 30 Total Return Index against the NIFTY 500 Total Return Index from 2005-04 to 2019-09, rounded up to the next 5 points; the source is NSE's archive host or niftyindices.com. Only if neither serves that history does it fall back to the worst calendar-year shortfall in NSE's 2018 white paper, against the NIFTY 100, which is not the same measure and will tend to be too low; the Protocol records which was used, and the report lists the days the Halt would have fired near the top. Index history before the index's launch is backfilled, acceptable for a risk threshold and never evidence of performance. The operational Halts (the Operator's, and those for stale data, a reconciliation mismatch or a missed Session Login) are unchanged. Under Halt a Rebalance places no buys and still sells leavers.
+
+## Dividends and demergers are credited as cash
+
+A Strategy holding for months against a Total Return Benchmark is penalised by the size of its whole published edge if it earns no dividends. ADR 0006 still adjusts no dividend; this is cash, not adjustment. A Position held at the close before a dividend's Ex-Date is credited the dividend in cash on the Ex-Date, as the Total Return Index reinvests it. The amount is read from NSE's subject: per-share amounts, a percent of face value, and several dividends in one subject each credited. A demerger is credited from a reviewed, checked-in table (parent, child, entitlement ratio, Ex-Date, the announced split of cost basis, each row citing NSE or the company): a holder at the close before the Ex-Date is credited, on the child's first listing day, the entitled shares times the child's first close in the Raw Series, and that credit is taxed as a sale against the child's share of the basis (zero if none was announced, which overstates tax). It reads the new security's own prices, so it is not the price-derived factor ADR 0006 rejected. Rights issues are reported, each Position held through one with its Ex-Date gap and its effect on excess return; if they matter, the planned fix is the same table, valuing entitlements at their traded price on NSE.
+
+## Considered options
+
+- **Keep `pullback`'s Limits and Halts for every family.** Rejected: a stop-based sizing rule and a 10 percent absolute drawdown Halt have no meaning for a portfolio that holds the market's risk on purpose.
+- **A sector cap at 30 or 40 percent.** Rejected: a number chosen without evidence, and a change to the published rule.
+- **A cash credit equal to a demerger's Ex-Date gap.** Rejected: a price-derived value, the kind ADR 0006 refused for adjustment.
+- **Leaving demergers unmodelled until a report shows they matter.** Rejected: the Holdout holds ITC Hotels' demerger (2025-01-06) and the Stitched Curve Jio Financial's (2023-07-20), and the Holdout can be run only once.

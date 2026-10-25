@@ -103,7 +103,37 @@ The grilling's other decisions (the Strategy's exact rule, the grid, the fill mo
 - **Runtime: passes, after two fixes the run found.** First measured, the eight In-Sample cells recorded in 49 minutes took up to 9.5 minutes each, about 24 hours for the Protocol. Two queries were planned against Ledger tables whose statistics read empty, and walked every account's rows and the dead rows each rolled-back cell leaves (commits `3a6af7b`, `89a7531`, `b297dc5`). After them, measured alone on the laptop with the Compose Postgres: one two-year cell 155.8 s from start-up; Walk-Forward 3,592.8 s, its cells 13.7 to 119.5 s (median 15.6 s); the Holdout 147.8 s; the report with the c sensitivity 948.6 s; with the freeze (70.5 s), 79 minutes in all.
 - **Three changes the run made, each in its own commit before the final freeze:** an Instrument's Raw Series is its rows in the equity listing series (`58e208f`; block deals and bonds under its Symbol were read as its bars); the two query-plan fixes, shown to change no result by eight In-Sample cells reproduced exactly under Protocol `f9285f6631ca`, which differs from the stopped `c0527f5740ff` in its commit alone; and the target priced at the Plan's own multiple of the rounded risk, rounded up (`c5588e7`), found from trade counts (98 percent of Plans at r = 1.5 Blocked for the minimum reward to risk) before any result was read.
 
+## Phase 2b: The low-volatility family
+
+Grilled on 2026-10-25, after #85's Gate failure; decisions in ADR 0020 and the 2026-10-25 amendments to ADR 0007 and ADR 0015. It comes before Phase 3 so that the Risk Engine, scheduler and Halts are not hardened around the swing-trade shape. Phase 2's acceptance run stays as recorded.
+
+Build: `lowvol_v1`, family `lowvol`; Limits declared per family in the Protocol; the Relative Drawdown Halt and its threshold; dividend crediting with its parser; the demerger table and Demerger Credits; the tax ledger and Liquidation Value; Benchmark ingestion from AMFI NAV history and the factor-fund comparison; the Benchmark Gate and the report's additions; the Drift Replay; the pre-Holdout checks; the weekly post-freeze Integrity Check; the acceptance run.
+
+The rule, frozen before any backtest:
+
+- **Eligible:** a member of the Universe of the month containing the decision day, with 252 daily log returns over its last 253 trading days in the Adjusted Series as of the decision day, none missing. A name suspended inside that year is ineligible.
+- **Ranked:** by the sample standard deviation of those log returns, lowest first, ties by Symbol.
+- **Held:** 30 names at equal weight. At a Rebalance a held name leaves if it ranks below 60th (NSE's buffer of twice the count, kept literally although our eligible set is larger than NSE's, as the Protocol notes), has become ineligible, or has left the Universe; empty slots are filled with the best-ranked names not held, in rank order, until 30 are held. A name that leaves the Universe between Rebalances is held until the next one.
+- **Rebalances:** decided after the close of the last trading day of March and of September. Leavers are sold at the next open; entrants are bought the trading day after, splitting the cash then held, each at most 15 percent of Equity. Continuing names are never trimmed. An account starts with an Initial Buy on its first trading day, which is not a Rebalance.
+- **Grid:** one cell. The Stitched Curve is one continuous backtest over 2019-10 to 2024-09 (10 Rebalances); the Holdout 2024-10-01 to 2026-09-30 holds 4.
+
+Accept when:
+
+- A Protocol that leaves any Limit unstated is refused, and `pullback_v1`'s frozen Protocol still verifies unchanged.
+- The rule above is shown on a synthetic fixture: eligibility with a missing day, the buffer at ranks 30, 31, 60 and 61, a held name leaving the Universe between Rebalances, ties by Symbol, sales on the Rebalance day and buys the next, cash split with the 15 percent cap, and an Initial Buy.
+- Dividends: per-share, percent-of-face-value and several-in-one subjects are credited on the Ex-Date to a holder at the prior close. Over every Universe member eligible at any decision date from 2019-10 to 2026-09, every dividend subject parses or is listed with a reason, and the count is reported.
+- Demergers: the table holds ITC Hotels (1 for 10, Ex-Date 2025-01-06, listed 2025-01-29, basis 86.49 / 13.51) and Jio Financial (1 for 1, 2023-07-20, listed 2023-08-21, basis 95.32 / 4.68), each citing its source, and has been checked against NSE's Corporate Action list for every eligible member over 2019-10 to 2026-09. A credit is cash at the child's first close in the Raw Series and is taxed as a sale against its basis.
+- The tax ledger passes synthetic tests for: the twelve-month cut on the day before, the day of and the day after the anniversary, citing the provision; set-off of each kind of loss; eight-year carry-forward; the debit on the first trading day after March 31; cess; settlement at liquidation with unused losses dropped and reported; dividends at the configured rate; a Demerger Credit taxed against its basis; the Benchmark's own holding rule, a twelve-month period taxing it as short-term; and a later-dated schedule row taking effect on its date.
+- The Benchmark is the direct-plan, growth-option code of the Motilal Oswal Nifty 500 Index Fund, from AMFI's NAV history from 2019-09-11, and the build fails if its scheme name in AMFI's master lacks "Direct" or "Growth". Its stamp duty, STT and exit load come from the dated schedule. The ICICI Prudential Nifty 100 Low Vol 30 ETF's NAV is fetched for the comparison.
+- The Relative Drawdown threshold is computed from NIFTY100 Low Volatility 30 TRI and NIFTY 500 TRI history from 2005-04 to 2019-09 (NSE's archive host or niftyindices.com), or, only if neither serves it, from NSE's 2018 white paper, and the Protocol records which and that the index history before launch is backfilled.
+- The Drift Replay at a commit other than the Protocol's reproduces the Stitched Curve's holdings, Fills, costs, dividends and tax ledger exactly, is recorded apart, is refused for the Holdout, and is never read by the Gate.
+- The engine refuses to start the Holdout until the pre-Holdout checks pass: the contract-note test passed or explicitly accepted as unmet, the dividend parse and demerger checks above, and the tax tests.
+- The acceptance run freezes `lowvol_v1` as Not Independent, with its reason, runs the Stitched Curve and the Holdout once, and reports honestly, pass or fail: annualised excess of Liquidation Value over the Benchmark above zero and drawdown no worse than the Benchmark's plus 2 points on both curves, at least 8 Rebalances on the Stitched Curve; the information ratio prominently; Sharpe, profit factor and results before tax; the factor-fund comparison; sector weights and their peaks; the largest name weight; cash at every Rebalance; every dividend, Demerger Credit and rights issue held through with its effect; the days the Relative Drawdown Halt would have fired near the top; the rate the Benchmark was taxed at; and the surcharge caveat. It cannot pass before a Fresh Period of twelve months and two Rebalances after its Initial Buy, run as a backtest.
+- The weekly Integrity Check over post-freeze data alerts on a gap.
+
 ## Phase 3: Risk Engine, Paper Broker on live data, Ledger, scheduler
+
+**Phase 2b (2026-10-25).** Phase 3 must not touch the `strategy` package: a paper Run refuses a Strategy version hash other than the frozen one, and a commit without a passing Drift Replay. Paper starts when Phase 3 is done, with its own Initial Buy, and its Gate is fidelity (ADR 0015 amendment). The Halts it builds are the operational ones and `lowvol`'s Relative Drawdown Halt.
 
 Build: Limits and Risk Engine with Pass and Block, Halt and Flatten, Paper Broker against live Kite quotes, scheduled daily Run, Session Login flow with Data-Only Mode, Ledger completeness.
 
@@ -120,6 +150,8 @@ Accept when:
 **#72, 2026-10-24.** The Risk Engine's Limits, sizing, Pass and Block moved to Phase 2, since a backtest without them measures a portfolio live would never hold. The first three acceptance lines above (the property-based test, the sequential Blocks, the Pass bound to its Plan) are Phase 2's now. Phase 3 keeps Halt and Flatten, the daily-loss and drawdown Halts (a backtest reports the days they would have fired and never simulates them, since every Halt needs the Operator to clear it), the Paper Broker against live Kite quotes, the scheduled Run, Session Login and Data-Only Mode, and Ledger completeness. A member of the Universe in the Unclassified sector raises a stale-sector-map alert in paper and live.
 
 ## Phase 4: AI layer in Shadow Mode
+
+**Deferred (2026-10-25, Phase 2b).** `lowvol` adds perhaps 5 to 10 names a Rebalance, so the AI Promotion Gate's 200 shadow decisions would take until about 2029. Phase 4 waits until a family trades often enough to be evaluated. ADR 0001 is unchanged.
 
 Build: news filter, thesis, skeptic, base rates, structured output schemas, prompt versioning, shadow log, AI Promotion Gate evaluation, cost tracking.
 
@@ -155,4 +187,4 @@ Accept when:
 
 ## Ongoing: Gates
 
-Backtest Gate (phase 2), Paper Gate (90 trading days after phase 3), Live Gate (90 days after phase 6 with Approvals), AI Promotion Gate (200 shadow decisions after phase 4). Each is evaluated by the system, shown on the dashboard, and recorded in the Ledger. Failing a Gate is an expected outcome of this project and is reported as such.
+Backtest Gate (phase 2; for `lowvol`, phase 2b, against the Benchmark after tax, passing only with a Fresh Period), Paper Gate (90 trading days after phase 3; for `lowvol`, fidelity through two Rebalances), Live Gate (90 days after phase 6 with Approvals), AI Promotion Gate (200 shadow decisions after phase 4). Each is evaluated by the system, shown on the dashboard, and recorded in the Ledger. Failing a Gate is an expected outcome of this project and is reported as such.
