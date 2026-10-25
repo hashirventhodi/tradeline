@@ -130,6 +130,7 @@ Accept when:
 - The engine refuses to start the Holdout until the pre-Holdout checks pass: the contract-note test passed or explicitly accepted as unmet, the dividend parse and demerger checks above, and the tax tests.
 - The acceptance run freezes `lowvol_v1` as Not Independent, with its reason, runs the Stitched Curve and the Holdout once, and reports honestly, pass or fail: annualised excess of Liquidation Value over the Benchmark above zero and drawdown no worse than the Benchmark's plus 2 points on both curves, at least 8 Rebalances on the Stitched Curve; the information ratio prominently; Sharpe, profit factor and results before tax; the factor-fund comparison; sector weights and their peaks; the largest name weight; cash at every Rebalance; every dividend, Demerger Credit and rights issue held through with its effect; the days the Relative Drawdown Halt would have fired near the top; the rate the Benchmark was taxed at; and the surcharge caveat. It cannot pass before a Fresh Period of twelve months and two Rebalances after its Initial Buy, run as a backtest.
 - The weekly Integrity Check over post-freeze data alerts on a gap.
+- The acceptance run's report decides whether rights issues need the table fix ADR 0020 plans (valuing entitlements at their NSE traded price): from each rights issue held through and its effect on excess return, the Operator records under #104 whether they matter, and if they do, an issue is opened for the fix before Phase 3 starts.
 
 ## Phase 3: Risk Engine, Paper Broker on live data, Ledger, scheduler
 
@@ -151,11 +152,12 @@ Accept when:
 
 ## Phase 4: AI layer in Shadow Mode
 
-**Deferred (2026-10-25, Phase 2b).** `lowvol` adds perhaps 5 to 10 names a Rebalance, so the AI Promotion Gate's 200 shadow decisions would take until about 2029. Phase 4 waits until a family trades often enough to be evaluated. ADR 0001 is unchanged.
+**Deferred (2026-10-25, Phase 2b).** `lowvol` adds perhaps 5 to 10 names a Rebalance, so the AI Promotion Gate's 200 shadow decisions would take until about 2029. Phase 4 waits until a family trades often enough to be evaluated; the first acceptance line below says what ends the wait. ADR 0001 is unchanged.
 
 Build: news filter, thesis, skeptic, base rates, structured output schemas, prompt versioning, shadow log, AI Promotion Gate evaluation, cost tracking.
 
 Accept when:
+- Before it starts, the wait ends: a Strategy Family that has passed the Backtest Gate made at least 200 entry decisions over twelve consecutive months of its Stitched Curve, so the AI Promotion Gate's 200 shadow decisions would take a year or less, and the Operator records that here as a revision ending the deferral.
 - Every AI call is reproducible from the Ledger: model, prompt version, inputs, structured output, tokens, latency.
 - The skeptic has no access path to the thesis writer's confidence; verified by schema and by test.
 - Shadow Mode is proven inert: a Run with the AI layer on and off produces identical Verdicts.
@@ -169,6 +171,7 @@ Build: FastAPI JSON endpoints, passkey or TOTP login, React dashboard (Positions
 Accept when:
 - Every Verdict and Block on the dashboard shows its reasons without leaving the page.
 - Halt from the dashboard and from Telegram both produce a Halt row in the Ledger within five seconds and are confirmed back to the Operator.
+- The weekly Integrity Check's alerts (`integrity-weekly`, which logs them at ERROR until then; README) reach the Operator on Telegram, one message naming each failing day.
 - Flatten cannot be triggered without the typed confirmation phrase; tested.
 - Dashboard renders usably at phone width.
 - Unauthenticated requests to every endpoint are refused; tested.

@@ -9,18 +9,23 @@ Each subject, worked by hand:
 
 - 2022-08-04, "Dividend - Rs 7 Per Share": the Position is bought at that
   morning's open, so it held nothing at the close before: nothing.
-- 2022-08-10, "Interim Dividend - Rs 5 Per Share": 111 x 5 = Rs 555.
+- 2022-08-10, "Interim Dividend - Rs 5 Per Share": 111 x 5 = Rs 555. NSE lists it
+  again as "Annual General Meeting/Interim Dividend - Rs 5.00 Per Share", the same
+  dividend on the same Ex-Date (as PIONEEREMB's "Rs 0.3" and "Rs 0.30" on 2022-07-04),
+  credited once.
 - 2022-08-17, "Dividend - 25%" with a stored face value of Rs 10: Rs 2.50 a
   share, 111 x 2.50 = Rs 277.50.
 - 2022-08-24, "Final Dividend - Rs 3 Per Share/Special Dividend - Rs 1.50 Per
   Share": both, Rs 4.50 a share, 111 x 4.50 = Rs 499.50.
 - 2022-08-30, "Dividend - Rs Per Share": no amount, so unparsed: nothing,
   listed with its reason.
-- 2022-09-08, "Dividend - Re 1 Per Share": held at the close before and sold
-  that day, so credited: Rs 111.
+- 2022-09-08, "Dividend - Re 1 Per Share" and "Interim Dividend - Re 1 Per
+  Share": held at the close before and sold that day, so credited, each a dividend
+  of its own although the amounts are equal (as UNIDT's final and interim Re 0.60 on
+  2023-08-25): Rs 222.
 
 BIRCH's "Dividend - Rs 9 Per Share" on 2022-08-10 is ex-dated while nothing
-holds it. In all, Rs 1,443 is credited.
+holds it. In all, Rs 1,554 is credited.
 
 Two Protocols are frozen over the same data, one crediting dividends and one
 not (as ``pullback_v1``'s does not); each is backtested in its own account.
@@ -66,10 +71,12 @@ MARKET = two_year_market().with_events(
     "ASTER",
     Dividend(BOUGHT, "Dividend - Rs 7 Per Share"),
     Dividend(PER_SHARE, "Interim Dividend - Rs 5 Per Share"),
+    Dividend(PER_SHARE, "Annual General Meeting/Interim Dividend - Rs 5.00 Per Share"),
     Dividend(PERCENT, "Dividend - 25%", face_value=10),
     Dividend(TWO, "Final Dividend - Rs 3 Per Share/Special Dividend - Rs 1.50 Per Share"),
     Dividend(UNPARSED, "Dividend - Rs Per Share"),
     Dividend(SOLD, "Dividend - Re 1 Per Share"),
+    Dividend(SOLD, "Interim Dividend - Re 1 Per Share"),
 )
 MARKET = MARKET.with_events("BIRCH", Dividend(PER_SHARE, "Dividend - Rs 9 Per Share"))
 # The Protocols' grid holds the n = 30 the backtests run at.
@@ -135,6 +142,7 @@ def test_a_holder_at_the_close_before_the_ex_date_is_credited_each_form_of_subje
             "1 dividend and 0 amounts in 'Dividend - Rs Per Share'",
         ),
         (SOLD, "ASTER", 111, D(1), D(111), None),
+        (SOLD, "ASTER", 111, D(1), D(111), None),
     ]
 
 
@@ -161,8 +169,8 @@ def test_the_credit_is_cash_in_the_account_and_a_ledger_row_tagged_by_mode(
         PERCENT: D("832.5"),
         TWO: D("1332"),
         UNPARSED: D("1332"),
-        SOLD: D("1443"),
-        END: D("1443"),
+        SOLD: D("1554"),
+        END: D("1554"),
     }
     assert {(c.mode, c.backtest_id) for c in credits} == {("backtest", on["backtest_id"])}
 
@@ -193,7 +201,7 @@ def test_every_dividend_subject_is_parsed_or_listed_with_its_reason(
     check = dividend_check(conn, ["ASTER", "BIRCH", "CEDAR"], start=START, end=END)
 
     assert check.summary() == {
-        "parsed": 6,
+        "parsed": 7,
         "unparsed": 1,
         "unparsed_subjects": [
             {

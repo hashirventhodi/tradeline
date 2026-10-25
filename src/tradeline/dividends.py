@@ -29,9 +29,16 @@ input to the pre-Holdout check (ADR 0007, 2026-10-25 amendment), which passes on
 when each is also in the reviewed list of unparsed subjects
 (``load_listed_dividends``), the Operator's reason why crediting it nothing is right.
 
-NSE can list one action under each series or Symbol; ``dividends`` keeps one per
-Ex-Date and subject. Two subjects on one Ex-Date are two dividends, as NSE files a
-final and an interim dividend (LT 2023-08-02: Rs 24 and a special Rs 6).
+NSE can list one action under each series or Symbol, and can list one dividend twice
+in two spellings on one Ex-Date (PIONEEREMB 2022-07-04: "Annual General
+Meeting/Dividend - Rs 0.3 Per Share" and "Dividend - Rs 0.30 Per Share");
+``dividends`` keeps one of each. Two read subjects on one Ex-Date are the same
+dividend when their parts naming a dividend say the same words around the same
+amounts (``_listing``): the meeting part, the case, the punctuation and an amount's
+trailing zeros aside. Otherwise they are two dividends, as NSE files a final and an
+interim dividend (LT 2023-08-02: Rs 24 and a special Rs 6), equal amounts included
+(UNIDT 2023-08-25: "Dividend - Re 0.60 Per Share" and "Interim Dividend - Re 0.60
+Per Share"). An unparsed subject is kept by its text alone.
 """
 
 from __future__ import annotations
@@ -147,24 +154,40 @@ class Dividend:
 
 
 def dividends(instrument: str, actions: Iterable[CorporateAction]) -> list[Dividend]:
-    """Each dividend ``actions`` name for ``instrument``, one per Ex-Date and subject (NSE
-    lists one under each series), oldest first."""
-    found: dict[tuple[date, str], Dividend] = {}
+    """Each dividend ``actions`` name for ``instrument``, oldest first: one per Ex-Date
+    and subject (NSE lists one under each series), and one per Ex-Date and listing of a
+    read subject (``_listing``: NSE lists some twice in two spellings)."""
+    found: dict[tuple[date, object], Dividend] = {}
     for a in sorted(actions, key=lambda a: (a.ex_date, a.subject, a.series)):
         if not names_dividend(a.subject):
             continue
+        reading = read_dividend(a.subject, a.face_value)
+        listing = _listing(a.subject) if isinstance(reading, Parsed) else a.subject
         found.setdefault(
-            (a.ex_date, a.subject),
-            Dividend(
-                instrument,
-                a.symbol,
-                a.ex_date,
-                a.subject,
-                a.face_value,
-                read_dividend(a.subject, a.face_value),
-            ),
+            (a.ex_date, listing),
+            Dividend(instrument, a.symbol, a.ex_date, a.subject, a.face_value, reading),
         )
     return list(found.values())
+
+
+def _listing(subject: str) -> tuple[tuple[tuple[str, ...], tuple[tuple[str, Decimal], ...]], ...]:
+    """What a read subject says of its dividends, however NSE spelled it: each part naming
+    a dividend as its words (lower case, no punctuation) and its amounts (no trailing
+    zeros, a percent apart from rupees). A part naming none, as "Annual General Meeting",
+    is left out."""
+    parts = []
+    for part in _PART.split(subject):
+        if not _DIVIDEND.search(part):
+            continue
+        amounts = tuple(
+            ("percent", Decimal(m["percent"]).normalize())
+            if m["percent"] is not None
+            else ("rupees", Decimal(m["rupees"] or m["bare"]).normalize())
+            for m in _AMOUNT.finditer(part)
+        )
+        words = tuple(re.findall(r"[a-z]+", _AMOUNT.sub(" ", part).lower()))
+        parts.append((words, amounts))
+    return tuple(parts)
 
 
 @dataclass(frozen=True)

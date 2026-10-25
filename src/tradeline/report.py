@@ -289,6 +289,15 @@ class Account:
             if t.gapped
         ]
 
+    def before_tax(self) -> tuple[Decimal, ...]:
+        """The curve before tax: each day's Equity with every tax debit to then (a year's
+        on the first trading day after its March 31, a liquidation's settlement on its day)
+        added back. The starting Equity is as is."""
+        added = [
+            sum((t.tax for t in self.tax_debits if t.day <= day), Decimal(0)) for day in self.days
+        ]
+        return (self.curve[0], *(e + a for e, a in zip(self.curve[1:], added, strict=True)))
+
     def halt_days(self, halts: HaltLimits) -> list[HaltDay]:
         return halt_days(
             self.days, self.curve, daily_loss=halts.daily_loss, drawdown=halts.drawdown
@@ -634,9 +643,9 @@ def relative_drawdown_days_of(
     conn: psycopg.Connection, protocol: Protocol, account: Account
 ) -> list[RelativeDrawdownDay] | None:
     """Every day of ``account`` its Protocol's Relative Drawdown Halt would have fired on:
-    its Equity at each day's close (before tax, dividends counted) over the Benchmark's NAV
-    as of the day, fallen from that ratio's peak by at least the threshold. None when the
-    Protocol has no such Halt."""
+    its Equity at each day's close before tax (``Account.before_tax``: a tax debit is not a
+    fall), dividends counted, over the Benchmark's NAV as of the day, fallen from that
+    ratio's peak by at least the threshold. None when the Protocol has no such Halt."""
     relative = protocol.halts.relative_drawdown
     if relative is None:
         return None
@@ -646,7 +655,7 @@ def relative_drawdown_days_of(
         return []
     navs = benchmark_values(conn, protocol.benchmark.funds, account.days)
     return relative_drawdown_days(
-        account.days, account.curve[1:], navs, threshold=relative.threshold
+        account.days, account.before_tax()[1:], navs, threshold=relative.threshold
     )
 
 

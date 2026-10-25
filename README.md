@@ -53,7 +53,7 @@ On a host whose cron ignores `CRON_TZ` (macOS), convert to the host's zone inste
 
 ### Weekly Integrity Check after a freeze
 
-Every day `collect-daily` loads after a Protocol's freeze is Fresh Period evidence, and a missing one is a hole in it until refetched (ADR 0007, 2026-10-25 amendment). `integrity-weekly` runs the Integrity Check over every day after the freeze day (in IST) to today, the whole span each time, so a gap keeps alerting until it is refetched with `collect-daily --date`. Each failure is one alert line naming its day; the command logs them as one `integrity alert` line at ERROR and exits 1, which is where the operational alerts go until Telegram carries them in Phase 5. A day an Instrument has an end-of-day row and no Kite candle is listed as a Kite Parity gap, never an Integrity failure or an alert. Nothing is written.
+Every day `collect-daily` loads after a Protocol's freeze is Fresh Period evidence, and a missing one is a hole in it until refetched (ADR 0007, 2026-10-25 amendment). `integrity-weekly` runs the Integrity Check over every day after the freeze day (in IST) to today, the whole span each time, so a gap keeps alerting until it is refetched with `collect-daily --date`. Each failure is one alert line naming its day; the command logs them as one `integrity alert` line at ERROR and exits 1, which is where the operational alerts go until Telegram carries them in Phase 5 (an acceptance line of Phase 5 in `docs/phases.md`). A day an Instrument has an end-of-day row and no Kite candle is listed as a Kite Parity gap, never an Integrity failure or an alert. Nothing is written.
 
 ```sh
 uv run tradeline integrity-weekly --protocol 0123456789ab       # after that Protocol's freeze day, to today

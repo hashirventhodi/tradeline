@@ -40,6 +40,7 @@ from tradeline.protocol import (
     TIE_BREAK,
     Correction,
     DataSnapshot,
+    Evidence,
     MonthSnapshot,
     Protocol,
     Terms,
@@ -211,7 +212,8 @@ def freeze_protocol(
         correction=None if correction is None else _resolved(conn, correction),
     )
     if protocol.correction is not None:
-        check_correction(conn, protocol)
+        evidence = check_correction(conn, protocol)
+        protocol = replace(protocol, correction=replace(protocol.correction, evidence=evidence))
     content = canonical(protocol.content())
     found = content_hash(protocol.content())
     with conn.transaction():
@@ -236,14 +238,15 @@ def _resolved(conn: psycopg.Connection, correction: Correction) -> Correction:
     return replace(correction, corrects=corrected.hash)
 
 
-def check_correction(conn: psycopg.Connection, protocol: Protocol) -> None:
+def check_correction(conn: psycopg.Connection, protocol: Protocol) -> Evidence:
     """Refuse ``protocol`` as a Machinery Correction unless it is one (ADR 0007
     amendment): the same Strategy version hash (family, name and code revision) as the
     Protocol it corrects, with the same grid, Windows, Holdout and Gate, so the Holdout
     result it reads answers the same question; frozen at a commit other than that
     Protocol's, the fixed one; correcting a version whose Holdout has run (before it, a fix
     is a new Protocol and costs nothing); and its failing test written at a commit before
-    the fix (``revision.test_written_before``)."""
+    the fix, failing there and passing at the fix when pytest runs it at each
+    (``revision.test_failed_before``). The evidence with what pytest said at each."""
     correction = protocol.correction
     assert correction is not None
     found = queries.protocol(conn, correction.corrects)
@@ -281,7 +284,10 @@ def check_correction(conn: psycopg.Connection, protocol: Protocol) -> None:
             " Windows again"
         )
     evidence = correction.evidence
-    revision.test_written_before(evidence.test, evidence.failed_at, protocol.git_commit)
+    failed, passed = revision.test_failed_before(
+        evidence.test, evidence.failed_at, protocol.git_commit
+    )
+    return replace(evidence, failed=failed.summary, passed=passed.summary)
 
 
 def verify_snapshot(

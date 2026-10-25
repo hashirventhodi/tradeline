@@ -18,8 +18,6 @@ The Benchmark's NAV is synthetic, recorded as AMFI's answers and loaded by ``ing
 benchmark``: 20 on 2022-03-01, rising 1 paisa a trading day.
 """
 
-import contextlib
-import io
 import json
 import uuid
 from datetime import date, timedelta
@@ -32,13 +30,14 @@ import pytest
 from synthetic_eod import (
     BENCHMARK_SCHEME,
     FACTOR_FUND,
-    REPO_ROOT,
+    cli_ok,
     compute_universe_months,
-    config_text,
+    daily_navs,
     load_benchmark,
     load_demerger_table,
     load_index_history,
     load_market,
+    lowvol_config,
     lowvol_market,
     repo_calendar,
     write_amfi_fixtures,
@@ -46,7 +45,6 @@ from synthetic_eod import (
 )
 from tradeline import queries, revision
 from tradeline.benchmark import benchmark_liquidation
-from tradeline.cli import main
 from tradeline.db import app_connection
 from tradeline.engine import TRADED_VALUE_DAYS, StoredMarketData
 from tradeline.tax import Sale, liquidation_value, tax_ledger
@@ -65,31 +63,16 @@ STARTING_EQUITY = D(500000)
 Frozen = tuple[str, queries.FrozenProtocol, dict[str, Any], uuid.UUID]
 
 
-def _navs() -> dict[date, Decimal]:
-    days = CALENDAR.trading_days(date(2022, 3, 1), END)
-    return {day: D(20) + D("0.01") * i for i, day in enumerate(days)}
-
-
-NAVS = _navs()
+NAVS = daily_navs(CALENDAR, END, "0.01")
 
 
 def _config(directory: Path) -> Path:
-    config = directory / "tradeline.toml"
-    config.write_text(
-        config_text(lowvol_market(END))
-        + f'[tax]\nschedule = "{REPO_ROOT / "tax_rates.csv"}"\n'
-        + f'[benchmark]\nfunds = "{REPO_ROOT / "benchmark_funds.csv"}"\n'
-        + '[lowvol.protocol]\nholdout_start = "2023-05"\nholdout_months = 1\nwindows = 13\n'
-        "out_of_sample_months = 1\nin_sample_months = 1\ntax = true\n"
+    return lowvol_config(
+        directory,
+        lowvol_market(END),
+        'holdout_start = "2023-05"\nholdout_months = 1\nwindows = 13\n'
+        "out_of_sample_months = 1\nin_sample_months = 1\ntax = true\n",
     )
-    return config
-
-
-def _cli(database_url: str, config: Path, *argv: str) -> None:
-    with pytest.MonkeyPatch.context() as patch, contextlib.redirect_stdout(io.StringIO()):
-        patch.setenv("TRADELINE_CONFIG", str(config))
-        patch.setenv("DATABASE_URL", database_url)
-        assert main(list(argv)) == 0
 
 
 @pytest.fixture(scope="module")
@@ -114,11 +97,11 @@ def taxed(database_url: str, tmp_path_factory: pytest.TempPathFactory) -> Frozen
         # The Relative Drawdown Halt's threshold is frozen from it.
         load_index_history(conn)
     config = _config(directory)
-    _cli(database_url, config, "protocol", "freeze", "--strategy", "lowvol_v1")
+    cli_ok(database_url, config, "protocol", "freeze", "--strategy", "lowvol_v1")
     with app_connection(database_url) as conn:
         (found,) = queries.protocols(conn)
     out = directory / "walk_forward.json"
-    _cli(database_url, config, "backtest", "--protocol", found.hash, "--out", str(out))
+    cli_ok(database_url, config, "backtest", "--protocol", found.hash, "--out", str(out))
     with app_connection(database_url) as conn:
         walked = queries.walk_forward(conn, found.hash)
     assert walked is not None
@@ -352,7 +335,7 @@ def test_a_drift_replay_at_a_later_commit_reproduces_the_tax_ledger(
     database_url, found, _, backtest_id = taxed
     monkeypatch.setattr(revision, "running_commit", lambda: "1a7e" * 10)
 
-    _cli(database_url, _config(tmp_path), "backtest", "drift", "--protocol", found.hash)
+    cli_ok(database_url, _config(tmp_path), "backtest", "drift", "--protocol", found.hash)
 
     with app_connection(database_url) as conn:
         (replay,) = queries.drift_replays(conn, protocol=found.hash)

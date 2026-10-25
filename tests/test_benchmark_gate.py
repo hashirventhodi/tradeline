@@ -19,13 +19,15 @@ The market is ``synthetic_eod.lowvol_market`` run on to 2023-05-31, as in
   and never moves, so H04's holder is credited a tenth of its shares times Rs 50.
 - H03 has a rights issue ex 2022-11-15, opening Re 1 under the close before and back the
   next day.
+- N03, an entrant of the 2022-09-30 Rebalance, opens Rs 5 up on 2022-10-04, its buy's
+  session, and back on 2022-10-06: over 1 percent above the close its limit was set
+  from, so the buy goes unfilled and is never retried; its share stays in cash until the
+  next Rebalance.
 
 The Benchmark's NAV rises 1 paisa a trading day from 20; the factor fund's 2 paisa from
 20, split 1 for 10 from 2022-12-01 (``fund_unit_splits`` of the test).
 """
 
-import contextlib
-import io
 import json
 from dataclasses import replace
 from datetime import date
@@ -45,19 +47,20 @@ from synthetic_eod import (
     Gap,
     Rights,
     Stock,
+    cli_ok,
     compute_universe_months,
-    config_text,
+    daily_navs,
     load_benchmark,
     load_index_history,
     load_market,
     load_sectors_on,
+    lowvol_config,
     lowvol_market,
     repo_calendar,
     write_amfi_fixtures,
     write_fixtures,
 )
 from tradeline import queries
-from tradeline.cli import main
 from tradeline.config import NOT_INDEPENDENT_REASON
 from tradeline.costs import load_cost_schedule
 from tradeline.db import app_connection
@@ -73,6 +76,7 @@ END = date(2023, 5, 31)
 FIRST_DAY = date(2022, 4, 1)
 STARTING_EQUITY = D(500000)
 SPLIT = date(2022, 12, 1)
+UNFILLED = date(2022, 10, 4)
 UNPARSED = ListedDividend("H02", date(2022, 7, 15), "Dividend - Rs Per Share", "states no amount")
 
 
@@ -93,6 +97,7 @@ def _market() -> Any:
         Gap(date(2022, 11, 16), D("1.00")),
     )
     market = market.with_events("H04", Demerger(SPLIT))
+    market = market.with_events("N03", Gap(UNFILLED, D("5.00")), Gap(date(2022, 10, 6), D("-5.00")))
     child = Stock(
         "HFOUR",
         "INE0HFOUR016",
@@ -107,35 +112,16 @@ def _market() -> Any:
     return replace(market, stocks=(*market.stocks, child))
 
 
-def _navs(step: str, *, split: date | None = None) -> dict[date, Decimal]:
-    days = CALENDAR.trading_days(date(2022, 3, 1), END)
-    navs = {}
-    for i, day in enumerate(days):
-        nav = D(20) + D(step) * i
-        navs[day] = nav / 10 if split is not None and day >= split else nav
-    return navs
-
-
 def _config(directory: Path) -> Path:
     splits = directory / "fund_unit_splits.csv"
     splits.write_text(f"scheme_code,ex_date,ratio,citation\n{FACTOR_FUND},{SPLIT},10,a test\n")
-    config = directory / "tradeline.toml"
-    config.write_text(
-        config_text(_market())
-        + f'[tax]\nschedule = "{REPO_ROOT / "tax_rates.csv"}"\n'
-        + f'[benchmark]\nfunds = "{REPO_ROOT / "benchmark_funds.csv"}"\n'
-        + f'unit_splits = "{splits}"\n'
-        + '[lowvol.protocol]\nholdout_start = "2023-05"\nholdout_months = 1\nwindows = 13\n'
-        "out_of_sample_months = 1\nin_sample_months = 1\n"
+    return lowvol_config(
+        directory,
+        _market(),
+        'holdout_start = "2023-05"\nholdout_months = 1\nwindows = 13\n'
+        "out_of_sample_months = 1\nin_sample_months = 1\n",
+        unit_splits=splits,
     )
-    return config
-
-
-def _cli(database_url: str, config: Path, *argv: str) -> None:
-    with pytest.MonkeyPatch.context() as patch, contextlib.redirect_stdout(io.StringIO()):
-        patch.setenv("TRADELINE_CONFIG", str(config))
-        patch.setenv("DATABASE_URL", database_url)
-        assert main(list(argv)) == 0
 
 
 Reported = tuple[str, queries.FrozenProtocol, Path, dict[str, Any]]
@@ -149,7 +135,10 @@ def reported(database_url: str, tmp_path_factory: pytest.TempPathFactory) -> Rep
     directory = tmp_path_factory.mktemp("benchmark_gate")
     fixtures = write_fixtures(market, directory / "eod", CALENDAR)
     amfi = write_amfi_fixtures(
-        {BENCHMARK_SCHEME: _navs("0.01"), FACTOR_FUND: _navs("0.02", split=SPLIT)},
+        {
+            BENCHMARK_SCHEME: daily_navs(CALENDAR, END, "0.01"),
+            FACTOR_FUND: daily_navs(CALENDAR, END, "0.02", split=SPLIT),
+        },
         directory / "amfi",
         first=date(2019, 9, 11),
         end=END,
@@ -167,10 +156,10 @@ def reported(database_url: str, tmp_path_factory: pytest.TempPathFactory) -> Rep
         load_index_history(conn)
         ingest_demergers(conn, load_demergers(table))
     config = _config(directory)
-    _cli(database_url, config, "protocol", "freeze", "--strategy", "lowvol_v1")
+    cli_ok(database_url, config, "protocol", "freeze", "--strategy", "lowvol_v1")
     with app_connection(database_url) as conn:
         (frozen,) = queries.protocols(conn)
-    _cli(database_url, config, "backtest", "--protocol", frozen.hash)
+    cli_ok(database_url, config, "backtest", "--protocol", frozen.hash)
     with app_connection(database_url) as conn:
         checks = check_holdout(
             conn,
@@ -182,7 +171,7 @@ def reported(database_url: str, tmp_path_factory: pytest.TempPathFactory) -> Rep
             tax_tests=lambda: TaxTestOutcome(True, "taken as passed"),
         )
         assert checks.passed, checks.summary()
-    _cli(database_url, config, "backtest", "holdout", "--protocol", frozen.hash)
+    cli_ok(database_url, config, "backtest", "holdout", "--protocol", frozen.hash)
     out = _report(database_url, config, frozen.hash, directory / "first")
     return database_url, frozen, config, json.loads(out.read_text())
 
@@ -190,7 +179,7 @@ def reported(database_url: str, tmp_path_factory: pytest.TempPathFactory) -> Rep
 def _report(database_url: str, config: Path, protocol: str, directory: Path) -> Path:
     directory.mkdir()
     out = directory / "report.json"
-    _cli(
+    cli_ok(
         database_url,
         config,
         *("backtest", "report", "--protocol", protocol),
@@ -276,6 +265,11 @@ def test_results_before_tax_add_back_the_tax_paid_and_owed(reported: Reported) -
     stitched = report["stitched_curve"]
     liquidation = stitched["liquidation"]
     before = stitched["against_benchmark"]["before_tax"]
+
+    # An add-back to the run that paid tax, not a run without it, and labelled so.
+    assert "added back" in before["note"]
+    assert "not a backtest run without tax" in before["note"]
+    assert "note" not in stitched["against_benchmark"]["after_tax"]
     after = stitched["against_benchmark"]["after_tax"]
 
     # Debited before the last day; the last day's Liquidation Value owes the rest, the
@@ -354,6 +348,21 @@ def test_cash_at_every_rebalance(reported: Reported) -> None:
     assert D(0) < D(initial["cash"]) < D("0.02")
     # H20's sale leaves more than three entrants capped at 15 percent of Equity can take.
     assert D(sold_h20["cash"]) > D("0.10")
+
+
+def test_an_unfilled_rebalance_buy_is_listed_and_its_share_stays_in_cash(
+    reported: Reported,
+) -> None:
+    database_url, _, _, report = reported
+    initial, rebalance, last = report["stitched_curve"]["portfolio"]["rebalances"]
+
+    (unfilled,) = rebalance["unfilled_buys"]
+    assert (unfilled["symbol"], unfilled["session"]) == ("N03", UNFILLED.isoformat())
+    assert unfilled["shares"] > 0 and D(unfilled["limit"]) > 0
+    assert unfilled["reason"]
+    # Never retried: N03 is not bought before the next Rebalance's buys.
+    assert all(p.opened_on > date(2023, 3, 31) for p in _positions(database_url, "N03"))
+    assert initial["unfilled_buys"] == [] and last["unfilled_buys"] == []
 
 
 def test_dividends_parsed_and_unparsed_are_counted(reported: Reported) -> None:
@@ -437,6 +446,8 @@ def test_the_markdown_renders_the_additions_after_the_gate(reported: Reported) -
     ):
         assert section in markdown
     assert "surcharge" in markdown
+    assert "not a backtest run without tax" in markdown
+    assert f"N03 on {UNFILLED.isoformat()}" in markdown
 
 
 def test_two_reports_of_one_protocol_over_the_same_data_write_the_same_json(

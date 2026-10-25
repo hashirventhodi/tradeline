@@ -63,6 +63,10 @@ EVIDENCE = Evidence(
     failed_at="f00d" * 10,
 )
 DESCRIPTION = "STT is charged on both sides of a delivery trade, as the contract note shows"
+# What pytest said of the evidence's test at its commit and at the fix, as ``fixed`` stands
+# them in.
+FAILED = revision.TestOutcome(False, "1 failed in 0.01s")
+PASSED = revision.TestOutcome(True, "1 passed in 0.01s")
 
 
 @pytest.fixture(scope="module")
@@ -88,11 +92,12 @@ def versions(database_url: str, tmp_path_factory: pytest.TempPathFactory) -> tup
 @contextlib.contextmanager
 def fixed() -> Iterator[None]:
     """At ``LATER``, the fixed commit, whose engine doubles STT; its evidence taken as
-    written first (``test_the_evidence_must_be_written_and_failing_before_the_fix`` checks
-    that against a real checkout)."""
+    written first, failing there and passing at the fix
+    (``test_the_evidence_must_be_written_and_failing_before_the_fix`` runs that against a
+    real checkout)."""
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(revision, "running_commit", lambda: LATER)
-        patch.setattr(revision, "test_written_before", lambda *args, **kwargs: None)
+        patch.setattr(revision, "test_failed_before", lambda *args, **kwargs: (FAILED, PASSED))
         stt_doubled(patch)
         yield
 
@@ -146,15 +151,26 @@ def test_a_correction_is_recorded_with_its_evidence_and_the_protocol_it_corrects
         frozen = queries.protocol(conn, result.hash)
     assert frozen is not None
     assert frozen.protocol.git_commit == LATER
-    assert frozen.protocol.correction == Correction(protocol, DESCRIPTION, EVIDENCE)
-    assert frozen.protocol.content()["correction"]["evidence"]["record"] == "contract_note"
+    recorded = replace(EVIDENCE, failed=FAILED.summary, passed=PASSED.summary)
+    assert frozen.protocol.correction == Correction(protocol, DESCRIPTION, recorded)
+    stated = frozen.protocol.content()["correction"]["evidence"]
+    assert (stated["record"], stated["failed"], stated["passed"]) == (
+        "contract_note",
+        "1 failed in 0.01s",
+        "1 passed in 0.01s",
+    )
 
 
 def test_the_evidence_must_be_written_and_failing_before_the_fix(tmp_path: Path) -> None:
+    """The test is run by pytest at each commit, in a checkout of its own: it must fail
+    where it was written and pass at the fix, and what pytest said at each is returned."""
     checkout = committed_checkout(tmp_path / "repo")
     (checkout / "tests").mkdir()
     (checkout / "tests" / "test_costs.py").write_text(
-        "def test_stt_matches_the_contract_note():\n    assert False\n"
+        "from pathlib import Path\n\n\n"
+        "def test_stt_matches_the_contract_note():\n"
+        '    assert "STT_SIDES = 2" in (Path(__file__).parents[1] / "code.py").read_text()\n\n\n'
+        "def test_already_passing():\n    assert True\n"
     )
     git(checkout, "add", "tests/test_costs.py")
     git(checkout, "commit", "--quiet", "-m", "Check STT against the contract note")
@@ -162,19 +178,29 @@ def test_the_evidence_must_be_written_and_failing_before_the_fix(tmp_path: Path)
     (checkout / "code.py").write_text("STT_SIDES = 2\n")
     git(checkout, "commit", "--quiet", "-am", "Charge STT on both sides")
     fix = git(checkout, "rev-parse", "HEAD").strip()
+    (checkout / "code.py").write_text("STT_SIDES = 1\n")
+    git(checkout, "commit", "--quiet", "-am", "Charge STT on one side again")
+    undone = git(checkout, "rev-parse", "HEAD").strip()
     test = "tests/test_costs.py::test_stt_matches_the_contract_note"
 
-    revision.test_written_before(test, failing, fix, directory=checkout)
+    failed, passed = revision.test_failed_before(test, failing, fix, directory=checkout)
+
+    assert (failed.passed, passed.passed) == (False, True)
+    assert "1 failed" in failed.summary and "1 passed" in passed.summary
     refusals = [
-        (test, fix, failing),  # the fix before the test
-        (test, fix, fix),  # written with the fix
-        ("tests/test_costs.py::test_another", failing, fix),  # no such test then
-        ("tests/test_tax.py::test_stt_matches_the_contract_note", failing, fix),
-        (test, "0" * 40, fix),  # no such commit
+        ((test, fix, failing), "is not before"),  # the fix before the test
+        ((test, fix, fix), "is not before"),  # written with the fix
+        (("tests/test_costs.py::test_another", failing, fix), "defines no test"),
+        (("tests/test_tax.py::test_stt_matches_the_contract_note", failing, fix), "no test file"),
+        ((test, "0" * 40, fix), "cannot read commit"),
+        (("tests/test_costs.py::test_already_passing", failing, fix), "passed at"),
+        ((test, failing, undone), "did not pass at"),  # the fix does not fix it
     ]
-    for arguments in refusals:
-        with pytest.raises(ValueError):
-            revision.test_written_before(*arguments, directory=checkout)
+    for arguments, refused in refusals:
+        with pytest.raises(ValueError, match=refused):
+            revision.test_failed_before(*arguments, directory=checkout)
+    # Each run's checkout is removed after it.
+    assert git(checkout, "worktree", "list").count("\n") == 1
 
 
 def test_a_correction_at_the_corrected_protocols_own_commit_is_refused(
@@ -306,6 +332,8 @@ def test_the_report_puts_the_old_and_new_stitched_curve_and_fresh_period_side_by
         "record": "contract_note",
         "citation": EVIDENCE.citation,
         "failed_at": EVIDENCE.failed_at,
+        "failed": FAILED.summary,
+        "passed": PASSED.summary,
     }
     stitched = found["stitched_curve"]
     metrics = ("trades", "sharpe", "max_drawdown", "profit_factor")

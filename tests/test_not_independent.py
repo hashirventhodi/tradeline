@@ -22,8 +22,6 @@ Rebalance minimum is set to 0 here: the outcome, once the Fresh Period may carry
 is decided by the Fresh Period's thresholds alone.
 """
 
-import contextlib
-import io
 import json
 from collections.abc import Callable
 from datetime import date, datetime
@@ -37,11 +35,14 @@ from psycopg import connect
 from synthetic_eod import (
     BENCHMARK_SCHEME,
     FACTOR_FUND,
-    REPO_ROOT,
+    cli,
+    cli_ok,
     compute_universe_months,
-    config_text,
+    daily_navs,
     load_benchmark,
+    load_demerger_table,
     load_index_history,
+    lowvol_config,
     lowvol_market,
     pass_holdout_checks,
     repo_calendar,
@@ -49,7 +50,6 @@ from synthetic_eod import (
     write_fixtures,
 )
 from tradeline import queries, revision
-from tradeline.cli import main
 from tradeline.dates import IST
 from tradeline.db import app_connection
 from tradeline.demergers import load_demergers
@@ -68,38 +68,20 @@ TWO_REBALANCES = date(2023, 10, 3)
 NOT_INDEPENDENT = "the family was chosen after reading results covering the Holdout's years"
 
 
-def _navs() -> dict[date, Decimal]:
-    days = CALENDAR.trading_days(date(2022, 3, 1), TWO_REBALANCES)
-    return {day: D(20) - D("0.01") * i for i, day in enumerate(days)}
-
-
 def _config(directory: Path) -> Path:
-    config = directory / "tradeline.toml"
-    config.write_text(
-        config_text(lowvol_market(TWO_REBALANCES))
-        + f'[tax]\nschedule = "{REPO_ROOT / "tax_rates.csv"}"\n'
-        + f'[benchmark]\nfunds = "{REPO_ROOT / "benchmark_funds.csv"}"\n'
-        + '[lowvol.protocol]\nholdout_start = "2022-09"\nholdout_months = 1\nwindows = 1\n'
+    return lowvol_config(
+        directory,
+        lowvol_market(TWO_REBALANCES),
+        'holdout_start = "2022-09"\nholdout_months = 1\nwindows = 1\n'
         "out_of_sample_months = 1\nin_sample_months = 1\nmin_stitched_rebalances = 0\n"
-        f'not_independent = "{NOT_INDEPENDENT}"\n'
+        f'not_independent = "{NOT_INDEPENDENT}"\n',
     )
-    return config
-
-
-def _cli(database_url: str, config: Path, *argv: str) -> str:
-    out = io.StringIO()
-    with pytest.MonkeyPatch.context() as patch, contextlib.redirect_stdout(out):
-        patch.setenv("TRADELINE_CONFIG", str(config))
-        patch.setenv("DATABASE_URL", database_url)
-        code = main(list(argv))
-    assert code == 0, out.getvalue()
-    return out.getvalue()
 
 
 def _report(database_url: str, config: Path, protocol: str, directory: Path) -> dict[str, Any]:
     directory.mkdir()
     out = directory / "report.json"
-    _cli(
+    cli_ok(
         database_url,
         config,
         *("backtest", "report", "--protocol", protocol),
@@ -125,7 +107,7 @@ def version(database_url: str, tmp_path_factory: pytest.TempPathFactory) -> Vers
     market = lowvol_market(TWO_REBALANCES)
     directory = tmp_path_factory.mktemp("not_independent")
     fixtures = write_fixtures(market, directory / "eod", CALENDAR)
-    navs = _navs()
+    navs = daily_navs(CALENDAR, TWO_REBALANCES, "-0.01")
     amfi = write_amfi_fixtures(
         {BENCHMARK_SCHEME: navs, FACTOR_FUND: navs},
         directory / "amfi",
@@ -148,16 +130,11 @@ def version(database_url: str, tmp_path_factory: pytest.TempPathFactory) -> Vers
         compute_universe_months(conn, market, date(2022, 7, 1), ONE_REBALANCE)
         load_benchmark(conn, amfi, end=TWO_REBALANCES)
         load_index_history(conn)
-        # The checked-in table's RELIANCE to JIOFIN lists inside this Market's span, without
-        # the stocks; this one's only row is before it.
-        table = directory / "demergers.csv"
-        table.write_text(
-            "parent,child,ratio,ex_date,listed_on,parent_basis,child_basis,citation\n"
-            "PARENT,CHILD,1:10,2020-06-01,2020-06-15,90,10,NSE/CMTR/00001\n"
-        )
-        ingest_demergers(conn, load_demergers(table))
+        # The checked-in table's RELIANCE to JIOFIN lists inside this Market's span; nothing
+        # holds RELIANCE, so the child's listing is never read.
+        load_demerger_table(conn)
     config = _config(directory)
-    _cli(database_url, config, "protocol", "freeze", "--strategy", "lowvol_v1")
+    cli_ok(database_url, config, "protocol", "freeze", "--strategy", "lowvol_v1")
     with app_connection(database_url) as conn:
         (frozen,) = queries.protocols(conn)
     with connect(database_url) as conn:
@@ -165,10 +142,10 @@ def version(database_url: str, tmp_path_factory: pytest.TempPathFactory) -> Vers
             "UPDATE protocols SET frozen_at = %s WHERE hash = %s",
             (datetime(2022, 9, 30, 16, tzinfo=IST), frozen.hash),
         )
-    _cli(database_url, config, "backtest", "--protocol", frozen.hash)
+    cli_ok(database_url, config, "backtest", "--protocol", frozen.hash)
     with app_connection(database_url) as conn:
         pass_holdout_checks(conn, frozen.hash)
-    _cli(database_url, config, "backtest", "holdout", "--protocol", frozen.hash)
+    cli_ok(database_url, config, "backtest", "holdout", "--protocol", frozen.hash)
     report = _report(database_url, config, frozen.hash, directory / "holdout_alone")
     return database_url, frozen.hash, config, fixtures, report
 
@@ -211,11 +188,11 @@ def fresh(version: Version, tmp_path_factory: pytest.TempPathFactory) -> Fresh:
     Protocol and the two reports' JSON."""
     url, protocol, config, fixtures, _ = version
     directory = tmp_path_factory.mktemp("fresh")
-    _cli(url, config, "backtest", "fresh", "--protocol", protocol)
+    cli_ok(url, config, "backtest", "fresh", "--protocol", protocol)
     one = _report(url, config, protocol, directory / "one")
     with app_connection(url) as conn:
         _load_to(conn, fixtures, TWO_REBALANCES, TWO_REBALANCES)
-    _cli(url, config, "backtest", "fresh", "--protocol", protocol)
+    cli_ok(url, config, "backtest", "fresh", "--protocol", protocol)
     two = _report(url, config, protocol, directory / "two")
     return url, protocol, one, two
 
@@ -291,12 +268,7 @@ def test_the_fresh_period_and_the_benchmark_start_with_the_initial_buy(fresh: Fr
 
 
 def _fresh_command(url: str, config: Path, protocol: str) -> tuple[int, str]:
-    out = io.StringIO()
-    with pytest.MonkeyPatch.context() as patch, contextlib.redirect_stdout(out):
-        patch.setenv("TRADELINE_CONFIG", str(config))
-        patch.setenv("DATABASE_URL", url)
-        code = main(["backtest", "fresh", "--protocol", protocol])
-    return code, out.getvalue()
+    return cli(url, config, "backtest", "fresh", "--protocol", protocol)
 
 
 def test_the_fresh_period_is_a_backtest_and_needs_no_paper_machinery(fresh: Fresh) -> None:

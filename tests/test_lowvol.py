@@ -24,11 +24,10 @@ with a Boundary Exit.
   September and October. A second account is run under Halt from the Rebalance's day.
 """
 
-import contextlib
-import io
 import json
 import uuid
-from datetime import date
+from dataclasses import replace
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -44,13 +43,15 @@ from synthetic_eod import (
     LOWVOL_RANGE,
     LOWVOL_REBALANCE,
     REPO_ROOT,
+    cli_ok,
     compute_universe_months,
-    config_text,
+    layout_lines,
     load_benchmark,
     load_demerger_table,
     load_index_history,
     load_market,
     lowvol_benchmark_navs,
+    lowvol_config,
     lowvol_market,
     pass_holdout_checks,
     repo_calendar,
@@ -58,9 +59,9 @@ from synthetic_eod import (
     write_fixtures,
 )
 from tradeline import queries
-from tradeline.cli import main
 from tradeline.db import app_connection
 from tradeline.engine import SeriesCache, backtest_span, run
+from tradeline.report import read_account, relative_drawdown_days_of
 from tradeline.strategy.lowvol import LowvolV1
 from tradeline.tick_sizes import load_tick_sizes
 
@@ -74,26 +75,7 @@ HELD_AT_START = [f"H{j:02}" for j in range(1, 31)]
 
 
 def _config(directory: Path) -> Path:
-    layout = LOWVOL_LAYOUT
-    config = directory / "tradeline.toml"
-    config.write_text(
-        config_text(lowvol_market()) + "[lowvol.protocol]\n"
-        f'holdout_start = "{layout.holdout_start:%Y-%m}"\n'
-        f"holdout_months = {layout.holdout_months}\n"
-        f"windows = {layout.windows}\n"
-        f"out_of_sample_months = {layout.out_of_sample_months}\n"
-        f"in_sample_months = {layout.in_sample_months}\n"
-        f'[tax]\nschedule = "{REPO_ROOT / "tax_rates.csv"}"\n'
-        f'[benchmark]\nfunds = "{REPO_ROOT / "benchmark_funds.csv"}"\n'
-    )
-    return config
-
-
-def _cli(database_url: str, config: Path, *argv: str) -> None:
-    with pytest.MonkeyPatch.context() as patch, contextlib.redirect_stdout(io.StringIO()):
-        patch.setenv("TRADELINE_CONFIG", str(config))
-        patch.setenv("DATABASE_URL", database_url)
-        assert main(list(argv)) == 0
+    return lowvol_config(directory, lowvol_market(), layout_lines(LOWVOL_LAYOUT))
 
 
 @pytest.fixture(scope="module")
@@ -116,11 +98,11 @@ def stitched(
         load_demerger_table(conn)
         load_index_history(conn)
     config = _config(directory)
-    _cli(database_url, config, "protocol", "freeze", "--strategy", "lowvol_v1")
+    cli_ok(database_url, config, "protocol", "freeze", "--strategy", "lowvol_v1")
     with app_connection(database_url) as conn:
         (found,) = queries.protocols(conn)
     out = directory / "walk_forward.json"
-    _cli(database_url, config, "backtest", "--protocol", found.hash, "--out", str(out))
+    cli_ok(database_url, config, "backtest", "--protocol", found.hash, "--out", str(out))
     with app_connection(database_url) as conn:
         walked = queries.walk_forward(conn, found.hash)
     assert walked is not None
@@ -337,10 +319,14 @@ def test_the_report_lists_every_day_the_relative_drawdown_halt_would_have_fired_
     runs = [r for r in _account(database_url, backtest_id)["runs"] if r.as_of >= FIRST_DAY]
     # The Relative Drawdown as defined (ADR 0020): Equity at each close over the Benchmark's
     # NAV, its fall from that ratio's running peak.
+    # Before tax: the tax debited on or before the day added back.
+    with app_connection(database_url) as conn:
+        debits = queries.tax_debits(conn, mode="backtest", backtest_id=backtest_id)
     expected, peak = {}, D(0)
     for r in runs:
         assert r.equity is not None
-        ratio = r.equity / navs[r.as_of]
+        paid = sum((t.tax for t in debits if t.day <= r.as_of), D(0))
+        ratio = (r.equity + paid) / navs[r.as_of]
         peak = max(peak, ratio)
         if 1 - ratio / peak >= D("0.30"):
             expected[r.as_of.isoformat()] = str((1 - ratio / peak).quantize(D("0.000001")))
@@ -355,6 +341,38 @@ def test_the_report_lists_every_day_the_relative_drawdown_halt_would_have_fired_
     assert min(listed) > LOWVOL_BENCHMARK_RISE.isoformat()
     late = [d.isoformat() for d in CALENDAR.trading_days(date(2022, 9, 15), LAST_DAY)]
     assert set(late) <= set(listed)
+
+
+def test_a_tax_debit_alone_makes_no_day_the_relative_drawdown_halt_would_have_fired(
+    stitched: tuple[str, queries.FrozenProtocol, dict[str, Any], uuid.UUID],
+) -> None:
+    database_url, frozen, _, backtest_id = stitched
+    # The Benchmark is flat from March to July: an account over March and April whose
+    # Equity is flat but for the year's debit on 2022-04-01, a fall of over 80 percent
+    # after tax and none before it.
+    days = list(CALENDAR.trading_days(date(2022, 3, 1), date(2022, 4, 29)))
+    debit = queries.TaxDebit(
+        day=FIRST_DAY,
+        financial_year=2021,
+        short_term_gain=D("2000000"),
+        long_term_gain=D(0),
+        dividends=D(0),
+        tax=D("416000"),
+        settled=False,
+        dropped_short_term_loss=None,
+        dropped_long_term_loss=None,
+    )
+    start = frozen.protocol.starting_equity
+    with app_connection(database_url) as conn:
+        account = replace(
+            read_account(conn, backtest_id).through(FIRST_DAY - timedelta(days=1)),
+            days=tuple(days),
+            curve=(start, *(start - (debit.tax if d >= FIRST_DAY else 0) for d in days)),
+            tax_debits=(debit,),
+        )
+        fired = relative_drawdown_days_of(conn, frozen.protocol, account)
+
+    assert fired == []
 
 
 def test_a_halted_rebalance_sells_its_leavers_and_places_no_buy(
@@ -415,8 +433,8 @@ def test_the_full_report_lists_the_relative_drawdown_halt_days_of_each_curve_aft
     out, markdown = tmp_path / "report.json", tmp_path / "report.md"
     with app_connection(database_url) as conn:
         pass_holdout_checks(conn, frozen.hash)
-    _cli(database_url, config, "backtest", "holdout", "--protocol", frozen.hash)
-    _cli(
+    cli_ok(database_url, config, "backtest", "holdout", "--protocol", frozen.hash)
+    cli_ok(
         database_url,
         config,
         *("backtest", "report", "--protocol", frozen.hash),
