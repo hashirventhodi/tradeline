@@ -24,8 +24,6 @@ with a Boundary Exit.
   September and October. A second account is run under Halt from the Rebalance's day.
 """
 
-import contextlib
-import io
 import json
 import uuid
 from dataclasses import replace
@@ -45,13 +43,15 @@ from synthetic_eod import (
     LOWVOL_RANGE,
     LOWVOL_REBALANCE,
     REPO_ROOT,
+    cli_ok,
     compute_universe_months,
-    config_text,
+    layout_lines,
     load_benchmark,
     load_demerger_table,
     load_index_history,
     load_market,
     lowvol_benchmark_navs,
+    lowvol_config,
     lowvol_market,
     pass_holdout_checks,
     repo_calendar,
@@ -59,7 +59,6 @@ from synthetic_eod import (
     write_fixtures,
 )
 from tradeline import queries
-from tradeline.cli import main
 from tradeline.db import app_connection
 from tradeline.engine import SeriesCache, backtest_span, run
 from tradeline.report import read_account, relative_drawdown_days_of
@@ -76,26 +75,7 @@ HELD_AT_START = [f"H{j:02}" for j in range(1, 31)]
 
 
 def _config(directory: Path) -> Path:
-    layout = LOWVOL_LAYOUT
-    config = directory / "tradeline.toml"
-    config.write_text(
-        config_text(lowvol_market()) + "[lowvol.protocol]\n"
-        f'holdout_start = "{layout.holdout_start:%Y-%m}"\n'
-        f"holdout_months = {layout.holdout_months}\n"
-        f"windows = {layout.windows}\n"
-        f"out_of_sample_months = {layout.out_of_sample_months}\n"
-        f"in_sample_months = {layout.in_sample_months}\n"
-        f'[tax]\nschedule = "{REPO_ROOT / "tax_rates.csv"}"\n'
-        f'[benchmark]\nfunds = "{REPO_ROOT / "benchmark_funds.csv"}"\n'
-    )
-    return config
-
-
-def _cli(database_url: str, config: Path, *argv: str) -> None:
-    with pytest.MonkeyPatch.context() as patch, contextlib.redirect_stdout(io.StringIO()):
-        patch.setenv("TRADELINE_CONFIG", str(config))
-        patch.setenv("DATABASE_URL", database_url)
-        assert main(list(argv)) == 0
+    return lowvol_config(directory, lowvol_market(), layout_lines(LOWVOL_LAYOUT))
 
 
 @pytest.fixture(scope="module")
@@ -118,11 +98,11 @@ def stitched(
         load_demerger_table(conn)
         load_index_history(conn)
     config = _config(directory)
-    _cli(database_url, config, "protocol", "freeze", "--strategy", "lowvol_v1")
+    cli_ok(database_url, config, "protocol", "freeze", "--strategy", "lowvol_v1")
     with app_connection(database_url) as conn:
         (found,) = queries.protocols(conn)
     out = directory / "walk_forward.json"
-    _cli(database_url, config, "backtest", "--protocol", found.hash, "--out", str(out))
+    cli_ok(database_url, config, "backtest", "--protocol", found.hash, "--out", str(out))
     with app_connection(database_url) as conn:
         walked = queries.walk_forward(conn, found.hash)
     assert walked is not None
@@ -453,8 +433,8 @@ def test_the_full_report_lists_the_relative_drawdown_halt_days_of_each_curve_aft
     out, markdown = tmp_path / "report.json", tmp_path / "report.md"
     with app_connection(database_url) as conn:
         pass_holdout_checks(conn, frozen.hash)
-    _cli(database_url, config, "backtest", "holdout", "--protocol", frozen.hash)
-    _cli(
+    cli_ok(database_url, config, "backtest", "holdout", "--protocol", frozen.hash)
+    cli_ok(
         database_url,
         config,
         *("backtest", "report", "--protocol", frozen.hash),

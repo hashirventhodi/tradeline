@@ -7,8 +7,6 @@ calendar year against the NIFTY 100 is 2007, 29.4 percent against 57.5 percent, 
 shortfall of 1 - 1.294 / 1.575 = 0.178413 (to six places), rounded up to 20 percent.
 """
 
-import contextlib
-import io
 from decimal import Decimal
 from pathlib import Path
 
@@ -19,20 +17,20 @@ from synthetic_eod import (
     INDEX_HISTORY_FIXTURES,
     LOWVOL_LAYOUT,
     LOWVOL_RANGE,
-    REPO_ROOT,
+    cli,
     compute_universe_months,
-    config_text,
+    layout_lines,
     load_benchmark,
     load_demerger_table,
     load_market,
     lowvol_benchmark_navs,
+    lowvol_config,
     lowvol_market,
     repo_calendar,
     write_benchmark_fixtures,
     write_fixtures,
 )
 from tradeline import queries
-from tradeline.cli import main
 from tradeline.db import app_connection
 
 D = Decimal
@@ -53,32 +51,8 @@ def market(database_url: str, tmp_path_factory: pytest.TempPathFactory) -> tuple
         compute_universe_months(conn, market, *LOWVOL_RANGE)
         load_benchmark(conn, navs, end=LOWVOL_RANGE[1])
         load_demerger_table(conn)
-    layout = LOWVOL_LAYOUT
-    config = directory / "tradeline.toml"
-    config.write_text(
-        config_text(market) + "[lowvol.protocol]\n"
-        f'holdout_start = "{layout.holdout_start:%Y-%m}"\n'
-        f"holdout_months = {layout.holdout_months}\n"
-        f"windows = {layout.windows}\n"
-        f"out_of_sample_months = {layout.out_of_sample_months}\n"
-        f"in_sample_months = {layout.in_sample_months}\n"
-        f'[benchmark]\nfunds = "{REPO_ROOT / "benchmark_funds.csv"}"\n'
-    )
+    config = lowvol_config(directory, market, layout_lines(LOWVOL_LAYOUT), tax=False)
     return database_url, config
-
-
-def _cli(database_url: str, config: Path, *argv: str) -> tuple[int, str]:
-    """The command's exit code and what it logged."""
-    logged = io.StringIO()
-    with (
-        pytest.MonkeyPatch.context() as patch,
-        contextlib.redirect_stdout(logged),
-        contextlib.redirect_stderr(io.StringIO()),
-    ):
-        patch.setenv("TRADELINE_CONFIG", str(config))
-        patch.setenv("DATABASE_URL", database_url)
-        code = main(list(argv))
-    return code, logged.getvalue()
 
 
 def _protocols(database_url: str) -> list[queries.FrozenProtocol]:
@@ -98,7 +72,7 @@ def test_without_index_history_the_freeze_is_refused_unless_the_fallback_is_aske
 ) -> None:
     database_url, config = market
 
-    code, logged = _cli(database_url, config, "protocol", "freeze", "--strategy", "lowvol_v1")
+    code, logged = cli(database_url, config, "protocol", "freeze", "--strategy", "lowvol_v1")
 
     assert code == 1
     assert "ingest index-history" in logged
@@ -111,7 +85,7 @@ def test_the_fallback_threshold_is_the_white_papers_worst_year_recorded_as_a_fal
 ) -> None:
     database_url, config = market
 
-    code, _ = _cli(
+    code, _ = cli(
         database_url,
         config,
         "protocol",
@@ -140,7 +114,7 @@ def test_once_the_index_history_is_stored_the_fallback_is_refused(
     database_url, config = market
     before = _protocols(database_url)
 
-    loaded, _ = _cli(
+    loaded, _ = cli(
         database_url,
         config,
         "ingest",
@@ -149,7 +123,7 @@ def test_once_the_index_history_is_stored_the_fallback_is_refused(
         str(INDEX_HISTORY_FIXTURES),
     )
     stored = _index_values(database_url)
-    again, _ = _cli(
+    again, _ = cli(
         database_url,
         config,
         "ingest",
@@ -157,7 +131,7 @@ def test_once_the_index_history_is_stored_the_fallback_is_refused(
         "--play-fixtures",
         str(INDEX_HISTORY_FIXTURES),
     )
-    code, logged = _cli(
+    code, logged = cli(
         database_url,
         config,
         "protocol",

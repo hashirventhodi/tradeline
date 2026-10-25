@@ -46,6 +46,7 @@ test from the description, never from the generator's output.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import zipfile
@@ -58,10 +59,12 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
+import pytest
 
 from checkout import TEST_COMMIT
 from limits import PULLBACK
 from tradeline.benchmark import load_benchmark_funds
+from tradeline.cli import main
 from tradeline.config import UniverseRule
 from tradeline.costs import CostModel, Slippage, load_cost_schedule
 from tradeline.dates import IST, calendar_days, month_of, next_month
@@ -860,6 +863,61 @@ def config_text(market: Market, extra_risk: str = "") -> str:
     )
 
 
+def layout_lines(layout: Layout) -> str:
+    """``layout`` as ``[lowvol.protocol]`` (or ``[protocol]``) states it in a configuration."""
+    return (
+        f'holdout_start = "{layout.holdout_start:%Y-%m}"\n'
+        f"holdout_months = {layout.holdout_months}\n"
+        f"windows = {layout.windows}\n"
+        f"out_of_sample_months = {layout.out_of_sample_months}\n"
+        f"in_sample_months = {layout.in_sample_months}\n"
+    )
+
+
+def lowvol_config(
+    directory: Path,
+    market: Market,
+    protocol: str,
+    *,
+    tax: bool = True,
+    unit_splits: Path | None = None,
+) -> Path:
+    """``directory``'s ``tradeline.toml`` for ``lowvol_v1`` over ``market``: ``config_text``,
+    the repo's tax schedule (when ``tax``) and Benchmark funds (with ``unit_splits`` when
+    given), and the lines ``protocol`` under ``[lowvol.protocol]``."""
+    text = config_text(market)
+    if tax:
+        text += f'[tax]\nschedule = "{REPO_ROOT / "tax_rates.csv"}"\n'
+    text += f'[benchmark]\nfunds = "{REPO_ROOT / "benchmark_funds.csv"}"\n'
+    if unit_splits is not None:
+        text += f'unit_splits = "{unit_splits}"\n'
+    config = directory / "tradeline.toml"
+    config.write_text(text + "[lowvol.protocol]\n" + protocol)
+    return config
+
+
+def cli(database_url: str, config: Path, *argv: str) -> tuple[int, str]:
+    """``tradeline`` with ``argv`` against ``database_url`` under ``config``: its exit code
+    and what it wrote to stdout, its log lines and summary."""
+    out = io.StringIO()
+    with (
+        pytest.MonkeyPatch.context() as patch,
+        contextlib.redirect_stdout(out),
+        contextlib.redirect_stderr(io.StringIO()),
+    ):
+        patch.setenv("TRADELINE_CONFIG", str(config))
+        patch.setenv("DATABASE_URL", database_url)
+        code = main(list(argv))
+    return code, out.getvalue()
+
+
+def cli_ok(database_url: str, config: Path, *argv: str) -> str:
+    """``cli``, which must exit 0: what it wrote to stdout."""
+    code, out = cli(database_url, config, *argv)
+    assert code == 0, out
+    return out
+
+
 def walk_forward_terms() -> Terms:
     """The spec's Terms on ``WALK_FORWARD_LAYOUT`` and ``WALK_FORWARD_GRID``, a cell eligible
     from two in-sample trades, and no risk-free rate."""
@@ -1103,6 +1161,18 @@ def lowvol_benchmark_navs(calendar: TradingCalendar) -> dict[date, Decimal]:
         if day >= LOWVOL_BENCHMARK_RISE:
             nav += LOWVOL_BENCHMARK_STEP
         navs[day] = nav
+    return navs
+
+
+def daily_navs(
+    calendar: TradingCalendar, end: date, step: str, *, split: date | None = None
+) -> dict[date, Decimal]:
+    """A NAV of Rs 20 on 2022-03-01 moving by ``step`` rupees each trading day to ``end``; a
+    tenth of that from ``split`` on, when its units split 1 for 10 that day."""
+    navs = {}
+    for i, day in enumerate(calendar.trading_days(date(2022, 3, 1), end)):
+        nav = Decimal(20) + Decimal(step) * i
+        navs[day] = nav / 10 if split is not None and day >= split else nav
     return navs
 
 
