@@ -42,7 +42,7 @@ from synthetic_eod import (
     write_amfi_fixtures,
     write_fixtures,
 )
-from tradeline import queries
+from tradeline import queries, revision
 from tradeline.benchmark import benchmark_liquidation
 from tradeline.cli import main
 from tradeline.db import app_connection
@@ -339,3 +339,28 @@ def test_the_benchmark_pays_stamp_duty_stt_and_says_which_rate_its_gain_paid(
         "value": str(found.liquidation.value),
     }
     assert _daily(report, LAST_DAY)["benchmark"] == str(found.liquidation.value)
+
+
+def test_a_drift_replay_at_a_later_commit_reproduces_the_tax_ledger(
+    taxed: Frozen, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database_url, found, _, backtest_id = taxed
+    monkeypatch.setattr(revision, "running_commit", lambda: "1a7e" * 10)
+
+    _cli(database_url, _config(tmp_path), "backtest", "drift", "--protocol", found.hash)
+
+    with app_connection(database_url) as conn:
+        (replay,) = queries.drift_replays(conn, protocol=found.hash)
+        replayed = replay.accounts["stitched_curve"]
+        tags: dict[str, Any] = {"mode": "backtest"}
+        frozen = queries.tax_debits(conn, **tags, backtest_id=backtest_id)
+        again = queries.tax_debits(conn, **tags, backtest_id=replayed)
+        days = [
+            len(queries.liquidation_values(conn, **tags, backtest_id=account))
+            for account in (backtest_id, replayed)
+        ]
+    assert (replay.outcome, replay.differences) == ("pass", [])
+    # Financial year 2022's debit and the Boundary Exit's settlement of 2023, both again.
+    assert [(d.day, d.settled) for d in frozen] == [(DEBIT_DAY, False), (LAST_DAY, True)]
+    assert again == frozen
+    assert days[0] == days[1] > 0

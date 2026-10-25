@@ -33,6 +33,9 @@ from tradeline.costs import CostModel, load_contract_notes, load_cost_schedule
 from tradeline.dates import IST, month_end, month_of, next_month, parse_month
 from tradeline.db import NotAppRoleMember, app_connection, connect
 from tradeline.demergers import load_demergers
+from tradeline.drift import CURVES as DRIFT_CURVES
+from tradeline.drift import HOLDOUT as HOLDOUT_CURVE
+from tradeline.drift import replay_drift
 from tradeline.engine import WallClock
 from tradeline.engine import backtest as backtest_service
 from tradeline.engine import paper as paper_service
@@ -680,6 +683,8 @@ def backtest(ctx: Context, args: argparse.Namespace) -> int:
         return holdout(ctx, args)
     if args.backtest_command == "fresh":
         return fresh_period(ctx, args)
+    if args.backtest_command == "drift":
+        return drift_replay(ctx, args)
     if args.start is None:
         return walk_forward(ctx, args)
     end = args.end or args.start
@@ -764,6 +769,29 @@ def fresh_period(ctx: Context, args: argparse.Namespace) -> int:
             tick_sizes=tick_sizes,
         )
     log.info("fresh period finished", extra=result.summary())
+    return 0
+
+
+def drift_replay(ctx: Context, args: argparse.Namespace) -> int:
+    """The Drift Replay of the Protocol ``--protocol`` names at this commit: its Stitched
+    Curve and Fresh Period days (or the ``--curve`` named) rerun and compared with the runs
+    at its frozen commit, or the result recorded at this commit before (ADR 0007). Exit 1
+    when they differ; a request naming the Holdout is refused and recorded."""
+    calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
+    tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = replay_drift(
+            conn,
+            _strategies(conn, args.protocol),
+            protocol=args.protocol,
+            calendar=calendar,
+            tick_sizes=tick_sizes,
+            curves=args.curves,
+        )
+    if not result.passed:
+        log.error("drift replay failed", extra=result.summary())
+        return 1
+    log.info("drift replay passed", extra=result.summary())
     return 0
 
 
@@ -1277,6 +1305,21 @@ def build_parser() -> argparse.ArgumentParser:
         " from a fresh account to the last day with data, for the Backtest Gate to score",
     )
     fresh_parser.add_argument(*PROTOCOL[0], **PROTOCOL[1])
+    drift_parser = reports.add_parser(
+        "drift",
+        help="the Drift Replay: rerun the Protocol's Stitched Curve and Fresh Period days at"
+        " this commit, compare them with the runs at its frozen commit and record the result;"
+        " never the Holdout",
+    )
+    drift_parser.add_argument(*PROTOCOL[0], **PROTOCOL[1])
+    drift_parser.add_argument(
+        "--curve",
+        dest="curves",
+        action="append",
+        choices=[*DRIFT_CURVES, HOLDOUT_CURVE],
+        help="a curve to replay, repeatable (default: the Stitched Curve, and the Fresh Period"
+        " once it has run); naming the Holdout is refused and recorded",
+    )
     protocol_parser = subparsers.add_parser(
         "protocol", help="the Protocol a Strategy version is validated under (ADR 0007)"
     )
