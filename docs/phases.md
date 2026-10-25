@@ -184,6 +184,7 @@ Accept when:
 - `terraform apply` from an empty account produces a working instance; `terraform destroy` removes it; documented.
 - A backup is restored to a fresh Postgres and the dashboard shows the same data.
 - Deployment instructions are followed by a second person without help.
+- `collect-daily` and the weekly Integrity Check (`integrity-weekly`) run on the instance's schedule, and the Operator's Mac cron entries for them (README) are removed.
 
 ## Ongoing: Gates
 
