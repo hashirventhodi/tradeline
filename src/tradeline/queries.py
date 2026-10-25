@@ -2987,3 +2987,75 @@ def cost_sensitivities(conn: psycopg.Connection, protocol: str) -> list[CostSens
         (protocol,),
     ).fetchall()
     return [CostSensitivity(*row) for row in rows]
+
+
+@dataclass(frozen=True)
+class DriftReplay:
+    """A Drift Replay of a frozen Protocol requested at ``git_commit`` (ADR 0007, 2026-10-25
+    amendment): ``pass`` or ``fail``, its ``curves`` rerun in ``accounts`` (by curve) and
+    compared with the runs at ``frozen_commit``, every difference listed; or ``refused``
+    with its reason, nothing run. Never a Window run, never read by a Gate."""
+
+    id: uuid.UUID
+    protocol: str
+    git_commit: str
+    frozen_commit: str
+    requested_at: datetime
+    curves: tuple[str, ...]
+    outcome: str
+    accounts: dict[str, uuid.UUID]
+    # The Fresh Period's last day compared, the frozen account's then; None without one.
+    fresh_through: date | None
+    # Each a JSON object: curve, kind, key, field, frozen, replay, money. None if refused.
+    differences: list[dict[str, Any]] | None
+    reason: str | None
+
+
+def drift_replays(
+    conn: psycopg.Connection, *, protocol: str, git_commit: str | None = None
+) -> list[DriftReplay]:
+    """The Drift Replays of the Protocol whose full hash is ``protocol``, at ``git_commit``
+    if given, in the order requested."""
+    rows = conn.execute(
+        "SELECT id, protocol, git_commit, frozen_commit, requested_at, curves, outcome,"
+        " stitched_backtest_id, fresh_backtest_id, fresh_through, differences, reason"
+        " FROM drift_replays WHERE protocol = %(protocol)s"
+        " AND (%(commit)s::text IS NULL OR git_commit = %(commit)s)"
+        " ORDER BY requested_at, id",
+        {"protocol": protocol, "commit": git_commit},
+    ).fetchall()
+    found = []
+    for row in rows:
+        accounts = {
+            curve: account
+            for curve, account in (("stitched_curve", row[7]), ("fresh_period", row[8]))
+            if account is not None
+        }
+        found.append(
+            DriftReplay(
+                id=row[0],
+                protocol=row[1],
+                git_commit=row[2],
+                frozen_commit=row[3],
+                requested_at=row[4],
+                curves=tuple(row[5]),
+                outcome=row[6],
+                accounts=accounts,
+                fresh_through=row[9],
+                differences=row[10],
+                reason=row[11],
+            )
+        )
+    return found
+
+
+def drift_replay_passed(conn: psycopg.Connection, *, protocol: str, git_commit: str) -> bool:
+    """Whether the latest Drift Replay that ran under ``protocol`` at ``git_commit`` passed:
+    what a paper Run (Phase 3) is to require before it starts at a commit other than the
+    frozen one."""
+    ran = [
+        r
+        for r in drift_replays(conn, protocol=protocol, git_commit=git_commit)
+        if r.outcome != "refused"
+    ]
+    return bool(ran) and ran[-1].outcome == "pass"

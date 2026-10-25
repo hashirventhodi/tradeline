@@ -800,6 +800,7 @@ def backtest_span(
     boundary: bool = False,
     commit: bool = True,
     fresh_period: bool = False,
+    drift_replay: bool = False,
 ) -> list[RunResult]:
     """``backtest``'s days from ``start`` to ``end`` in the account ``backtest_id``, which
     may already hold the days before ``start``, reading the market through ``cache``.
@@ -814,6 +815,10 @@ def backtest_span(
     the Protocol froze, so the range must start after the Holdout's last day instead of
     lying inside the Protocol's.
 
+    ``drift_replay`` is for a Drift Replay alone (``drift.replay_drift``), the one run
+    under a Protocol allowed at a commit other than its own: the range must then not
+    touch the Holdout.
+
     A portfolio Strategy's account that has no Run yet starts with its Initial Buy, a Run
     as of the trading day before ``start`` (``run``'s ``initial_buy``), unless the span
     places no entries."""
@@ -825,6 +830,7 @@ def backtest_span(
         end=end,
         verify=False,
         fresh_period=fresh_period,
+        drift_replay=drift_replay,
     )
     terms = frozen.protocol
     if costs is None:
@@ -987,11 +993,13 @@ def _protocol_for(
     end: date,
     verify: bool = True,
     fresh_period: bool = False,
+    drift_replay: bool = False,
 ) -> queries.FrozenProtocol:
     """The frozen Protocol a backtest of ``strategy`` from ``start`` to ``end`` may run
     under, or the reason it may not; its data snapshot verified unless ``verify`` is
     false. A ``fresh_period`` range runs after the Protocol's Holdout instead of inside
-    the Protocol's range."""
+    the Protocol's range. A ``drift_replay`` range may run at another commit than the
+    Protocol's, and never on its Holdout."""
     if not name:
         raise ValueError(
             "a backtest runs under a frozen Protocol and names none;"
@@ -1001,8 +1009,15 @@ def _protocol_for(
     if frozen is None:
         raise ValueError(f"no Protocol {name} is frozen; `tradeline protocol freeze` freezes one")
     terms, short = frozen.protocol, frozen.hash[:12]
+    # Read even for a Drift Replay: a dirty tree is at no commit (``revision.git_commit``).
     commit = revision.running_commit()
-    if terms.git_commit != commit:
+    if drift_replay:
+        if start <= terms.holdout.last and end >= terms.holdout.first:
+            raise ValueError(
+                f"a Drift Replay never runs the Holdout ({terms.holdout.first} to"
+                f" {terms.holdout.last}); {start} to {end} touches it"
+            )
+    elif terms.git_commit != commit:
         raise ValueError(
             f"Protocol {short} was frozen at commit {terms.git_commit} and this is commit"
             f" {commit}; a run under it must share its commit, so freeze a new Protocol at"

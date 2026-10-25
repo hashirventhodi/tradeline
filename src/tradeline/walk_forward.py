@@ -394,14 +394,16 @@ def restitch(
     frozen: queries.FrozenProtocol,
     *,
     backtest_id: uuid.UUID,
-    impact: Decimal,
+    impact: Decimal | None,
     calendar: TradingCalendar,
     tick_sizes: TickSizes,
     risk_engine: RiskEngine = RISK_ENGINE,
     fill_model: FillModel = FILL_MODEL,
+    drift_replay: bool = False,
 ) -> None:
     """The finished Walk-Forward's Stitched Curve written again in the account
-    ``backtest_id`` with the Slippage impact c at ``impact``: each Window's Out-of-Sample
+    ``backtest_id`` with the Slippage impact c at ``impact`` (the Protocol's when None, as a
+    Drift Replay at another commit runs it, ``drift_replay``): each Window's Out-of-Sample
     days at the parameters it chose (nothing new planned where it chose none, as the
     Stitched Curve runs), no cell run again and nothing chosen again, so the c sensitivity
     differs from the Stitched Curve in its costs alone. Resumed from the account's last
@@ -413,7 +415,16 @@ def restitch(
             f"the Walk-Forward under Protocol {frozen.hash[:12]} has finished"
             f" {len(windows)} of {len(terms.windows)} Windows"
         )
-    run = _Runner(conn, strategy, frozen, calendar, tick_sizes, risk_engine, fill_model)
+    run = _Runner(
+        conn,
+        strategy,
+        frozen,
+        calendar,
+        tick_sizes,
+        risk_engine,
+        fill_model,
+        drift_replay=drift_replay,
+    )
     only = one_cell(terms.grid)
     chosen: Mapping[str, Decimal] | None = only
     for number, (window, found) in enumerate(zip(terms.windows, windows, strict=True), start=1):
@@ -446,6 +457,8 @@ class _Runner:
         tick_sizes: TickSizes,
         risk_engine: RiskEngine,
         fill_model: FillModel,
+        *,
+        drift_replay: bool = False,
     ) -> None:
         self._conn = conn
         self._strategy = strategy
@@ -455,6 +468,7 @@ class _Runner:
             "tick_sizes": tick_sizes,
             "risk_engine": risk_engine,
             "fill_model": fill_model,
+            "drift_replay": drift_replay,
         }
 
     def cells(self, number: int, window: Window, cache: SeriesCache) -> tuple[list[CellScore], int]:
