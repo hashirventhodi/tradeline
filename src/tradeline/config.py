@@ -159,8 +159,10 @@ class Config:
     @dataclass(frozen=True)
     class Risk:
         """The Limits of ``docs/risk-controls.md`` the Risk Engine enforces (``tradeline.risk``),
-        fractions of Equity where they are, and the tick table Plans are priced on."""
+        fractions of Equity where they are, and the tick table Plans are priced on. The
+        defaults are ``pullback_v1``'s set, every Limit on (ADR 0020)."""
 
+        stop_required: bool = True
         risk_per_trade: float = 0.01
         max_open_positions: int = 8
         max_position: float = 0.15
@@ -182,6 +184,7 @@ class Config:
 
         def limits(self) -> Limits:
             return Limits(
+                stop_required=self.stop_required,
                 risk_per_trade=Decimal(str(self.risk_per_trade)),
                 max_open_positions=self.max_open_positions,
                 max_position=Decimal(str(self.max_position)),

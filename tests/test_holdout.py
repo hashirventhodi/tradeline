@@ -19,6 +19,7 @@ from typing import Any
 import psycopg
 import pytest
 
+from limits import PULLBACK
 from synthetic_eod import (
     REPO_ROOT,
     WALK_FORWARD_RANGE,
@@ -35,7 +36,6 @@ from tradeline.cli import main
 from tradeline.dates import IST
 from tradeline.db import app_connection
 from tradeline.holdout import HoldoutRefused, run_holdout, standing
-from tradeline.risk import Limits
 from tradeline.strategy import Strategy
 from tradeline.strategy.pullback import PullbackV1
 from tradeline.tick_sizes import load_tick_sizes
@@ -45,7 +45,7 @@ D = Decimal
 CALENDAR = repo_calendar()
 TICK_SIZES = load_tick_sizes(REPO_ROOT / "tick_sizes.csv")
 HOLDOUT = (date(2023, 1, 2), date(2023, 1, 31))
-LIMITS = Limits(max_sector=D(1))
+LIMITS = replace(PULLBACK, max_sector=D(1))
 
 
 def pullback(parameters: Mapping[str, Decimal]) -> Strategy:

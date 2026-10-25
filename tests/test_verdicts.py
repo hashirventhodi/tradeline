@@ -36,6 +36,7 @@ from pathlib import Path
 import psycopg
 import pytest
 
+from limits import PULLBACK
 from synthetic_eod import (
     REPO_ROOT,
     RUN_DAY,
@@ -52,7 +53,6 @@ from tradeline import queries
 from tradeline.cli import main
 from tradeline.db import app_connection
 from tradeline.engine import run
-from tradeline.risk import Limits
 from tradeline.strategy.pricing import PricedPlan
 from tradeline.strategy.pullback import PullbackV1
 from tradeline.tick_sizes import load_tick_sizes
@@ -160,7 +160,7 @@ def test_a_participation_cap_block_and_the_earliest_sector_load_read_before_it(
             calendar=repo_calendar(),
             rule_version=market.rule.version,
             backtest_id=uuid.uuid4(),
-            limits=Limits(),
+            limits=PULLBACK,
             tick_sizes=load_tick_sizes(REPO_ROOT / "tick_sizes.csv"),
             starting_equity=D("500000"),
             band=D("0.05"),

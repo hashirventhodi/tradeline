@@ -66,8 +66,10 @@ large_moves = "large_moves.csv"
 large_move_ratio = 1.5
 
 # The Risk Engine's Limits (docs/risk-controls.md), fractions of Equity where
-# they are. Every Plan of a Run is checked against them in Plan order.
+# they are: `pullback_v1`'s set, every Limit stated (ADR 0020). Every Plan of a
+# Run is checked against them in Plan order.
 [risk]
+stop_required = true        # a Plan without a stop under its entry is Blocked
 risk_per_trade = 0.01       # Equity at risk at the stop
 max_open_positions = 8      # held Positions plus this Run's Passes
 max_position = 0.15         # notional at entry
