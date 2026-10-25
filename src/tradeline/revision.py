@@ -73,6 +73,40 @@ def git_commit(directory: Path = PACKAGE_DIR) -> str:
     return head
 
 
+def test_written_before(
+    test: str, failed_at: str, commit: str, *, directory: Path = PACKAGE_DIR
+) -> None:
+    """Refuse unless the test ``test`` (a pytest node id, ``path::name``, its path from the
+    checkout's root) is defined at ``failed_at``, a commit before ``commit`` in its history:
+    a Machinery Correction's failing test comes before its fix (ADR 0007 amendment). That it
+    failed there is the Operator's record; this checks that it was there to fail."""
+    path, _, name = test.partition("::")
+    function = name.split("::")[-1].split("[")[0]
+    try:
+        earlier = _git(directory, "rev-parse", "--verify", f"{failed_at}^{{commit}}").strip()
+        later = _git(directory, "rev-parse", "--verify", f"{commit}^{{commit}}").strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise ValueError(
+            f"cannot read commit {failed_at[:12]} or {commit[:12]} in {directory}: {error}"
+        ) from error
+    ancestor = subprocess.run(
+        ["git", "-C", str(directory), "merge-base", "--is-ancestor", earlier, later],
+        capture_output=True,
+        check=False,
+    )
+    if earlier == later or ancestor.returncode != 0:
+        raise ValueError(
+            f"the failing test is written before the fix: commit {failed_at[:12]} is not"
+            f" before {commit[:12]} in its history"
+        )
+    try:
+        source = _git(directory, "show", f"{earlier}:{path}")
+    except subprocess.CalledProcessError as error:
+        raise ValueError(f"commit {failed_at[:12]} has no test file {path}") from error
+    if f"def {function}(" not in source:
+        raise ValueError(f"commit {failed_at[:12]}'s {path} defines no test {function}")
+
+
 @functools.cache
 def running_commit() -> str:
     """The commit this process runs (``git_commit``), read once: the code a process runs

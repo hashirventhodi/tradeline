@@ -75,7 +75,7 @@ from tradeline.ingest.demergers import ingest_demergers
 from tradeline.ingest.eod import ingest_eod
 from tradeline.ingest.index_history import ingest_index_history
 from tradeline.metrics import HaltLimits
-from tradeline.protocol import Gate, Layout, Terms, months_between
+from tradeline.protocol import Correction, Gate, Layout, Terms, months_between
 from tradeline.risk import Limits
 from tradeline.sectors import load_sectors
 from tradeline.sources import amfi, kite, nse
@@ -613,12 +613,13 @@ def freeze_protocol(
     limits: Limits | None = None,
     halts: HaltLimits | None = None,
     commit: str | None = None,
+    correction: Correction | None = None,
 ) -> FreezeResult:
     """Store the Universe for the months of ``first`` to ``last`` and freeze a Protocol over
     them (``protocol_terms`` unless ``terms`` is given) for ``pullback_v1`` under the
     Market's rule, the default Limits, Halts and Slippage and the checked-in schedule as of
     ``COSTS_AS_OF``, at ``TEST_COMMIT`` (the commit the tests run at) unless ``commit``
-    is given."""
+    is given, frozen as the Machinery Correction ``correction`` when one is given."""
     compute_universe_months(conn, market, first, last)
     return freeze(
         conn,
@@ -635,6 +636,7 @@ def freeze_protocol(
         tax_schedule=load_tax_schedule(REPO_ROOT / "tax_rates.csv"),
         benchmark_funds=load_benchmark_funds(REPO_ROOT / "benchmark_funds.csv"),
         factor_fund=FACTOR_FUND,
+        correction=correction,
     )
 
 
