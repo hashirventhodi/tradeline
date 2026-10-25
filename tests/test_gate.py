@@ -54,6 +54,7 @@ from synthetic_eod import (
     config_text,
     freeze_protocol,
     load_market,
+    pass_holdout_checks,
     repo_calendar,
     walk_forward_market,
     walk_forward_terms,
@@ -127,6 +128,7 @@ def run_version(url: str, gate: Gate, grid: Any = None) -> str:
             conn, gate_market(), *WALK_FORWARD_RANGE, terms=terms, limits=LIMITS, halts=HALTS
         ).hash
         walk_forward(conn, pullback, protocol=found, calendar=CALENDAR, tick_sizes=TICK_SIZES)
+        pass_holdout_checks(conn, found)
         run_holdout(conn, pullback, protocol=found, calendar=CALENDAR, tick_sizes=TICK_SIZES)
     return found
 

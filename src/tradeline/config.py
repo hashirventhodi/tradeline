@@ -161,6 +161,9 @@ class Config:
         # The checked-in demerger table (``tradeline.demergers``), relative to the working
         # directory; stored by ``ingest demergers``.
         demergers: str = "demergers.csv"
+        # The checked-in list of unparsed dividend subjects, each with the Operator's reason
+        # (``tradeline.dividends.load_listed_dividends``), read by the pre-Holdout checks.
+        unparsed_dividends: str = "unparsed_dividends.csv"
 
     @dataclass(frozen=True)
     class Benchmark:

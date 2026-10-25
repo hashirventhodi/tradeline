@@ -25,7 +25,9 @@ an amount of zero, a percent with no stored face value, a total stated as
 including another ("Including Special Dividend"), or a unit's distribution (a
 fund's or trust's, made of interest and return of capital). An unparsed subject
 is never dropped: ``dividend_check`` lists it with its reason and counts it, the
-input to the pre-Holdout check (ADR 0007, 2026-10-25 amendment).
+input to the pre-Holdout check (ADR 0007, 2026-10-25 amendment), which passes only
+when each is also in the reviewed list of unparsed subjects
+(``load_listed_dividends``), the Operator's reason why crediting it nothing is right.
 
 NSE can list one action under each series or Symbol; ``dividends`` keeps one per
 Ex-Date and subject. Two subjects on one Ex-Date are two dividends, as NSE files a
@@ -39,11 +41,13 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 
 import psycopg
 
 from tradeline import queries
 from tradeline.adjust import CorporateAction
+from tradeline.reviewed_csv import FirstLines, parse_date, read_lines, require_header
 
 # NSE's spellings of a dividend, as ``tradeline.adjust`` reads them, without its
 # "distribution" (a unit's, below). "Spl Div", "Int Div" and "Meetingdividend" included.
@@ -205,3 +209,41 @@ def dividend_check(
         parsed=tuple(d for d in found if d.reason is None),
         unparsed=tuple(d for d in found if d.reason is not None),
     )
+
+
+LISTED_COLUMNS = ("symbol", "ex_date", "subject", "reason")
+
+
+@dataclass(frozen=True)
+class ListedDividend:
+    """A reviewed row: an unparsed dividend subject, and the Operator's reason why it is
+    credited nothing (a fund's distribution, a subject NSE stated no amount in)."""
+
+    symbol: str
+    ex_date: date
+    subject: str
+    reason: str
+    # The row's line in the file, for naming it.
+    line: int = 0
+
+    def key(self) -> tuple[str, date, str]:
+        return self.symbol, self.ex_date, self.subject
+
+
+def load_listed_dividends(path: Path) -> tuple[ListedDividend, ...]:
+    """The reviewed list of unparsed dividend subjects at ``path``; a row without a reason,
+    or listed twice, refuses the whole list."""
+    lines = read_lines(path, "unparsed dividend list")
+    require_header(path, next(iter(lines), None), LISTED_COLUMNS, "first")
+    rows, seen = [], FirstLines[tuple[str, date, str]]()
+    for line in lines[1:]:
+        symbol, ex, subject, reason = line.columns(LISTED_COLUMNS)
+        where = f"{line.where}: {symbol}"
+        if not symbol or not subject:
+            raise ValueError(f"{line.where}: the Symbol and the subject are required")
+        if not reason:
+            raise ValueError(f"{where}: no reason; say why the subject is credited nothing")
+        row = ListedDividend(symbol, parse_date(where, "ex_date", ex), subject, reason, line.number)
+        seen.add(row.key(), line, "the subject is listed already")
+        rows.append(row)
+    return tuple(rows)

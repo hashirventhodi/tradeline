@@ -8,7 +8,10 @@ verified first. Positions open on the Holdout's last day stay open: they are
 marked at its close, not counted as closed trades. Each day is committed as it
 is written, so a run interrupted continues where it stopped.
 
-Every request is recorded in ``holdout_attempts``. A second run by the same
+It runs only once the pre-Holdout checks (``tradeline.holdout_checks``) have
+passed at the commit it runs at; until then it is refused, naming each unmet
+check, and no attempt is recorded (the checks are, in ``holdout_checks``). Every
+other request is recorded in ``holdout_attempts``. A second run by the same
 version is refused and the refusal recorded. The family's first run consumes
 its Holdout; a later version's run is Not Independent. So is any run after a
 data correction on a period an earlier run saw: when a Universe month's or a
@@ -44,6 +47,7 @@ from tradeline import queries
 from tradeline.dates import IST
 from tradeline.engine import SeriesCache, backtest_span
 from tradeline.freeze import run_members, verify_snapshot
+from tradeline.holdout_checks import require_passed
 from tradeline.paper_broker import FILL_MODEL, FillModel
 from tradeline.protocol import months_between
 from tradeline.risk import RISK_ENGINE, RiskEngine
@@ -128,6 +132,7 @@ def run_holdout(
             raise HoldoutRefused(reason)
         if runs:
             start = next(d for d in days if d > runs[-1].as_of)
+    require_passed(conn, frozen)
     verify_snapshot(conn, frozen, start=span.first, end=span.last)
     if attempt is None:
         attempt = _record(

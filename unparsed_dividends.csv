@@ -1,0 +1,15 @@
+# Dividend subjects NSE lists that the parser leaves unparsed (tradeline.dividends),
+# each with the Operator's reason why the holder is credited nothing (#102).
+#
+# The pre-Holdout check (ADR 0007, 2026-10-25 amendment) reads every dividend
+# subject of every Universe member of every month a Protocol froze, over its
+# range, and passes only when each unparsed one is listed here. A row is
+# reviewed like code: `subject` exactly as NSE lists it, `reason` saying why
+# no credit is right (a fund's distribution, NSE stating no amount), never
+# only the parser's reason. A row without a reason, or a subject listed twice,
+# refuses the whole list. Its location is `corporate_actions.unparsed_dividends`
+# in tradeline.toml.
+#
+# None listed yet: the list is filled from `tradeline backtest checks` before
+# the acceptance run's Holdout.
+symbol,ex_date,subject,reason
