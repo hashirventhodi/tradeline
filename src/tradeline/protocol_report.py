@@ -1073,7 +1073,9 @@ class _Markdown:
         self._line(
             "Each curve's Liquidation Value against the Benchmark's, after tax (what the Gate"
             " reads) and before it (the tax paid and owed added back to each); returns are"
-            " annualised over 252 trading days a year."
+            " annualised over 252 trading days a year. Before tax is an add-back to the run"
+            " that paid tax, not a backtest run without tax: the cash a debit took is not"
+            " grown after it."
         )
         rows = []
         for curve in CURVES:
@@ -1178,6 +1180,20 @@ class _Markdown:
                     ]
                 )
         self._table(["Curve", "Step", "Decided", "Held from", "Cash", "Sectors"], rows)
+        for curve in CURVES:
+            for r in self._json[curve]["portfolio"]["rebalances"]:
+                if r["unfilled_buys"]:
+                    self._line(
+                        f"{CURVE_NAMES[curve]}, {r['step'].replace('_', ' ')} decided"
+                        f" {r['decided']}: buys the open did not fill, never sent again, their"
+                        " share left in cash until the next Rebalance: "
+                        + "; ".join(
+                            f"{u['symbol']} on {u['session']} ({u['shares']} shares at a"
+                            f" limit of Rs {u['limit']}: {u['reason']})"
+                            for u in r["unfilled_buys"]
+                        )
+                        + "."
+                    )
         for curve in CURVES:
             largest = self._json[curve]["portfolio"]["largest_name_weight"]
             if largest is not None:

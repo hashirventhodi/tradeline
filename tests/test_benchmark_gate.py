@@ -19,6 +19,10 @@ The market is ``synthetic_eod.lowvol_market`` run on to 2023-05-31, as in
   and never moves, so H04's holder is credited a tenth of its shares times Rs 50.
 - H03 has a rights issue ex 2022-11-15, opening Re 1 under the close before and back the
   next day.
+- N03, an entrant of the 2022-09-30 Rebalance, opens Rs 5 up on 2022-10-04, its buy's
+  session, and back on 2022-10-06: over 1 percent above the close its limit was set
+  from, so the buy goes unfilled and is never retried; its share stays in cash until the
+  next Rebalance.
 
 The Benchmark's NAV rises 1 paisa a trading day from 20; the factor fund's 2 paisa from
 20, split 1 for 10 from 2022-12-01 (``fund_unit_splits`` of the test).
@@ -73,6 +77,7 @@ END = date(2023, 5, 31)
 FIRST_DAY = date(2022, 4, 1)
 STARTING_EQUITY = D(500000)
 SPLIT = date(2022, 12, 1)
+UNFILLED = date(2022, 10, 4)
 UNPARSED = ListedDividend("H02", date(2022, 7, 15), "Dividend - Rs Per Share", "states no amount")
 
 
@@ -93,6 +98,7 @@ def _market() -> Any:
         Gap(date(2022, 11, 16), D("1.00")),
     )
     market = market.with_events("H04", Demerger(SPLIT))
+    market = market.with_events("N03", Gap(UNFILLED, D("5.00")), Gap(date(2022, 10, 6), D("-5.00")))
     child = Stock(
         "HFOUR",
         "INE0HFOUR016",
@@ -276,6 +282,11 @@ def test_results_before_tax_add_back_the_tax_paid_and_owed(reported: Reported) -
     stitched = report["stitched_curve"]
     liquidation = stitched["liquidation"]
     before = stitched["against_benchmark"]["before_tax"]
+
+    # An add-back to the run that paid tax, not a run without it, and labelled so.
+    assert "added back" in before["note"]
+    assert "not a backtest run without tax" in before["note"]
+    assert "note" not in stitched["against_benchmark"]["after_tax"]
     after = stitched["against_benchmark"]["after_tax"]
 
     # Debited before the last day; the last day's Liquidation Value owes the rest, the
@@ -354,6 +365,21 @@ def test_cash_at_every_rebalance(reported: Reported) -> None:
     assert D(0) < D(initial["cash"]) < D("0.02")
     # H20's sale leaves more than three entrants capped at 15 percent of Equity can take.
     assert D(sold_h20["cash"]) > D("0.10")
+
+
+def test_an_unfilled_rebalance_buy_is_listed_and_its_share_stays_in_cash(
+    reported: Reported,
+) -> None:
+    database_url, _, _, report = reported
+    initial, rebalance, last = report["stitched_curve"]["portfolio"]["rebalances"]
+
+    (unfilled,) = rebalance["unfilled_buys"]
+    assert (unfilled["symbol"], unfilled["session"]) == ("N03", UNFILLED.isoformat())
+    assert unfilled["shares"] > 0 and D(unfilled["limit"]) > 0
+    assert unfilled["reason"]
+    # Never retried: N03 is not bought before the next Rebalance's buys.
+    assert all(p.opened_on > date(2023, 3, 31) for p in _positions(database_url, "N03"))
+    assert initial["unfilled_buys"] == [] and last["unfilled_buys"] == []
 
 
 def test_dividends_parsed_and_unparsed_are_counted(reported: Reported) -> None:
@@ -437,6 +463,8 @@ def test_the_markdown_renders_the_additions_after_the_gate(reported: Reported) -
     ):
         assert section in markdown
     assert "surcharge" in markdown
+    assert "not a backtest run without tax" in markdown
+    assert f"N03 on {UNFILLED.isoformat()}" in markdown
 
 
 def test_two_reports_of_one_protocol_over_the_same_data_write_the_same_json(

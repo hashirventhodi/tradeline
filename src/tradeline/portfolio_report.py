@@ -7,7 +7,9 @@ For each curve (an account read by ``tradeline.report.read_account``):
   Gate's reading (``tradeline.metrics.benchmark_comparison``), and before tax: the
   Strategy's Liquidation Value with the tax it owes and the tax debited on earlier days
   added back, the Benchmark's with the tax on its gain added back. Each with the
-  Strategy's Sharpe on that curve at the Protocol's risk-free rate.
+  Strategy's Sharpe on that curve at the Protocol's risk-free rate. Before tax is an
+  add-back to the run that paid tax, not a run without it (``BEFORE_TAX_SAYS``): the cash
+  a debit took was not invested after it, so its growth is not in the figure.
 - ``benchmark_curve``: the curve as the Benchmark Gate reads it, with its Rebalances
   counted as the Protocol's Gate says: the Runs that decided a Rebalance on a day
   before the curve's last (``REBALANCES_COUNTED``).
@@ -21,7 +23,9 @@ For each curve (an account read by ``tradeline.report.read_account``):
   dividends credited, parsed and not; every Demerger Credit and every rights issue a
   Position was held through, each with its effect on excess return as a fraction of
   the starting Equity (a credit's cash; a rights issue's Ex-Date gap times the shares,
-  the fall no entitlement is credited for).
+  the fall no entitlement is credited for). Each Initial Buy and Rebalance lists its
+  buys the open did not fill: an unfilled Rebalance buy is never sent again, so its
+  share stays in cash until the next Rebalance (``docs/risk-controls.md``).
 
 Weights are of the day's Equity: cash after the day's session plus each held Position at
 the day's close as it stood that day (its Adjusted Series as of the day the Position
@@ -57,6 +61,11 @@ NAV_LOOKBACK = timedelta(days=31)
 SURCHARGE = (
     "the tax ledger leaves out the surcharge on high incomes, so its tax is optimistic for an"
     " Operator who pays one; the Rs 1.25 lakh long-term exemption is left out on both sides"
+)
+BEFORE_TAX_SAYS = (
+    "the run that paid tax with the tax debited before the day and the tax owed added back"
+    " to the Strategy, and the tax on its gain to the Benchmark; an add-back, not a backtest"
+    " run without tax: the cash a debit took is not grown after it"
 )
 FACTOR_FUND_SAYS = (
     "the factor fund at its AMFI NAV, chained across its unit splits, bought for the"
@@ -119,12 +128,15 @@ def against_benchmark(account: Account, terms: Protocol) -> dict[str, Any]:
             found.benchmark_after,
             sharpe([start, *found.after], risk_free_rate=rate),
         ),
-        "before_tax": _comparison_json(
-            benchmark_comparison(found.before, found.benchmark_before, start=start),
-            found.before,
-            found.benchmark_before,
-            sharpe([start, *found.before], risk_free_rate=rate),
-        ),
+        "before_tax": {
+            "note": BEFORE_TAX_SAYS,
+            **_comparison_json(
+                benchmark_comparison(found.before, found.benchmark_before, start=start),
+                found.before,
+                found.benchmark_before,
+                sharpe([start, *found.before], risk_free_rate=rate),
+            ),
+        },
     }
 
 
@@ -281,8 +293,9 @@ def portfolio_json(
                 weight = h.values[day] / equity[day]
                 if largest is None or weight > largest[0]:
                     largest = (weight, day, h.symbol)
+    orders = queries.orders(conn, **tags)
     return {
-        "rebalances": _rebalances(account, cash, equity, sector_weights),
+        "rebalances": _rebalances(account, cash, equity, sector_weights, orders),
         "largest_name_weight": None
         if largest is None
         else {
@@ -329,12 +342,13 @@ def _rebalances(
     cash: Mapping[date, Decimal],
     equity: Mapping[date, Decimal],
     weights: Mapping[date, Mapping[str, Decimal]],
+    orders: Sequence[queries.LedgerOrder],
 ) -> list[dict[str, Any]]:
     """The Initial Buy and each Rebalance: the day its entrants are first held (the day after
-    their buys' decision), its cash and sector weights then, and each sector's peak until the
-    next one's."""
+    their buys' decision), its cash and sector weights then, each sector's peak until the
+    next one's, and every buy its buys' Run placed that the open did not fill."""
     days = list(account.days)
-    found: list[tuple[str, date, date | None]] = []
+    found: list[tuple[str, date, date | None, uuid.UUID | None]] = []
     runs = list(account.runs)
     for i, run in enumerate(runs):
         if run.portfolio_step not in ("initial_buy", "rebalance"):
@@ -345,9 +359,9 @@ def _rebalances(
             else next((r for r in runs[i + 1 :] if r.portfolio_step == "rebalance_buys"), None)
         )
         held_from = None if buys is None else next((d for d in days if d > buys.as_of), None)
-        found.append((run.portfolio_step, run.as_of, held_from))
+        found.append((run.portfolio_step, run.as_of, held_from, None if buys is None else buys.id))
     entries = []
-    for i, (step, decided, held_from) in enumerate(found):
+    for i, (step, decided, held_from, buys_run) in enumerate(found):
         entry: dict[str, Any] = {
             "step": step,
             "decided": decided.isoformat(),
@@ -355,9 +369,20 @@ def _rebalances(
             "cash": None,
             "sectors": [],
             "peak_until_next": [],
+            "unfilled_buys": [
+                {
+                    "symbol": o.symbol,
+                    "session": o.session.isoformat(),
+                    "limit": rounded(o.limit_price, RUPEE),
+                    "shares": o.shares,
+                    "reason": o.cancel_reason,
+                }
+                for o in orders
+                if o.run_id == buys_run and o.purpose == "entry" and o.cancelled is not None
+            ],
         }
         if held_from is not None:
-            following = [h for _, _, h in found[i + 1 :] if h is not None]
+            following = [h for _, _, h, _ in found[i + 1 :] if h is not None]
             until = following[0] if following else None
             span = [d for d in days if held_from <= d and (until is None or d < until)]
             entry["cash"] = rounded(cash[held_from] / equity[held_from], FRACTION)
