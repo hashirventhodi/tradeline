@@ -67,6 +67,7 @@ from tradeline.costs import CostModel, Slippage, load_cost_schedule
 from tradeline.dates import IST, calendar_days, month_of, next_month
 from tradeline.freeze import FreezeResult
 from tradeline.freeze import freeze_protocol as freeze
+from tradeline.holdout_checks import TaxTestOutcome, check_holdout
 from tradeline.ingest.benchmark import ingest_benchmark
 from tradeline.ingest.corporate_actions import ingest_corporate_actions, year_chunks
 from tradeline.ingest.eod import ingest_eod
@@ -209,9 +210,18 @@ class Rights:
     subject: str
 
 
+@dataclass(frozen=True)
+class Demerger:
+    """A demerger as NSE lists it, by its subject. The path is unchanged by it; a test
+    gives the child its own Stock and the demerger table its row."""
+
+    ex_date: date
+    subject: str = "Demerger"
+
+
 PathEvent = Trend | Dip | Gap | CircuitLock | Volume
 Action = Split | Bonus
-Event = PathEvent | Action | Absent | Dividend | Rights
+Event = PathEvent | Action | Absent | Dividend | Rights | Demerger
 
 
 # --- Stocks and the Market ----------------------------------------------------
@@ -263,6 +273,10 @@ class Stock:
     @property
     def rights(self) -> list[Rights]:
         return sorted((e for e in self.events if isinstance(e, Rights)), key=lambda r: r.ex_date)
+
+    @property
+    def demergers(self) -> list[Demerger]:
+        return sorted((e for e in self.events if isinstance(e, Demerger)), key=lambda d: d.ex_date)
 
     def path_bars(self, days: Sequence[date]) -> list[Bar]:
         """The path, one bar per trading day: NSE's prices had there been no action."""
@@ -496,7 +510,7 @@ def _corporate_actions(stocks: Iterable[Stock], start: date, end: date) -> list[
             "subject": a.subject,
         }
         for s in stocks
-        for a in (*s.actions, *s.dividends, *s.rights)
+        for a in (*s.actions, *s.dividends, *s.rights, *s.demergers)
         if start <= a.ex_date <= end
     ]
 
@@ -1074,3 +1088,23 @@ def load_benchmark(conn: psycopg.Connection, fixtures: Path, *, end: date) -> No
         clock=lambda: 0.0,
         sleep=lambda seconds: None,
     )
+
+
+# --- The pre-Holdout checks ---------------------------------------------------
+
+
+def pass_holdout_checks(conn: psycopg.Connection, protocol: str) -> None:
+    """Record every pre-Holdout check of ``protocol`` as passed at the commit the tests run
+    at, for a Market with no unparsed dividend and no demerger: no contract note, accepted
+    as unmet, and the tax-ledger tests taken as passed (``test_pre_holdout_checks`` runs
+    them)."""
+    result = check_holdout(
+        conn,
+        protocol=protocol,
+        contract_notes=(),
+        schedule=load_cost_schedule(REPO_ROOT / "cost_rates.csv"),
+        listed=(),
+        accept_no_contract_notes="a synthetic Market's test",
+        tax_tests=lambda: TaxTestOutcome(True, "taken as passed"),
+    )
+    assert result.passed, result.summary()
