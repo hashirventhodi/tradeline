@@ -65,6 +65,15 @@ large_moves = "large_moves.csv"
 # A close more than this many times the previous close, either way, is a Large Move.
 large_move_ratio = 1.5
 
+# The Benchmark (ADR 0015 amendment): a real NIFTY 500 index fund at its AMFI NAV,
+# loaded by `tradeline ingest benchmark` with the factor fund's NAV.
+[benchmark]
+# The checked-in file naming the Benchmark's AMFI scheme from each recorded
+# fund-change event (its merger, closure or change of index); nothing else names it.
+funds = "benchmark_funds.csv"
+# The ICICI Prudential Nifty 100 Low Vol 30 ETF, compared at NAV and never gated.
+factor_fund = 141596
+
 # The Risk Engine's Limits (docs/risk-controls.md), fractions of Equity where
 # they are. Every Plan of a Run is checked against them in Plan order.
 [risk]

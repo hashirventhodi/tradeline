@@ -29,9 +29,11 @@ import pytest
 
 from synthetic_eod import REPO_ROOT
 from tradeline.costs import (
+    FUND_CHARGES,
     Charges,
     ContractNote,
     CostModel,
+    FundCharges,
     Slippage,
     load_contract_notes,
     load_cost_schedule,
@@ -180,3 +182,74 @@ def test_each_real_contract_note_matches_the_rates_in_force_on_its_trade_date(
         note.sebi_fee,
         note.gst,
     )
+
+
+# Fund units: the Benchmark's (ADR 0015 amendment). Worked by hand from cost_rates.csv:
+# stamp duty 0.005% of the amount invested; STT 0.001% of the redemption value, paid by
+# the seller; exit load 1% if redeemed on or before 15 days from allotment, nil after.
+# Each to the paisa, half up.
+FUND_BUY = D("500000")
+FUND_SELL = D("612345.67")
+
+
+def test_a_fund_purchase_pays_stamp_duty_and_nothing_else() -> None:
+    """Rs 5,00,000 x 0.005% = Rs 25.00."""
+    rates = SCHEDULE.fund_rates(date(2026, 10, 1))
+
+    found = rates.charges("buy", value=FUND_BUY, bought_on=date(2026, 10, 1), day=date(2026, 10, 1))
+
+    assert found == FundCharges(stamp_duty=D("25.00"), stt=D("0"), exit_load=D("0"))
+    assert found.total == D("25.00")
+
+
+def test_a_redemption_after_the_load_period_pays_stt_and_no_exit_load() -> None:
+    """Rs 6,12,345.67 x 0.001% = 6.1234567 -> Rs 6.12."""
+    rates = SCHEDULE.fund_rates(date(2026, 10, 1))
+
+    found = rates.charges(
+        "sell", value=FUND_SELL, bought_on=date(2024, 10, 1), day=date(2026, 10, 1)
+    )
+
+    assert found == FundCharges(stamp_duty=D("0"), stt=D("6.12"), exit_load=D("0"))
+
+
+@pytest.mark.parametrize(
+    ("sold_on", "exit_load"),
+    [(date(2026, 10, 16), D("6123.46")), (date(2026, 10, 17), D("0"))],
+    ids=["on the 15th day", "on the 16th day"],
+)
+def test_a_redemption_on_or_before_15_days_from_allotment_pays_the_exit_load(
+    sold_on: date, exit_load: Decimal
+) -> None:
+    """Allotted 2026-10-01: 15 days later is 2026-10-16, 1% of Rs 6,12,345.67 = Rs 6,123.4567."""
+    rates = SCHEDULE.fund_rates(date(2026, 10, 1))
+
+    found = rates.charges("sell", value=FUND_SELL, bought_on=date(2026, 10, 1), day=sold_on)
+
+    assert found.exit_load == exit_load
+
+
+def test_every_fund_unit_rate_in_the_schedule_cites_its_source() -> None:
+    rows = [r for r in SCHEDULE.rates_by_date if r.charge in FUND_CHARGES]
+
+    assert {r.charge for r in rows} == set(FUND_CHARGES)
+    assert all(r.citation for r in rows)
+
+
+def test_a_fund_trade_before_the_fund_rates_first_date_is_refused() -> None:
+    with pytest.raises(ValueError, match="before the fund-unit rates' first date 2020-08-07"):
+        SCHEDULE.fund_rates(date(2020, 8, 6))
+
+
+def test_a_schedule_missing_a_fund_unit_rate_on_its_first_date_is_refused(tmp_path: Path) -> None:
+    equity = "\n".join(
+        f"2023-04-01,{charge},0,X"
+        for charge in ("stt", "stamp_duty", "exchange", "sebi", "gst", "dp_charge")
+    )
+    path = tmp_path / "rates.csv"
+    path.write_text(
+        f"in_force_from,charge,rate,citation\n{equity}\n2020-08-07,fund_stt,0.00001,X\n"
+    )
+
+    with pytest.raises(ValueError, match="2020-08-07 has no rate for fund_stamp_duty"):
+        load_cost_schedule(path)
