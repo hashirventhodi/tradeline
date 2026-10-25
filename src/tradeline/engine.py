@@ -520,6 +520,7 @@ def run(
     commit: bool = True,
     initial_buy: bool = False,
     dividends: bool = False,
+    halted: bool = False,
     demergers: Sequence[Demerger] = (),
     tax: TaxTerms | None = None,
     benchmark: BenchmarkTerms | None = None,
@@ -559,6 +560,12 @@ def run(
     ledger: a financial year's tax is debited on the first trading day after its March 31,
     a Boundary Exit settles the final partial year, and the day's Liquidation Value and the
     Benchmark's are recorded.
+
+    ``halted`` is a Run under Halt (ADR 0009): it places no new entry and keeps managing
+    exits. A Run of a Strategy with Plans screens nothing; a portfolio Rebalance still
+    decides and sells its leavers, and its buys (or an Initial Buy's) place nothing (ADR
+    0020). A backtest never
+    Halts (``docs/risk-controls.md``), so only paper passes it.
     """
     if boundary and entries:
         raise ValueError("a Boundary Exit's day places no new entries; pass entries=False")
@@ -610,7 +617,7 @@ def run(
             entries=entries,
         )
     else:
-        candidates = data.screen(strategy, members) if entries else []
+        candidates = data.screen(strategy, members) if entries and not halted else []
         plans = [strategy.plan(c) for c in candidates]
     leavers: tuple[str, ...] = ()
     run_id = uuid.uuid4()
@@ -651,7 +658,7 @@ def run(
                 day=as_of,
             )
         equity = cash + sum((h.value for h in holdings), Decimal(0))
-        if step in ("initial_buy", "rebalance_buys"):
+        if step in ("initial_buy", "rebalance_buys") and not halted:
             plans = list(
                 _split_cash(
                     [c for c in candidates if c.instrument not in held_instruments],

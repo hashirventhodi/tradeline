@@ -36,6 +36,7 @@ from synthetic_eod import (
     compute_universe_months,
     config_text,
     load_benchmark,
+    load_index_history,
     load_market,
     lowvol_market,
     repo_calendar,
@@ -108,6 +109,8 @@ def taxed(database_url: str, tmp_path_factory: pytest.TempPathFactory) -> Frozen
         load_market(conn, fixtures, market)
         compute_universe_months(conn, market, date(2022, 3, 1), END)
         load_benchmark(conn, amfi, end=END)
+        # The Relative Drawdown Halt's threshold is frozen from it.
+        load_index_history(conn)
     config = _config(directory)
     _cli(database_url, config, "protocol", "freeze", "--strategy", "lowvol_v1")
     with app_connection(database_url) as conn:

@@ -35,7 +35,7 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -48,7 +48,7 @@ from tradeline.dates import IST
 from tradeline.freeze import verify_snapshot
 from tradeline.gate import CurveMetrics, GateOutcome, evaluate
 from tradeline.holdout import FreshPeriod, holdout_run, rerun_holdout, standing
-from tradeline.metrics import HaltDay
+from tradeline.metrics import HaltDay, RelativeDrawdownDay
 from tradeline.paper_broker import FILL_MODEL, FillModel
 from tradeline.report import (
     FRACTION,
@@ -57,6 +57,9 @@ from tradeline.report import (
     Scores,
     halt_days_json,
     read_account,
+    relative_drawdown_days_json,
+    relative_drawdown_days_of,
+    relative_drawdown_json,
     rounded,
 )
 from tradeline.risk import RISK_ENGINE, RiskEngine
@@ -95,6 +98,8 @@ class ProtocolReport:
     sensitivity: tuple[tuple[Decimal, dict[str, Scores]], ...]
     lineage: queries.Lineage
     stages: tuple[Stage, ...]
+    # Each curve's Relative Drawdown Halt days; None when the Protocol has no such Halt.
+    relative_drawdown_days: Mapping[str, tuple[RelativeDrawdownDay, ...]] | None = None
 
     def _accounts(self) -> dict[str, Account]:
         return {"stitched_curve": self.stitched, "holdout": self.holdout}
@@ -142,11 +147,7 @@ class ProtocolReport:
                     )
                 },
             },
-            "halt_would_have_fired": {
-                "daily_loss_limit": rounded(terms.halts.daily_loss, FRACTION),
-                "drawdown_limit": rounded(terms.halts.drawdown, FRACTION),
-                **{curve: halt_days_json(days) for curve, days in halts.items()},
-            },
+            "halt_would_have_fired": self._halts_json(halts),
             "windows": [
                 window_json(number, window, found, terms)
                 for number, (window, found) in enumerate(
@@ -191,6 +192,26 @@ class ProtocolReport:
             "closed_positions": {c: [t.as_json() for t in a.closed] for c, a in accounts.items()},
         }
 
+    def _halts_json(self, halts: dict[str, list[HaltDay]]) -> dict[str, Any]:
+        """The days a Halt would have fired on each curve: the Relative Drawdown Halt's
+        when the Protocol has one (a portfolio family's, ADR 0020), else the daily-loss and
+        drawdown Halts'."""
+        terms = self.frozen.protocol
+        relative = terms.halts.relative_drawdown
+        if relative is not None and self.relative_drawdown_days is not None:
+            return {
+                **relative_drawdown_json(relative),
+                **{
+                    curve: relative_drawdown_days_json(days)
+                    for curve, days in self.relative_drawdown_days.items()
+                },
+            }
+        return {
+            "daily_loss_limit": rounded(terms.halts.daily_loss, FRACTION),
+            "drawdown_limit": rounded(terms.halts.drawdown, FRACTION),
+            **{curve: halt_days_json(days) for curve, days in halts.items()},
+        }
+
     def text(self) -> str:
         return json.dumps(self.as_json(), indent=2) + "\n"
 
@@ -230,16 +251,25 @@ def read_protocol_report(conn: psycopg.Connection, protocol: str) -> ProtocolRep
             )
         )
     stages.append(Stage("Gate evaluation", evaluation.evaluated_at, evaluation.evaluated_at))
+    stitched = read_account(conn, walked.backtest_id)
+    holdout = read_account(conn, attempt.backtest_id)
+    relative: dict[str, tuple[RelativeDrawdownDay, ...]] | None = None
+    if frozen.protocol.halts.relative_drawdown is not None:
+        relative = {}
+        for curve, account in (("stitched_curve", stitched), ("holdout", holdout)):
+            days = relative_drawdown_days_of(conn, frozen.protocol, account)
+            relative[curve] = () if days is None else tuple(days)
     return ProtocolReport(
         frozen=frozen,
         windows=windows,
-        stitched=read_account(conn, walked.backtest_id),
+        stitched=stitched,
         attempt=attempt,
-        holdout=read_account(conn, attempt.backtest_id),
+        holdout=holdout,
         evaluation=evaluation,
         sensitivity=tuple(sorted(by_impact.items())),
         lineage=queries.lineage(conn, frozen.hash),
         stages=tuple(stages),
+        relative_drawdown_days=relative,
     )
 
 
@@ -662,6 +692,9 @@ class _Markdown:
     def _halts(self) -> None:
         halts = self._json["halt_would_have_fired"]
         self._section("Halt would have fired")
+        if self._report.relative_drawdown_days is not None:
+            self._relative_drawdown_halts(halts, self._report.relative_drawdown_days)
+            return
         self._line(
             "A backtest never Halts; these are the days the daily-loss Halt (a loss of"
             f" {halts['daily_loss_limit']} of the day before's Equity) or the drawdown Halt"
@@ -688,6 +721,34 @@ class _Markdown:
         self._table(
             ["Curve", "Days", "Count", "Limits", "Worst daily loss", "Deepest drawdown"], rows
         )
+
+    def _relative_drawdown_halts(
+        self, halts: dict[str, Any], found: Mapping[str, tuple[RelativeDrawdownDay, ...]]
+    ) -> None:
+        fallback = " (a fallback)" if halts["fallback"] else ""
+        self._line(
+            "A backtest never Halts; these are the days the Relative Drawdown Halt (the"
+            " Strategy's value over the Benchmark's, fallen"
+            f" {halts['relative_drawdown_limit']} from its peak; threshold from"
+            f" {halts['source']}{fallback}) would have fired, consecutive days taken together."
+            f" {halts['note']}"
+        )
+        rows = []
+        accounts = self._report._accounts()
+        for curve, days in found.items():
+            for first, last, stretch in _consecutive(accounts[curve].days, list(days)):
+                rows.append(
+                    [
+                        CURVE_NAMES[curve],
+                        first.isoformat() if first == last else f"{first} .. {last}",
+                        str(len(stretch)),
+                        str(max(d.relative_drawdown for d in stretch).quantize(FRACTION)),
+                    ]
+                )
+        if not rows:
+            self._line("None on either curve.")
+            return
+        self._table(["Curve", "Days", "Count", "Deepest Relative Drawdown"], rows)
 
     def _windows(self) -> None:
         self._section("Windows")
@@ -903,14 +964,17 @@ def _cell(value: Any) -> str:
     return "n/a" if value is None else str(value)
 
 
-def _consecutive(days: Sequence[Any], halts: list[HaltDay]) -> list[tuple[Any, Any, list[HaltDay]]]:
+def _consecutive[H: (HaltDay, RelativeDrawdownDay)](
+    days: Sequence[Any], halts: list[H]
+) -> list[tuple[Any, Any, list[H]]]:
     """The Halt days grouped where they fall on consecutive trading days of the curve."""
     index = {day: i for i, day in enumerate(days)}
-    found: list[tuple[Any, Any, list[HaltDay]]] = []
+    found: list[tuple[Any, Any, list[H]]] = []
     for halt in halts:
         if found and index[halt.day] == index[found[-1][1]] + 1:
             first, _, stretch = found[-1]
-            found[-1] = (first, halt.day, [*stretch, halt])
+            stretch.append(halt)
+            found[-1] = (first, halt.day, stretch)
         else:
             found.append((halt.day, halt.day, [halt]))
     return found

@@ -40,7 +40,7 @@ import json
 import time
 import uuid
 from collections import Counter, defaultdict
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
@@ -49,21 +49,24 @@ from typing import Any
 import psycopg
 
 from tradeline import queries
-from tradeline.benchmark import BenchmarkTerms, benchmark_redemption
+from tradeline.benchmark import BenchmarkTerms, benchmark_redemption, benchmark_values
 from tradeline.costs import CostModel
 from tradeline.engine import backtest
 from tradeline.metrics import (
     HaltDay,
     HaltLimits,
     PositionResult,
+    RelativeDrawdownDay,
+    RelativeDrawdownHalt,
     expectancy,
     halt_days,
     max_drawdown,
     profit_factor,
+    relative_drawdown_days,
     sharpe,
 )
 from tradeline.paper_broker import ExitReason
-from tradeline.protocol import fixed_decimal
+from tradeline.protocol import Protocol, fixed_decimal
 from tradeline.risk import UNCLASSIFIED
 from tradeline.strategy import Strategy
 from tradeline.tax import TaxTerms, is_short_term
@@ -603,6 +606,43 @@ def report_backtest(
         contract_notes=contract_notes,
     )
     return ReportResult(report, backtest_id, variant_ids, seconds, variant_seconds)
+
+
+def relative_drawdown_days_of(
+    conn: psycopg.Connection, protocol: Protocol, account: Account
+) -> list[RelativeDrawdownDay] | None:
+    """Every day of ``account`` its Protocol's Relative Drawdown Halt would have fired on:
+    its Equity at each day's close (before tax, dividends counted) over the Benchmark's NAV
+    as of the day, fallen from that ratio's peak by at least the threshold. None when the
+    Protocol has no such Halt."""
+    relative = protocol.halts.relative_drawdown
+    if relative is None:
+        return None
+    if protocol.benchmark is None:
+        raise ValueError("a Relative Drawdown Halt's Protocol names the Benchmark's funds")
+    if not account.days:
+        return []
+    navs = benchmark_values(conn, protocol.benchmark.funds, account.days)
+    return relative_drawdown_days(
+        account.days, account.curve[1:], navs, threshold=relative.threshold
+    )
+
+
+def relative_drawdown_json(relative: RelativeDrawdownHalt) -> dict[str, Any]:
+    """The Relative Drawdown Halt as the reports state it beside its days."""
+    return {
+        "relative_drawdown_limit": rounded(relative.threshold, FRACTION),
+        "source": relative.source,
+        "fallback": relative.fallback,
+        "note": relative.note,
+    }
+
+
+def relative_drawdown_days_json(days: Sequence[RelativeDrawdownDay]) -> list[dict[str, Any]]:
+    return [
+        {"day": d.day.isoformat(), "relative_drawdown": rounded(d.relative_drawdown, FRACTION)}
+        for d in days
+    ]
 
 
 def halt_days_json(days: list[HaltDay]) -> list[dict[str, Any]]:

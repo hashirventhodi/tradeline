@@ -4,11 +4,15 @@ A Protocol states the parameter grid, the objective and its tie-break, the
 Walk-Forward Windows and the Holdout as trading days from the Trading Calendar,
 the cost schedule's date with the rates in force on it and Slippage's
 parameters, the exit band, every Limit on with its value or off (ADR 0020), the
-daily-loss and drawdown Halt fractions a backtest reports against, whether
+daily-loss and drawdown Halt fractions a backtest reports against (null when
+off), a portfolio family's Relative Drawdown Halt with its threshold, source and
+the index history it came from (stated only when there is one), whether
 dividends are credited (stated only when they are), whether the account keeps
-the tax ledger and is compared with the Benchmark (stated only when it does,
-with the tax rates as of the freeze, the dividend rate, the Benchmark's funds,
-the factor fund and the fund-unit rates as of the freeze), the starting Equity, the
+the tax ledger (stated only when it does, with the tax rates as of the freeze
+and the dividend rate), the Benchmark that a tax-keeping account is compared
+with and a Relative Drawdown is measured against (stated only when either is
+on: its funds, the factor fund and the fund-unit rates as of the freeze), the
+starting Equity, the
 risk-free rate, the Gate thresholds, the Universe Rule version, the Strategy
 family, name and code revision, the git commit it was frozen at, and the data
 snapshot: each Universe month's mode and build, the
@@ -40,7 +44,7 @@ from typing import Any
 from tradeline.benchmark import BenchmarkFunds, BenchmarkTerms, FundChange
 from tradeline.costs import CHARGES, CostModel, CostSchedule, FundRates, Rate, Rates, Slippage
 from tradeline.dates import month_end, month_of, next_month
-from tradeline.metrics import HaltLimits
+from tradeline.metrics import HaltLimits, IndexHistory, RelativeDrawdownHalt
 from tradeline.risk import Limits
 from tradeline.tax import ITEMS, TaxRate, TaxSchedule, TaxTerms
 from tradeline.trading_calendar import TradingCalendar
@@ -186,15 +190,17 @@ class Protocol:
     # Ex-Date (ADR 0020). Stated in the content only when on, so a Protocol frozen before
     # it existed (``pullback_v1``'s) reads back to the same hash, with dividends off.
     dividends: bool = False
-    # The tax ledger's rates as of the freeze and the dividend rate, and the Benchmark the
-    # account is compared with (ADR 0015 amendment): both or neither, stated in the
-    # content only when kept, as ``dividends`` is.
+    # The tax ledger's rates as of the freeze and the dividend rate (ADR 0015 amendment),
+    # and the Benchmark: its funds, the factor fund and the fund-unit rates. The Benchmark
+    # is what a tax-keeping account is compared with and what a Relative Drawdown is
+    # measured against, so tax states it; it is stated without tax for a Relative Drawdown
+    # Halt alone. Each is in the content only when there is one, as ``dividends`` is.
     tax: TaxTerms | None = None
     benchmark: BenchmarkTerms | None = None
 
     def __post_init__(self) -> None:
-        if (self.tax is None) != (self.benchmark is None):
-            raise ValueError("a Protocol keeping the tax ledger states the Benchmark, and only it")
+        if self.tax is not None and self.benchmark is None:
+            raise ValueError("a Protocol keeping the tax ledger states the Benchmark")
 
     @property
     def demergers(self) -> bool:
@@ -255,7 +261,7 @@ class Protocol:
             },
             "band": self.band,
             "limits": limits_content(self.limits),
-            "halts": dataclasses.asdict(self.halts),
+            "halts": halts_content(self.halts),
             "starting_equity": self.starting_equity,
             "risk_free_rate": self.risk_free_rate,
             "gate": dataclasses.asdict(self.gate),
@@ -272,13 +278,14 @@ class Protocol:
             content["dividends"] = True
         if snapshot.demergers is not None:
             content["data_snapshot"]["demergers"] = snapshot.demergers
-        if self.tax is not None and self.benchmark is not None:
+        if self.tax is not None:
             rates = self.tax.schedule.rates(self.tax.rates_as_of)
             content["tax"] = {
                 "rates_as_of": self.tax.rates_as_of,
                 "rates": dataclasses.asdict(rates),
                 "dividend_rate": self.tax.dividend_rate,
             }
+        if self.benchmark is not None:
             content["benchmark"] = {
                 "funds": [dataclasses.asdict(c) for c in self.benchmark.funds.changes],
                 "factor_fund": self.benchmark.factor_fund,
@@ -313,7 +320,7 @@ class Protocol:
             slippage=Slippage(**{name: Decimal(v) for name, v in costs["slippage"].items()}),
             band=Decimal(content["band"]),
             limits=read_limits(content["limits"]),
-            halts=HaltLimits(**{name: Decimal(v) for name, v in content["halts"].items()}),
+            halts=read_halts(content["halts"]),
             starting_equity=Decimal(content["starting_equity"]),
             risk_free_rate=Decimal(content["risk_free_rate"]),
             gate=Gate(
@@ -512,6 +519,57 @@ def _read_benchmark(raw: Mapping[str, Any]) -> BenchmarkTerms:
             stt=Decimal(rates["stt"]),
             exit_load=Decimal(rates["exit_load"]),
             exit_load_days=rates["exit_load_days"],
+        ),
+    )
+
+
+def halts_content(halts: HaltLimits) -> dict[str, Any]:
+    """The Halts as a Protocol states them: the daily-loss and drawdown fractions, null
+    when off, and the Relative Drawdown Halt only when there is one, so the Protocols
+    frozen before it serialise, and hash, as they were frozen."""
+    content: dict[str, Any] = {"daily_loss": halts.daily_loss, "drawdown": halts.drawdown}
+    relative = halts.relative_drawdown
+    if relative is not None:
+        content["relative_drawdown"] = {
+            **{f.name: getattr(relative, f.name) for f in dataclasses.fields(relative)},
+            "history": [dataclasses.asdict(h) for h in relative.history],
+        }
+    return content
+
+
+def read_halts(raw: Mapping[str, Any]) -> HaltLimits:
+    """The Halts a Protocol states."""
+
+    def fraction(value: str | None) -> Decimal | None:
+        return None if value is None else Decimal(value)
+
+    def day(value: str | None) -> date | None:
+        return None if value is None else date.fromisoformat(value)
+
+    relative = raw.get("relative_drawdown")
+    return HaltLimits(
+        daily_loss=fraction(raw["daily_loss"]),
+        drawdown=fraction(raw["drawdown"]),
+        relative_drawdown=None
+        if relative is None
+        else RelativeDrawdownHalt(
+            threshold=Decimal(relative["threshold"]),
+            worst=Decimal(relative["worst"]),
+            source=relative["source"],
+            fallback=relative["fallback"],
+            note=relative["note"],
+            peak=day(relative["peak"]),
+            trough=day(relative["trough"]),
+            history=tuple(
+                IndexHistory(
+                    h["index_name"],
+                    date.fromisoformat(h["first"]),
+                    date.fromisoformat(h["last"]),
+                    h["days"],
+                    h["hash"],
+                )
+                for h in relative["history"]
+            ),
         ),
     )
 

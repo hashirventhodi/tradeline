@@ -71,6 +71,7 @@ from tradeline.holdout_checks import TaxTestOutcome, check_holdout
 from tradeline.ingest.benchmark import ingest_benchmark
 from tradeline.ingest.corporate_actions import ingest_corporate_actions, year_chunks
 from tradeline.ingest.eod import ingest_eod
+from tradeline.ingest.index_history import ingest_index_history
 from tradeline.metrics import HaltLimits
 from tradeline.protocol import Gate, Layout, Terms, months_between
 from tradeline.risk import Limits
@@ -1077,6 +1078,39 @@ def write_amfi_fixtures(
     return directory
 
 
+# --- The Benchmark and the index history (ADR 0020) ------------------------------
+
+# The recorded niftyindices.com Total Return Index history, 2005-04 to 2019-09
+# (fixtures/index_history/README.md).
+INDEX_HISTORY_FIXTURES = Path(__file__).parent / "fixtures" / "index_history"
+# Where ``lowvol_benchmark_navs`` starts rising, and by how much each trading day.
+LOWVOL_BENCHMARK_RISE = date(2022, 8, 2)
+LOWVOL_BENCHMARK_STEP = Decimal("2")
+
+
+def lowvol_benchmark_navs(calendar: TradingCalendar) -> dict[date, Decimal]:
+    """The Benchmark's synthetic NAV over ``lowvol_market``'s Protocol: Rs 100 on every
+    trading day from 2022-03-01, then from ``LOWVOL_BENCHMARK_RISE`` up by
+    ``LOWVOL_BENCHMARK_STEP`` each trading day, while the Strategy's flat stocks only swing
+    (and H20 gaps up on 2022-08-01), so its Relative Drawdown deepens through September."""
+    navs = {}
+    nav = Decimal(100)
+    for day in calendar.trading_days(date(2022, 3, 1), LOWVOL_RANGE[1]):
+        if day >= LOWVOL_BENCHMARK_RISE:
+            nav += LOWVOL_BENCHMARK_STEP
+        navs[day] = nav
+    return navs
+
+
+def write_benchmark_fixtures(directory: Path, navs: dict[date, Decimal], *, end: date) -> Path:
+    """AMFI's answers ``ingest benchmark`` asks for to ``end``: ``navs`` as the NAV history
+    of both the Benchmark and the factor fund, from ``benchmark_funds.csv``'s first date."""
+    funds = load_benchmark_funds(REPO_ROOT / "benchmark_funds.csv")
+    return write_amfi_fixtures(
+        {BENCHMARK_SCHEME: navs, FACTOR_FUND: navs}, directory, first=funds.first, end=end
+    )
+
+
 def load_benchmark(conn: psycopg.Connection, fixtures: Path, *, end: date) -> None:
     """Load AMFI's recorded answers through ``ingest benchmark``, never sleeping."""
     ingest_benchmark(
@@ -1108,3 +1142,8 @@ def pass_holdout_checks(conn: psycopg.Connection, protocol: str) -> None:
         tax_tests=lambda: TaxTestOutcome(True, "taken as passed"),
     )
     assert result.passed, result.summary()
+
+
+def load_index_history(conn: psycopg.Connection) -> None:
+    """Load the recorded index history through ``ingest index-history``."""
+    ingest_index_history(conn, PlaybackTransport(INDEX_HISTORY_FIXTURES), sleep=lambda _s: None)
