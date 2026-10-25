@@ -158,6 +158,9 @@ class Config:
         # The checked-in file of splits and bonuses cited from NSE's circulars
         # (``tradeline.cited_actions``), relative to the working directory.
         cited: str = "cited_corporate_actions.csv"
+        # The checked-in demerger table (``tradeline.demergers``), relative to the working
+        # directory; stored by ``ingest demergers``.
+        demergers: str = "demergers.csv"
 
     @dataclass(frozen=True)
     class Benchmark:

@@ -76,6 +76,16 @@ the Ex-Date's open held nothing at the close before and is credited nothing; one
 sold that day is credited. An unparsed subject credits nothing and is written
 with its reason. The credit is part of the account's cash, so of Equity.
 
+When the Protocol credits demergers (ADR 0020), on a child's first listing day
+in the demerger table (``tradeline.demergers``) each Position held at the close
+before the demerger's Ex-Date, open or since sold, is credited in cash its
+shares then times the entitlement ratio times the child's close that day in the
+Raw Series; the day must be the child's first row since the Ex-Date, or the run
+is refused. The child's share of the Position's basis moves to the credit
+(``queries.position_bases``). Between the Ex-Date and the listing the
+entitlement is in neither cash nor Equity, and an account ending before the
+listing is credited nothing.
+
 A backtest runs under a frozen Protocol (``tradeline.protocol``, ADR 0007)
 and nothing else: its Universe Rule version, Limits, costs, band and starting
 Equity are the Protocol's, and each Strategy version it records names the
@@ -105,6 +115,7 @@ from tradeline import ledger, queries, revision
 from tradeline.adjust import ADJUSTED_KINDS, AdjustedBar, CorporateAction
 from tradeline.costs import CostModel, paisa
 from tradeline.dates import IST, month_of
+from tradeline.demergers import Demerger
 from tradeline.dividends import dividends as dividends_of
 from tradeline.freeze import verify_snapshot
 from tradeline.paper_broker import (
@@ -479,6 +490,7 @@ def run(
     commit: bool = True,
     initial_buy: bool = False,
     dividends: bool = False,
+    demergers: Sequence[Demerger] = (),
 ) -> RunResult:
     """The day ``as_of`` in one account: its held Positions credited any dividend ex-dated
     since its last day when ``dividends`` is on (as its Protocol states), and restated for
@@ -541,6 +553,7 @@ def run(
         tick_sizes=tick_sizes,
         fill_model=fill_model,
         dividends=dividends,
+        demergers=demergers,
     )
     tags: queries.Account = {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run}
     next_session = _next_session(calendar, as_of)
@@ -782,6 +795,8 @@ def backtest_span(
         "impact": impact,
         "commit": commit,
         "dividends": terms.dividends,
+        # Verified against the Protocol's snapshot by the caller (``verify_snapshot``).
+        "demergers": tuple(queries.demergers(conn)) if terms.demergers else (),
     }
     last = days[-1]
     before = days[:-1] if boundary else days
@@ -1008,9 +1023,11 @@ class _Account:
         tick_sizes: TickSizes,
         fill_model: FillModel,
         dividends: bool = False,
+        demergers: Sequence[Demerger] = (),
     ) -> None:
         self._conn = conn
         self._dividends = dividends
+        self._demergers = demergers
         self._account: queries.Account = {
             "mode": mode,
             "backtest_id": backtest_id,
@@ -1065,6 +1082,7 @@ class _Account:
         ]
         if self._dividends:
             self._credit_dividends()
+        self._credit_demergers()
         fills = 0
         for order in self._restate(ordered):
             if order.purpose == "entry":
@@ -1096,6 +1114,52 @@ class _Account:
                     day=self._day,
                     seq=self._next_seq(),
                 )
+
+    def _credit_demergers(self) -> None:
+        """On a child's first listing day, credit each Position held at the close before its
+        demerger's Ex-Date, open or since closed, its entitlement at the child's close that
+        day in the Raw Series, moving the child's share of the Position's basis to it."""
+        listing = [d for d in self._demergers if d.listed_on == self._day]
+        if not listing:
+            return
+        bases = queries.position_bases(self._conn, **self._account)
+        events = queries.position_events(self._conn, **self._account)
+        for demerger in listing:
+            close = self._first_close(demerger)
+            held_on = _previous_session(self._calendar, demerger.ex_date)
+            parent = queries.instrument_key(self._conn, demerger.parent, as_of=held_on)
+            for held in queries.held_at_close(events, parent, held_on):
+                basis = bases[held.position_id]
+                child_basis = paisa(basis * demerger.child_basis / 100)
+                bases[held.position_id] = basis - child_basis
+                ledger.insert_demerger_credit(
+                    self._conn,
+                    self._account,
+                    held,
+                    demerger,
+                    close=close,
+                    cash=paisa(held.shares * demerger.ratio * Fraction(close)),
+                    basis=child_basis,
+                    day=self._day,
+                    seq=self._next_seq(),
+                )
+
+    def _first_close(self, demerger: Demerger) -> Decimal:
+        """The child's close on the day, which must be its first in the Raw Series since the
+        Ex-Date, as the table states."""
+        rows = queries.end_of_day(
+            self._conn, demerger.child, start=demerger.ex_date, end=self._day, as_of=self._day
+        )
+        days = sorted({r.trade_date for r in rows})
+        if days != [self._day] or len(rows) != 1 or rows[0].close is None:
+            raise ValueError(
+                f"the demerger table lists {demerger.child} (from {demerger.parent}) on"
+                f" {self._day}, and its Raw Series from the Ex-Date {demerger.ex_date} has"
+                f" {len(rows)} rows on {', '.join(map(str, days)) or 'no day'}; correct the"
+                " table's listed_on"
+            )
+        close: Decimal = rows[0].close
+        return close
 
     def _restate(self, orders: list[ledger.Order]) -> list[ledger.Order]:
         """Restate each held Position whose Instrument has a split or bonus ex-dated since the

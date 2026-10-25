@@ -7,12 +7,15 @@ the database: for each month from the first In-Sample day to the Holdout's
 last, the month's mode (Recorded or Reconstructed) and its build, whose hashes
 are checked against the rows stored now; and for every member of those months,
 the hash of its Adjusted Series from the warm-up before the first Window to the
-Holdout's last day, as of that day. The Protocol is written once under its
-content hash; a second freeze of the same content writes nothing.
+Holdout's last day, as of that day; and, when its Terms credit demergers, the
+hash of the demerger table stored then (``queries.demergers``). The Protocol is
+written once under its content hash; a second freeze of the same content
+writes nothing.
 
 ``verify_snapshot`` is the engine's check before a backtest: each Universe
-month the backtest's range touches and each member of those months is hashed
-again, and any that differs from the snapshot is named in the refusal.
+month the backtest's range touches, each member of those months and the
+demerger table are hashed again, and any that differs from the snapshot is
+named in the refusal.
 """
 
 from __future__ import annotations
@@ -150,6 +153,7 @@ def freeze_protocol(
             first=first,
             last=last,
             calendar=calendar,
+            demergers=terms.demergers,
         ),
         dividends=terms.dividends,
     )
@@ -191,6 +195,8 @@ def verify_snapshot(
         now = queries.adjusted_series_hash(conn, instrument, start=series.start, end=series.end)
         if series.adjusted_series.get(instrument) != now:
             differ.append(f"Instrument {instrument}")
+    if series.demergers is not None and queries.demerger_table_hash(conn) != series.demergers:
+        differ.append("the demerger table")
     if differ:
         raise SnapshotChanged(
             f"the data differs from what Protocol {frozen.hash[:12]} froze: "
@@ -207,7 +213,16 @@ def _data_snapshot(
     first: date,
     last: date,
     calendar: TradingCalendar,
+    demergers: bool,
 ) -> DataSnapshot:
+    demerger_table = None
+    if demergers:
+        if not queries.demergers(conn):
+            raise ValueError(
+                "the Protocol credits demergers and no demerger table is stored;"
+                " run `tradeline ingest demergers` first"
+            )
+        demerger_table = queries.demerger_table_hash(conn)
     months = []
     instruments: set[str] = set()
     for month in months_between(first, last):
@@ -253,6 +268,7 @@ def _data_snapshot(
             i: queries.adjusted_series_hash(conn, i, start=start, end=last)
             for i in sorted(instruments)
         },
+        demergers=demerger_table,
     )
 
 
