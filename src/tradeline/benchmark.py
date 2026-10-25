@@ -17,6 +17,15 @@ master lines and NAV history. Reading the Benchmark checks the stored master
 line names its scheme with both ``"Direct"`` and ``"Growth"``
 (``NotDirectGrowth``), as the ingest does. ``nav_as_of`` never returns a NAV
 dated after the day asked about.
+
+An account's Benchmark (``benchmark_liquidation``) is bought on the account's
+first day for its starting Equity: the fund house deducts stamp duty and allots
+units for the rest at that day's NAV, unrounded. On each day it is valued at
+the NAV as of the day and liquidated: STT and any exit load are paid on the
+redemption, and the gain over the amount paid is taxed once, as one lot
+(``tradeline.tax``), short-term or long-term by the same holding rule as a share.
+A Protocol freezes the funds, the factor fund and the fund-unit rates
+(``BenchmarkTerms``).
 """
 
 from __future__ import annotations
@@ -28,7 +37,10 @@ from pathlib import Path
 
 import psycopg
 
+from tradeline.costs import FundCharges, FundRates, paisa
 from tradeline.reviewed_csv import Line, parse_date, read_lines, require_header
+from tradeline.tax import Liquidation, Sale, TaxTerms, is_short_term, liquidation_value
+from tradeline.trading_calendar import TradingCalendar
 
 COLUMNS = ("in_force_from", "scheme_code", "event", "citation")
 FIRST_EVENT = "chosen"
@@ -81,6 +93,90 @@ class BenchmarkFunds:
                 last = None if not after else after[0].in_force_from - timedelta(days=1)
                 return change.in_force_from, last
         raise ValueError(f"scheme {scheme_code} was never the Benchmark")
+
+
+@dataclass(frozen=True)
+class BenchmarkTerms:
+    """What a Protocol freezes of the Benchmark: its funds from each recorded date, the
+    factor fund reported beside it, and the fund-unit rates as of the freeze."""
+
+    funds: BenchmarkFunds
+    factor_fund: int
+    rates: FundRates
+
+
+@dataclass(frozen=True)
+class BenchmarkLiquidation:
+    """An account's Benchmark liquidated on a day: its units, their value at the day's NAV,
+    the charges on its purchase and its redemption, whether its gain is short-term, and
+    its Liquidation Value after the tax on that gain."""
+
+    units: Decimal
+    value: Decimal
+    purchase: FundCharges
+    sale: FundCharges
+    short_term: bool
+    liquidation: Liquidation
+
+
+def benchmark_liquidation(
+    *,
+    bought_on: date,
+    bought_nav: Decimal,
+    day: date,
+    nav: Decimal,
+    invested: Decimal,
+    rates: FundRates,
+    terms: TaxTerms,
+    calendar: TradingCalendar,
+) -> BenchmarkLiquidation:
+    """The Benchmark bought for ``invested`` on ``bought_on`` at ``bought_nav``, redeemed on
+    ``day`` at ``nav``: the gain over ``invested`` is taxed once, on the redemption."""
+    found = benchmark_redemption(
+        bought_on=bought_on, bought_nav=bought_nav, day=day, nav=nav, invested=invested, rates=rates
+    )
+    return BenchmarkLiquidation(
+        units=found.units,
+        value=found.value,
+        purchase=found.purchase,
+        sale=found.sale,
+        short_term=is_short_term(bought_on, day),
+        liquidation=liquidation_value(
+            day, cash=Decimal(0), holdings=[found.lot], sales=[], terms=terms, calendar=calendar
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class BenchmarkRedemption:
+    """The Benchmark's units, their value at a day's NAV, its purchase's and redemption's
+    charges, and the lot the tax ledger takes: the amount paid against the redemption's
+    value less its charges."""
+
+    units: Decimal
+    value: Decimal
+    purchase: FundCharges
+    sale: FundCharges
+    lot: Sale
+
+
+def benchmark_redemption(
+    *,
+    bought_on: date,
+    bought_nav: Decimal,
+    day: date,
+    nav: Decimal,
+    invested: Decimal,
+    rates: FundRates,
+) -> BenchmarkRedemption:
+    """The Benchmark bought for ``invested`` on ``bought_on`` at ``bought_nav`` and redeemed on
+    ``day`` at ``nav``, before tax."""
+    purchase = rates.charges("buy", value=invested, bought_on=bought_on, day=bought_on)
+    units = (invested - purchase.stamp_duty) / bought_nav
+    value = paisa(units * nav)
+    sale = rates.charges("sell", value=value, bought_on=bought_on, day=day)
+    lot = Sale(bought=bought_on, sold=day, basis=invested, proceeds=value - sale.total)
+    return BenchmarkRedemption(units, value, purchase, sale, lot)
 
 
 def load_benchmark_funds(path: Path) -> BenchmarkFunds:

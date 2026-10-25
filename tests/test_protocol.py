@@ -242,6 +242,41 @@ def test_the_lowvol_limit_set_freezes_with_its_limits_off_and_reads_back(
     assert frozen.hash != freeze_protocol(conn, MARKET, FIRST, LAST).hash
 
 
+def test_a_protocol_keeping_tax_freezes_its_rates_dividend_rate_and_benchmark(
+    conn: psycopg.Connection,
+) -> None:
+    taxed = replace(protocol_terms(FIRST, LAST), tax=True)
+
+    frozen = freeze_protocol(conn, MARKET, FIRST, LAST, terms=taxed)
+
+    found = queries.protocol(conn, frozen.hash)
+    assert found is not None
+    content = found.protocol.content()
+    # tax_rates.csv as of the freeze, and the default dividend rate.
+    assert content["tax"] == {
+        "rates_as_of": COSTS_AS_OF,
+        "rates": {"short_term": D("0.20"), "long_term": D("0.125"), "cess": D("0.04")},
+        "dividend_rate": D("0.312"),
+    }
+    benchmark = content["benchmark"]
+    assert [(f["in_force_from"], f["scheme_code"], f["event"]) for f in benchmark["funds"]] == [
+        (date(2019, 9, 11), 147625, "chosen")
+    ]
+    assert benchmark["factor_fund"] == 141596
+    # cost_rates.csv's fund-unit rows as of the freeze.
+    assert benchmark["fund_rates"] == {
+        "stamp_duty": D("0.00005"),
+        "stt": D("0.00001"),
+        "exit_load": D("0.01"),
+        "exit_load_days": 15,
+    }
+    assert found.protocol == frozen.protocol
+    untaxed = freeze_protocol(conn, MARKET, FIRST, LAST)
+    assert "tax" not in untaxed.protocol.content()
+    assert "benchmark" not in untaxed.protocol.content()
+    assert frozen.hash != untaxed.hash
+
+
 def test_a_stored_protocol_missing_a_limit_is_refused_naming_it() -> None:
     content = json.loads(PULLBACK_V1_CONTENT.read_text())
     del content["limits"]["max_sector"]

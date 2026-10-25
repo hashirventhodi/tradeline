@@ -76,6 +76,17 @@ the Ex-Date's open held nothing at the close before and is credited nothing; one
 sold that day is credited. An unparsed subject credits nothing and is written
 with its reason. The credit is part of the account's cash, so of Equity.
 
+When the Protocol keeps tax (ADR 0015 amendment), the account keeps the tax ledger
+(``tradeline.tax``) over its realised events as the Ledger holds them: each closed
+Position a lot, bought for its buys' value and charges and sold for its sales' value
+less charges, each dividend credited. On the first trading day after March 31,
+before the session, the financial year just ended is debited its net tax; a
+Boundary Exit liquidates the account and settles its final partial year that day,
+dropping the losses left unused. After the session each day records the account's
+Liquidation Value: its cash before the day's debits, its open Positions sold at the
+day's close after costs, less every tax owed to then; and the Benchmark's, bought for
+the starting Equity at the NAV of the account's first day (``tradeline.benchmark``).
+
 A backtest runs under a frozen Protocol (``tradeline.protocol``, ADR 0007)
 and nothing else: its Universe Rule version, Limits, costs, band and starting
 Equity are the Protocol's, and each Strategy version it records names the
@@ -103,6 +114,12 @@ import psycopg
 
 from tradeline import ledger, queries, revision
 from tradeline.adjust import ADJUSTED_KINDS, AdjustedBar, CorporateAction
+from tradeline.benchmark import (
+    BenchmarkTerms,
+    benchmark_liquidation,
+    benchmark_scheme,
+    nav_as_of,
+)
 from tradeline.costs import CostModel, paisa
 from tradeline.dates import IST, month_of
 from tradeline.dividends import dividends as dividends_of
@@ -132,6 +149,18 @@ from tradeline.risk import (
 from tradeline.strategy import Candidate, Member, Plan, Strategy
 from tradeline.strategy.portfolio import AnyStrategy, PortfolioStrategy
 from tradeline.strategy.pricing import round_down
+from tradeline.tax import (
+    Dividend as TaxedDividend,
+)
+from tradeline.tax import (
+    Liquidation,
+    Sale,
+    TaxTerms,
+    debit_day,
+    financial_year,
+    liquidation_value,
+    tax_ledger,
+)
 from tradeline.tick_sizes import TickSizes
 from tradeline.trading_calendar import TradingCalendar
 
@@ -479,6 +508,8 @@ def run(
     commit: bool = True,
     initial_buy: bool = False,
     dividends: bool = False,
+    tax: TaxTerms | None = None,
+    benchmark: BenchmarkTerms | None = None,
 ) -> RunResult:
     """The day ``as_of`` in one account: its held Positions credited any dividend ex-dated
     since its last day when ``dividends`` is on (as its Protocol states), and restated for
@@ -510,6 +541,11 @@ def run(
     the trading day before the account's first: a Rebalance's entrants with nothing
     held, sized and put to the Risk Engine at once, bought at the next open. On every
     other day its holdings rest, with no Order but a sale the open did not fill.
+
+    With ``tax`` (and the ``benchmark`` it is compared with) the account keeps the tax
+    ledger: a financial year's tax is debited on the first trading day after its March 31,
+    a Boundary Exit settles the final partial year, and the day's Liquidation Value and the
+    Benchmark's are recorded.
     """
     if boundary and entries:
         raise ValueError("a Boundary Exit's day places no new entries; pass entries=False")
@@ -541,6 +577,7 @@ def run(
         tick_sizes=tick_sizes,
         fill_model=fill_model,
         dividends=dividends,
+        tax=tax,
     )
     tags: queries.Account = {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run}
     next_session = _next_session(calendar, as_of)
@@ -580,6 +617,25 @@ def run(
         )
         holdings = _holdings(held, account, sectors)
         cash = starting_equity + queries.account_cash_flows(conn, **tags)
+        if tax is not None:
+            liquidation = account.liquidate(cash, settle=boundary)
+            cash -= liquidation.settled
+            ledger.insert_liquidation_value(
+                conn,
+                tags,
+                liquidation.value,
+                _benchmark_day(
+                    conn,
+                    benchmark,
+                    tax,
+                    tags,
+                    day=as_of,
+                    invested=starting_equity,
+                    calendar=calendar,
+                    bought=step != "initial_buy",
+                ),
+                day=as_of,
+            )
         equity = cash + sum((h.value for h in holdings), Decimal(0))
         if step in ("initial_buy", "rebalance_buys"):
             plans = list(
@@ -782,6 +838,8 @@ def backtest_span(
         "impact": impact,
         "commit": commit,
         "dividends": terms.dividends,
+        "tax": terms.tax,
+        "benchmark": terms.benchmark,
     }
     last = days[-1]
     before = days[:-1] if boundary else days
@@ -981,6 +1039,67 @@ def _previous_session(calendar: TradingCalendar, as_of: date) -> date:
     return earlier[-1]
 
 
+@dataclass(frozen=True)
+class _Liquidated:
+    """A day's Liquidation Value, and the tax a liquidation settled on it (zero on any other
+    day)."""
+
+    value: Liquidation
+    settled: Decimal
+
+
+def _benchmark_day(
+    conn: psycopg.Connection,
+    benchmark: BenchmarkTerms | None,
+    tax: TaxTerms,
+    tags: queries.Account,
+    *,
+    day: date,
+    invested: Decimal,
+    calendar: TradingCalendar,
+    bought: bool,
+) -> queries.BenchmarkDay | None:
+    """The Benchmark on ``day``: bought for ``invested`` on the account's first day (today on
+    its first) at that day's NAV, liquidated at the NAV as of ``day``. None before it is
+    ``bought`` (an Initial Buy's decision day) or under no Benchmark."""
+    if benchmark is None or not bought:
+        return None
+    first = queries.account_first_day(conn, **tags) or day
+    funds = benchmark.funds
+    scheme = funds.scheme_on(first)
+    if funds.scheme_on(day) != scheme:
+        raise ValueError(
+            f"the Benchmark changes fund on {funds.change_on(day).in_force_from}, inside an"
+            f" account that bought it on {first}; switching funds is not modelled"
+        )
+    if first == day:
+        benchmark_scheme(conn, funds, day)
+    navs = [nav_as_of(conn, scheme, d) for d in (first, day)]
+    if navs[0] is None or navs[1] is None:
+        raise LookupError(
+            f"the Benchmark's scheme {scheme} has no NAV on or before {first};"
+            " run `tradeline ingest benchmark`"
+        )
+    found = benchmark_liquidation(
+        bought_on=first,
+        bought_nav=navs[0].nav,
+        day=day,
+        nav=navs[1].nav,
+        invested=invested,
+        rates=benchmark.rates,
+        terms=tax,
+        calendar=calendar,
+    )
+    return queries.BenchmarkDay(
+        scheme,
+        first,
+        navs[0].nav,
+        navs[1].nav,
+        found.liquidation.value,
+        found.liquidation.tax_due,
+    )
+
+
 class _Account:
     """One account's Orders, Fills and Positions on one day (``data.as_of``), each change
     written to the Ledger as an event in the order it happened.
@@ -1008,9 +1127,13 @@ class _Account:
         tick_sizes: TickSizes,
         fill_model: FillModel,
         dividends: bool = False,
+        tax: TaxTerms | None = None,
     ) -> None:
         self._conn = conn
         self._dividends = dividends
+        self._tax = tax
+        # The tax debited before today's session.
+        self._debited = Decimal(0)
         self._account: queries.Account = {
             "mode": mode,
             "backtest_id": backtest_id,
@@ -1065,6 +1188,8 @@ class _Account:
         ]
         if self._dividends:
             self._credit_dividends()
+        if self._tax is not None:
+            self._debit_tax(self._tax)
         fills = 0
         for order in self._restate(ordered):
             if order.purpose == "entry":
@@ -1096,6 +1221,81 @@ class _Account:
                     day=self._day,
                     seq=self._next_seq(),
                 )
+
+    def _debit_tax(self, terms: TaxTerms) -> None:
+        """On the first trading day after a March 31, debit the financial year it ended its
+        net tax, from the events realised before the day."""
+        year = financial_year(self._day) - 1
+        if debit_day(year, self._calendar) != self._day:
+            return
+        sales, dividends, _ = self._tax_events(through=self._day - timedelta(days=1))
+        ledger_years = tax_ledger(sales, dividends, terms=terms, calendar=self._calendar).years
+        for found in ledger_years:
+            if found.year == year:
+                ledger.insert_tax_debit(self._conn, self._account, found, day=self._day)
+                self._debited = found.tax
+
+    def _tax_events(
+        self, *, through: date
+    ) -> tuple[list[Sale], list[TaxedDividend], dict[uuid.UUID, queries.PositionLot]]:
+        """The account's lots sold and dividends credited through ``through``, as the tax
+        ledger takes them, and every lot by its Position."""
+        lots = queries.position_lots(self._conn, **self._account)
+        sales = [
+            Sale(lot.opened_on, lot.closed_on, lot.basis, lot.proceeds)
+            for lot in lots
+            if lot.closed_on is not None and lot.proceeds is not None and lot.closed_on <= through
+        ]
+        dividends = [
+            TaxedDividend(credit.day, credit.cash)
+            for credit in queries.dividend_credits(self._conn, **self._account)
+            if credit.cash is not None and credit.day <= through
+        ]
+        return sales, dividends, {lot.position_id: lot for lot in lots}
+
+    def liquidate(self, cash: Decimal, *, settle: bool) -> _Liquidated:
+        """The day's Liquidation Value, from ``cash`` after the day's session and debits: each
+        open Position sold at the day's close after costs. With ``settle`` (a Boundary Exit,
+        which has sold everything) the final partial year's tax is debited now, with the
+        losses it leaves unused."""
+        assert self._tax is not None
+        sales, dividends, lots = self._tax_events(through=self._day)
+        holdings = []
+        for position in self.open_positions():
+            close = self.close(position.instrument)
+            charges = self._costs.charges(
+                "sell",
+                day=self._day,
+                price=close,
+                shares=position.shares,
+                average_traded_value=self._data.average_traded_value(
+                    position.instrument, TRADED_VALUE_DAYS
+                ),
+            )
+            holdings.append(
+                Sale(
+                    position.opened_on,
+                    self._day,
+                    lots[position.id].basis,
+                    close * position.shares - charges.total,
+                )
+            )
+        found = liquidation_value(
+            self._day,
+            cash=cash + self._debited,
+            holdings=holdings,
+            sales=sales,
+            dividends=dividends,
+            terms=self._tax,
+            calendar=self._calendar,
+        )
+        if not settle:
+            return _Liquidated(found, Decimal(0))
+        final = found.ledger.years[-1]
+        ledger.insert_tax_debit(
+            self._conn, self._account, final, day=self._day, dropped=found.losses_dropped
+        )
+        return _Liquidated(found, final.tax)
 
     def _restate(self, orders: list[ledger.Order]) -> list[ledger.Order]:
         """Restate each held Position whose Instrument has a split or bonus ex-dated since the

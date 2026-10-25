@@ -19,6 +19,16 @@ The rules (``docs/risk-controls.md``, "Tax (portfolio families)"):
 - a Demerger Credit is a sale of the child's shares against the child's share
   of the parent's basis, held since the parent was bought;
 - each year's net tax is rounded to the paisa, half up.
+
+The schedule is checked in (``tax_rates.csv``, at ``tax.schedule`` in
+``tradeline.toml``), each row citing where the rate is enacted, as the cost
+schedule is (``load_tax_schedule``)::
+
+    in_force_from,item,rate,citation
+    2024-07-23,short_term,0.20,Finance (No. 2) Act 2024 amending s. 111A
+
+Its first date must give every item. A Protocol freezes the rates in force on
+its freeze day (``tradeline.protocol``).
 """
 
 from __future__ import annotations
@@ -26,14 +36,17 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Literal
 
 from tradeline.costs import paisa
+from tradeline.reviewed_csv import FirstLines, Line, parse_date, read_lines, require_header
 from tradeline.trading_calendar import TradingCalendar
 
 TaxItem = Literal["short_term", "long_term", "cess"]
 ITEMS: tuple[TaxItem, ...] = ("short_term", "long_term", "cess")
+COLUMNS = ("in_force_from", "item", "rate", "citation")
 DEFAULT_DIVIDEND_RATE = Decimal("0.312")
 # A loss is carried for the eight financial years after its own (s. 74(3)).
 CARRY_YEARS = 8
@@ -365,3 +378,39 @@ def _losses(pool: list[_Loss]) -> Losses:
         sum((loss.left for loss in pool if loss.short_term), _ZERO),
         sum((loss.left for loss in pool if not loss.short_term), _ZERO),
     )
+
+
+def load_tax_schedule(path: Path) -> TaxSchedule:
+    """The tax schedule at ``path``; any bad row refuses the file."""
+    lines = read_lines(path, "tax schedule")
+    require_header(path, lines[0] if lines else None, COLUMNS, "first")
+    seen: FirstLines[tuple[date, str]] = FirstLines()
+    rows = []
+    for line in lines[1:]:
+        row = _tax_rate(line)
+        seen.add((row.in_force_from, row.item), line, f"{row.item} on {row.in_force_from} again")
+        rows.append(row)
+    if not rows:
+        raise ValueError(f"{path}: no rates")
+    first = min(r.in_force_from for r in rows)
+    for item in ITEMS:
+        if not any(r.item == item and r.in_force_from == first for r in rows):
+            raise ValueError(f"{path}: the first date {first} has no rate for {item}")
+    return TaxSchedule(tuple(rows))
+
+
+def _tax_rate(line: Line) -> TaxRate:
+    day_text, item, rate_text, citation = line.columns(COLUMNS)
+    day = parse_date(line.where, "in_force_from", day_text)
+    where = f"{line.where}: {day}"
+    if item not in ITEMS:
+        raise ValueError(f"{where}: unknown item {item!r}; one of {', '.join(ITEMS)}")
+    try:
+        rate = Decimal(rate_text)
+    except InvalidOperation:
+        rate = Decimal(-1)
+    if not rate.is_finite() or rate < 0:
+        raise ValueError(f"{where}: rate {rate_text!r} is not a non-negative number")
+    if not citation:
+        raise ValueError(f"{where}: no citation; cite where the rate is enacted")
+    return TaxRate(day, item, rate, citation)

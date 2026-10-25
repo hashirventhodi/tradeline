@@ -32,6 +32,7 @@ from tradeline.queries import EngineMode
 from tradeline.risk import Decision, Pass, PortfolioPlan, Proposal
 from tradeline.strategy import Candidate, Plan
 from tradeline.strategy.portfolio import AnyStrategy
+from tradeline.tax import Liquidation, Losses, TaxYear
 
 
 @dataclass(frozen=True)
@@ -204,6 +205,79 @@ def insert_dividend_credit(
             per_share,
             None if per_share is None else per_share * position.shares,
             dividend.reason,
+        ),
+    )
+
+
+def insert_tax_debit(
+    conn: psycopg.Connection,
+    account: queries.Account,
+    year: TaxYear,
+    *,
+    day: date,
+    dropped: Losses | None = None,
+) -> None:
+    """The financial year ``year``'s tax debited from the account's cash on ``day``; with
+    ``dropped``, a liquidation's settlement of its final year and the losses it left."""
+    conn.execute(
+        "INSERT INTO tax_debits (mode, backtest_id, dry_run, id, day, financial_year,"
+        " short_term_gain, long_term_gain, dividends, tax, settled, dropped_short_term_loss,"
+        " dropped_long_term_loss) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (
+            account["mode"],
+            account["backtest_id"],
+            account["dry_run"],
+            uuid.uuid4(),
+            day,
+            year.year,
+            year.short_term_gain,
+            year.long_term_gain,
+            year.dividends,
+            year.tax,
+            dropped is not None,
+            None if dropped is None else dropped.short_term,
+            None if dropped is None else dropped.long_term,
+        ),
+    )
+
+
+def insert_liquidation_value(
+    conn: psycopg.Connection,
+    account: queries.Account,
+    liquidation: Liquidation,
+    benchmark: queries.BenchmarkDay | None,
+    *,
+    day: date,
+) -> None:
+    """The account's Liquidation Value on ``day``, and the Benchmark's when it is held."""
+    conn.execute(
+        "INSERT INTO liquidation_values (mode, backtest_id, dry_run, id, day, value, tax_due,"
+        " dropped_short_term_loss, dropped_long_term_loss, benchmark_scheme,"
+        " benchmark_bought_on, benchmark_bought_nav, benchmark_nav, benchmark_value,"
+        " benchmark_tax_due) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
+        " %s)",
+        (
+            account["mode"],
+            account["backtest_id"],
+            account["dry_run"],
+            uuid.uuid4(),
+            day,
+            liquidation.value,
+            liquidation.tax_due,
+            liquidation.losses_dropped.short_term,
+            liquidation.losses_dropped.long_term,
+            *(
+                (None,) * 6
+                if benchmark is None
+                else (
+                    benchmark.scheme,
+                    benchmark.bought_on,
+                    benchmark.bought_nav,
+                    benchmark.nav,
+                    benchmark.value,
+                    benchmark.tax_due,
+                )
+            ),
         ),
     )
 

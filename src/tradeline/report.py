@@ -24,6 +24,12 @@ then (near the top: a backtest never Halts), the Candidates beyond the Passes
 Unclassified (the sector Limit on Instruments with no recorded sector), every
 Block by Limit, and whether real contract notes check the cost model.
 
+Under a Protocol that keeps tax the report adds the account's Liquidation Value
+(``liquidation_json``): each day's, the Strategy's and the Benchmark's, as the engine
+recorded them; every tax debit; the losses the last day's liquidation would drop;
+and the Benchmark's purchase and redemption on the last day, its charges, and the
+rate its gain was taxed at.
+
 The JSON holds no backtest id and no timing, so one cell reported twice over the
 same data reads the same; the ids and runtimes are logged.
 """
@@ -43,6 +49,7 @@ from typing import Any
 import psycopg
 
 from tradeline import queries
+from tradeline.benchmark import BenchmarkTerms, benchmark_redemption
 from tradeline.costs import CostModel
 from tradeline.engine import backtest
 from tradeline.metrics import (
@@ -56,8 +63,10 @@ from tradeline.metrics import (
     sharpe,
 )
 from tradeline.paper_broker import ExitReason
+from tradeline.protocol import fixed_decimal
 from tradeline.risk import UNCLASSIFIED
 from tradeline.strategy import Strategy
+from tradeline.tax import TaxTerms, is_short_term
 from tradeline.tick_sizes import TickSizes
 from tradeline.trading_calendar import TradingCalendar
 
@@ -191,6 +200,52 @@ class Account:
     open: tuple[OpenPosition, ...]
     blocks: tuple[queries.LedgerBlock, ...]
     passes: tuple[queries.LedgerPass, ...] = ()
+    # Under a Protocol keeping tax: each day's Liquidation Value, the Strategy's and the
+    # Benchmark's, and every tax debit. Empty otherwise.
+    liquidation: tuple[queries.LiquidationDay, ...] = ()
+    tax_debits: tuple[queries.TaxDebit, ...] = ()
+
+    def liquidation_json(
+        self, tax: TaxTerms | None, benchmark: BenchmarkTerms | None, *, invested: Decimal
+    ) -> dict[str, Any] | None:
+        """The account's Liquidation Value against the Benchmark's, as the engine recorded
+        them, or None when its Protocol keeps no tax."""
+        if tax is None or benchmark is None:
+            return None
+        days = set(self.days)
+        daily = [d for d in self.liquidation if d.day in days]
+        last = daily[-1]
+        return {
+            "value": rounded(last.value, RUPEE),
+            "tax_due": rounded(last.tax_due, RUPEE),
+            "losses_dropped": {
+                "short_term": rounded(last.dropped_short_term_loss, RUPEE),
+                "long_term": rounded(last.dropped_long_term_loss, RUPEE),
+            },
+            "tax_debits": [
+                {
+                    "financial_year": t.financial_year,
+                    "day": t.day.isoformat(),
+                    "short_term_gain": rounded(t.short_term_gain, RUPEE),
+                    "long_term_gain": rounded(t.long_term_gain, RUPEE),
+                    "dividends": rounded(t.dividends, RUPEE),
+                    "tax": rounded(t.tax, RUPEE),
+                    "settled": t.settled,
+                }
+                for t in self.tax_debits
+            ],
+            "benchmark": None
+            if last.benchmark is None
+            else _benchmark_json(last.day, last.benchmark, tax, benchmark, invested=invested),
+            "daily": [
+                {
+                    "day": d.day.isoformat(),
+                    "strategy": rounded(d.value, RUPEE),
+                    "benchmark": None if d.benchmark is None else rounded(d.benchmark.value, RUPEE),
+                }
+                for d in daily
+            ],
+        }
 
     def limits_json(self) -> dict[str, Any]:
         """Where the Limits bound: the Candidates beyond the Passes (Blocked by the entry
@@ -302,6 +357,7 @@ def read_account(conn: psycopg.Connection, backtest_id: uuid.UUID) -> Account:
             )
         )
     closed.sort(key=lambda t: (t.closed_on, t.opened_on, t.symbol))
+    tags: queries.Account = {"mode": "backtest", "backtest_id": backtest_id, "dry_run": False}
     return Account(
         tuple(r.as_of for r in days),
         tuple(curve),
@@ -309,7 +365,46 @@ def read_account(conn: psycopg.Connection, backtest_id: uuid.UUID) -> Account:
         tuple(still_open),
         tuple(blocks),
         tuple(p for ranked in passes.values() for p in ranked.values()),
+        liquidation=tuple(queries.liquidation_values(conn, **tags)),
+        tax_debits=tuple(queries.tax_debits(conn, **tags)),
     )
+
+
+def _benchmark_json(
+    day: date,
+    found: queries.BenchmarkDay,
+    tax: TaxTerms,
+    benchmark: BenchmarkTerms,
+    *,
+    invested: Decimal,
+) -> dict[str, Any]:
+    """The Benchmark liquidated on ``day``: what it paid on purchase and redemption and the
+    rate its gain was taxed at, with its Liquidation Value as the engine recorded it."""
+    redeemed = benchmark_redemption(
+        bought_on=found.bought_on,
+        bought_nav=found.bought_nav,
+        day=day,
+        nav=found.nav,
+        invested=invested,
+        rates=benchmark.rates,
+    )
+    short = is_short_term(found.bought_on, day)
+    rates = tax.schedule.rates(tax.rates_as_of)
+    rate = (rates.short_term if short else rates.long_term) * (1 + rates.cess)
+    return {
+        "scheme_code": found.scheme,
+        "bought_on": found.bought_on.isoformat(),
+        "invested": rounded(invested, RUPEE),
+        "bought_nav": str(found.bought_nav),
+        "nav": str(found.nav),
+        "stamp_duty": rounded(redeemed.purchase.stamp_duty, RUPEE),
+        "stt": rounded(redeemed.sale.stt, RUPEE),
+        "exit_load": rounded(redeemed.sale.exit_load, RUPEE),
+        "taxed_as": "short_term" if short else "long_term",
+        "tax_rate": fixed_decimal(rate),
+        "tax_due": rounded(found.tax_due, RUPEE),
+        "value": rounded(found.value, RUPEE),
+    }
 
 
 def _capped(granted: queries.LedgerPass) -> bool:

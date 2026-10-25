@@ -21,6 +21,8 @@ LEDGER_TABLES = (
     "fills",
     "positions",
     "dividend_credits",
+    "tax_debits",
+    "liquidation_values",
 )
 INSERTS = {
     "strategies": "INSERT INTO strategies (mode, backtest_id, family, name, code_revision,"
@@ -56,6 +58,12 @@ INSERTS = {
     " position_id, instrument, symbol, ex_date, subject, shares, per_share, cash)"
     " VALUES (%s, %s, '2023-06-16', 1, gen_random_uuid(), 'A', 'A', '2023-06-16',"
     " 'Dividend - Rs 5 Per Share', 50, 5, 250)",
+    "tax_debits": "INSERT INTO tax_debits (mode, backtest_id, id, day, financial_year,"
+    " short_term_gain, long_term_gain, dividends, tax, settled)"
+    " VALUES (%s, %s, gen_random_uuid(), '2024-04-01', 2023, 1000, 0, 0, 208, false)",
+    "liquidation_values": "INSERT INTO liquidation_values (mode, backtest_id, id, day, value,"
+    " tax_due, dropped_short_term_loss, dropped_long_term_loss)"
+    " VALUES (%s, %s, gen_random_uuid(), '2024-04-01', 500000, 0, 0, 0)",
 }
 
 

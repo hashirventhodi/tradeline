@@ -171,6 +171,15 @@ class Config:
         factor_fund: int = 141596
 
     @dataclass(frozen=True)
+    class Tax:
+        """The tax ledger's inputs (``tradeline.tax``), frozen into a Protocol that keeps tax."""
+
+        # The checked-in dated tax-rate schedule, relative to the working directory.
+        schedule: str = "tax_rates.csv"
+        # Dividends' rate, cess included: the 30 percent slab plus cess.
+        dividend_rate: float = 0.312
+
+    @dataclass(frozen=True)
     class LimitSet:
         """One family's Limits of ``docs/risk-controls.md`` (``tradeline.risk``), fractions
         of Equity where they are, each on with its value or off, written ``false`` (ADR
@@ -283,6 +292,8 @@ class Config:
         drawdown_below: float = 0.15
         profit_factor_above: float = 1.3
         min_stitched_trades: int = 150
+        # The tax ledger, and the Liquidation Value against the Benchmark (ADR 0015 amendment).
+        tax: bool = True
 
         def __post_init__(self) -> None:
             try:
@@ -311,6 +322,7 @@ class Config:
                     min_stitched_trades=self.min_stitched_trades,
                 ),
                 warm_up_trading_days=self.warm_up_trading_days,
+                tax=self.tax,
             )
 
     @dataclass(frozen=True)
@@ -412,6 +424,7 @@ class Config:
     instruments: Instruments = field(default_factory=Instruments)
     corporate_actions: CorporateActions = field(default_factory=CorporateActions)
     benchmark: Benchmark = field(default_factory=Benchmark)
+    tax: Tax = field(default_factory=Tax)
     integrity: Integrity = field(default_factory=Integrity)
     risk: Risk = field(default_factory=Risk)
     costs: Costs = field(default_factory=Costs)

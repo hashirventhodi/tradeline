@@ -54,7 +54,7 @@ from tradeline.login import login as login_service
 from tradeline.manual_links import load_manual_links
 from tradeline.migrations import PendingMigrations, UnreadableMigrations, apply_migrations
 from tradeline.parity import parity as parity_service
-from tradeline.protocol import window_boundaries, windows_text
+from tradeline.protocol import Terms, window_boundaries, windows_text
 from tradeline.protocol_report import report_protocol
 from tradeline.rebuild_instruments import rebuild_instruments as rebuild_instruments_service
 from tradeline.report import report_backtest
@@ -77,6 +77,7 @@ from tradeline.sources.kite import (
 from tradeline.strategy.lowvol import LowvolV1
 from tradeline.strategy.portfolio import AnyStrategy
 from tradeline.strategy.pullback import PullbackV1
+from tradeline.tax import load_tax_schedule
 from tradeline.tick_sizes import load_tick_sizes
 from tradeline.trading_calendar import load_trading_calendar
 from tradeline.transport import (
@@ -585,10 +586,23 @@ def protocol(ctx: Context, args: argparse.Namespace) -> int:
             slippage=ctx.config.costs.slippage(),
             calendar=calendar,
             commit=revision.running_commit(),
+            **_tax_inputs(ctx, terms),
         )
     sys.stderr.write(result.text())
     log.info("protocol freeze finished", extra=result.summary())
     return 0
+
+
+def _tax_inputs(ctx: Context, terms: Terms) -> dict[str, Any]:
+    """What a Protocol keeping tax freezes beyond its Terms: ``[tax]`` and ``[benchmark]``."""
+    if not terms.tax:
+        return {}
+    return {
+        "tax_schedule": load_tax_schedule(Path(ctx.config.tax.schedule)),
+        "dividend_rate": Decimal(str(ctx.config.tax.dividend_rate)),
+        "benchmark_funds": load_benchmark_funds(Path(ctx.config.benchmark.funds)),
+        "factor_fund": ctx.config.benchmark.factor_fund,
+    }
 
 
 def run(ctx: Context, args: argparse.Namespace) -> int:
