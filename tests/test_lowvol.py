@@ -18,6 +18,10 @@ with a Boundary Exit.
   leaves. Three leave, so the three best-ranked names not held, N01 to N03, enter.
 - H20 gapped Rs 4,000 up, so its sale leaves more cash than three equal shares of 15
   percent of Equity can take: each entrant is capped at 15 percent, the rest stays in cash.
+- Relative Drawdown Halt: the recorded niftyindices.com index history is loaded before the
+  freeze (threshold 30 percent), and the Benchmark's NAV (``lowvol_benchmark_navs``) is Rs
+  100 until it rises Rs 2 a trading day from 2022-08-02, so the Halt would fire through
+  September and October. A second account is run under Halt from the Rebalance's day.
 """
 
 import contextlib
@@ -34,20 +38,29 @@ import pytest
 
 from limits import LOWVOL
 from synthetic_eod import (
+    LOWVOL_BENCHMARK_RISE,
     LOWVOL_INITIAL,
     LOWVOL_LAYOUT,
     LOWVOL_RANGE,
     LOWVOL_REBALANCE,
+    REPO_ROOT,
     compute_universe_months,
     config_text,
+    load_benchmark,
+    load_index_history,
     load_market,
+    lowvol_benchmark_navs,
     lowvol_market,
     repo_calendar,
+    write_benchmark_fixtures,
     write_fixtures,
 )
 from tradeline import queries
 from tradeline.cli import main
 from tradeline.db import app_connection
+from tradeline.engine import SeriesCache, backtest_span, run
+from tradeline.strategy.lowvol import LowvolV1
+from tradeline.tick_sizes import load_tick_sizes
 
 D = Decimal
 CALENDAR = repo_calendar()
@@ -68,6 +81,7 @@ def _config(directory: Path) -> Path:
         f"windows = {layout.windows}\n"
         f"out_of_sample_months = {layout.out_of_sample_months}\n"
         f"in_sample_months = {layout.in_sample_months}\n"
+        f'[benchmark]\nfunds = "{REPO_ROOT / "benchmark_funds.csv"}"\n'
     )
     return config
 
@@ -89,9 +103,14 @@ def stitched(
     market = lowvol_market()
     directory = tmp_path_factory.mktemp("lowvol")
     fixtures = write_fixtures(market, directory / "fixtures", CALENDAR)
+    navs = write_benchmark_fixtures(
+        directory / "amfi", lowvol_benchmark_navs(CALENDAR), end=LOWVOL_RANGE[1]
+    )
     with app_connection(database_url) as conn:
         load_market(conn, fixtures, market)
         compute_universe_months(conn, market, *LOWVOL_RANGE)
+        load_benchmark(conn, navs, end=LOWVOL_RANGE[1])
+        load_index_history(conn)
     config = _config(directory)
     _cli(database_url, config, "protocol", "freeze", "--strategy", "lowvol_v1")
     with app_connection(database_url) as conn:
@@ -277,3 +296,136 @@ def test_walk_forward_selects_nothing_and_the_stitched_curve_is_one_backtest(
     # The Initial Buy's decision is the day before; the curve starts on the first day.
     assert (curve["from"], curve["to"]) == (FIRST_DAY.isoformat(), LAST_DAY.isoformat())
     assert curve["trading_days"] == len(list(CALENDAR.trading_days(FIRST_DAY, LAST_DAY)))
+
+
+def test_the_protocol_freezes_the_relative_drawdown_halt_from_the_recorded_index_history(
+    stitched: tuple[str, queries.FrozenProtocol, dict[str, Any], uuid.UUID],
+) -> None:
+    _, frozen, _, _ = stitched
+    halts = frozen.protocol.halts
+    relative = halts.relative_drawdown
+
+    # The daily-loss and drawdown Halts are off for lowvol (ADR 0020).
+    assert (halts.daily_loss, halts.drawdown) == (None, None)
+    assert relative is not None
+    # Worked from the recorded closes (fixtures/index_history/README.md): the NIFTY100 Low
+    # Volatility 30 TRI over the NIFTY 500 TRI peaked on 2006-08-18 and fell 25.29 percent
+    # to 2008-01-14; rounded up to the next 5 points, 30 percent.
+    assert relative.threshold == D("0.30")
+    assert relative.worst == D("0.252946")
+    assert (relative.peak, relative.trough) == (date(2006, 8, 18), date(2008, 1, 14))
+    assert not relative.fallback
+    assert "niftyindices.com" in relative.source
+    assert "backfill" in relative.note
+    assert [(h.index_name, h.first, h.last, h.days) for h in relative.history] == [
+        ("NIFTY100 LOW VOLATILITY 30", date(2005, 4, 1), date(2019, 9, 30), 3595),
+        ("NIFTY 500", date(2005, 4, 1), date(2019, 9, 30), 3595),
+    ]
+    assert frozen.protocol.benchmark is not None
+    assert frozen.protocol.benchmark.schemes == (147625,)
+
+
+def test_the_report_lists_every_day_the_relative_drawdown_halt_would_have_fired_near_the_top(
+    stitched: tuple[str, queries.FrozenProtocol, dict[str, Any], uuid.UUID],
+) -> None:
+    database_url, _, report, backtest_id = stitched
+    navs = lowvol_benchmark_navs(CALENDAR)
+    runs = [r for r in _account(database_url, backtest_id)["runs"] if r.as_of >= FIRST_DAY]
+    # The Relative Drawdown as defined (ADR 0020): Equity at each close over the Benchmark's
+    # NAV, its fall from that ratio's running peak.
+    expected, peak = {}, D(0)
+    for r in runs:
+        assert r.equity is not None
+        ratio = r.equity / navs[r.as_of]
+        peak = max(peak, ratio)
+        if 1 - ratio / peak >= D("0.30"):
+            expected[r.as_of.isoformat()] = str((1 - ratio / peak).quantize(D("0.000001")))
+
+    assert list(report)[:3] == ["protocol", "strategy", "halt_would_have_fired"]
+    fired = report["halt_would_have_fired"]
+    assert fired["relative_drawdown_limit"] == "0.300000"
+    assert fired["fallback"] is False
+    listed = {d["day"]: d["relative_drawdown"] for d in fired["days"]}
+    assert listed == expected
+    # Flat until the Benchmark rises; by mid-September it has risen over 40 percent.
+    assert min(listed) > LOWVOL_BENCHMARK_RISE.isoformat()
+    late = [d.isoformat() for d in CALENDAR.trading_days(date(2022, 9, 15), LAST_DAY)]
+    assert set(late) <= set(listed)
+
+
+def test_a_halted_rebalance_sells_its_leavers_and_places_no_buy(
+    stitched: tuple[str, queries.FrozenProtocol, dict[str, Any], uuid.UUID],
+) -> None:
+    database_url, frozen, _, _ = stitched
+    terms = frozen.protocol
+    tick_sizes = load_tick_sizes(REPO_ROOT / "tick_sizes.csv")
+    backtest_id = uuid.uuid4()
+    with app_connection(database_url) as conn:
+        backtest_span(
+            conn,
+            LowvolV1(),
+            frozen,
+            start=FIRST_DAY,
+            end=date(2022, 9, 29),
+            calendar=CALENDAR,
+            tick_sizes=tick_sizes,
+            backtest_id=backtest_id,
+            cache=SeriesCache(conn, start=FIRST_DAY, end=BUYS),
+        )
+        # Under Halt from the Rebalance's day: the engine's Runs as paper would make them.
+        for day in (LOWVOL_REBALANCE, SALES, BUYS):
+            run(
+                conn,
+                LowvolV1(),
+                mode="backtest",
+                backtest_id=backtest_id,
+                as_of=day,
+                calendar=CALENDAR,
+                rule_version=terms.rule_version,
+                limits=terms.limits,
+                tick_sizes=tick_sizes,
+                costs=terms.cost_model(),
+                starting_equity=terms.starting_equity,
+                band=terms.band,
+                protocol=frozen.hash,
+                halted=True,
+            )
+        orders = queries.orders(conn, mode="backtest", backtest_id=backtest_id)
+    account = _account(database_url, backtest_id)
+
+    sold = sorted(p.symbol for p in account["positions"] if p.exit_reason == "rebalance")
+    assert sold == ["H15", "H20", "H30"]
+    steps = {r.as_of: r.portfolio_step for r in account["runs"]}
+    assert (steps[LOWVOL_REBALANCE], steps[SALES]) == ("rebalance", "rebalance_buys")
+    # The Initial Buy's entries, and none after.
+    assert {o.session for o in orders if o.purpose == "entry"} == {FIRST_DAY}
+    assert _opened(account, BUYS) == []
+
+
+def test_the_full_report_lists_the_relative_drawdown_halt_days_of_each_curve_after_the_gate(
+    stitched: tuple[str, queries.FrozenProtocol, dict[str, Any], uuid.UUID],
+    tmp_path: Path,
+) -> None:
+    database_url, frozen, walked, _ = stitched
+    config = _config(tmp_path)
+    out, markdown = tmp_path / "report.json", tmp_path / "report.md"
+    _cli(database_url, config, "backtest", "holdout", "--protocol", frozen.hash)
+    _cli(
+        database_url,
+        config,
+        *("backtest", "report", "--protocol", frozen.hash),
+        *("--out", str(out), "--markdown", str(markdown)),
+    )
+    report = json.loads(out.read_text())
+
+    assert list(report)[:4] == ["protocol", "strategy", "gate", "halt_would_have_fired"]
+    fired = report["halt_would_have_fired"]
+    assert fired["relative_drawdown_limit"] == "0.300000"
+    assert fired["stitched_curve"] == walked["halt_would_have_fired"]["days"]
+    # The Holdout (2022-11) is an account of its own, its peak from its first day: the
+    # Benchmark rises from about Rs 226 to Rs 268 in the month, a fall of the ratio of
+    # under 20 percent with the swing.
+    assert fired["holdout"] == []
+    text = markdown.read_text()
+    assert "Relative Drawdown Halt" in text
+    assert text.index("## Halt would have fired") < text.index("## Windows")

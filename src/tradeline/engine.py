@@ -479,6 +479,7 @@ def run(
     commit: bool = True,
     initial_buy: bool = False,
     dividends: bool = False,
+    halted: bool = False,
 ) -> RunResult:
     """The day ``as_of`` in one account: its held Positions credited any dividend ex-dated
     since its last day when ``dividends`` is on (as its Protocol states), and restated for
@@ -510,6 +511,12 @@ def run(
     the trading day before the account's first: a Rebalance's entrants with nothing
     held, sized and put to the Risk Engine at once, bought at the next open. On every
     other day its holdings rest, with no Order but a sale the open did not fill.
+
+    ``halted`` is a Run under Halt (ADR 0009): it places no new entry and keeps managing
+    exits. A Run of a Strategy with Plans screens nothing; a portfolio Rebalance still
+    decides and sells its leavers, and its buys (or an Initial Buy's) place nothing (ADR
+    0020). A backtest never
+    Halts (``docs/risk-controls.md``), so only paper passes it.
     """
     if boundary and entries:
         raise ValueError("a Boundary Exit's day places no new entries; pass entries=False")
@@ -559,7 +566,7 @@ def run(
             entries=entries,
         )
     else:
-        candidates = data.screen(strategy, members) if entries else []
+        candidates = data.screen(strategy, members) if entries and not halted else []
         plans = [strategy.plan(c) for c in candidates]
     leavers: tuple[str, ...] = ()
     run_id = uuid.uuid4()
@@ -581,7 +588,7 @@ def run(
         holdings = _holdings(held, account, sectors)
         cash = starting_equity + queries.account_cash_flows(conn, **tags)
         equity = cash + sum((h.value for h in holdings), Decimal(0))
-        if step in ("initial_buy", "rebalance_buys"):
+        if step in ("initial_buy", "rebalance_buys") and not halted:
             plans = list(
                 _split_cash(
                     [c for c in candidates if c.instrument not in held_instruments],

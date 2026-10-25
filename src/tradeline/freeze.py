@@ -1,7 +1,8 @@
 """Freezing a Protocol, and checking at run time that its data is still the rows there now.
 
 ``freeze_protocol`` states the Protocol (``tradeline.protocol``) from the
-Operator's Terms, the configured Limits, Halt fractions and cost schedule, the
+Operator's Terms, the configured Limits, Halts (a Relative Drawdown Halt with the
+Benchmark's funds) and cost schedule, the
 Strategy, the Universe Rule version and the git commit, and the data snapshot it reads from
 the database: for each month from the first In-Sample day to the Holdout's
 last, the month's mode (Recorded or Reconstructed) and its build, whose hashes
@@ -25,6 +26,7 @@ from typing import Any
 import psycopg
 
 from tradeline import queries
+from tradeline.benchmark import BenchmarkFunds
 from tradeline.costs import CostSchedule, Slippage
 from tradeline.dates import IST
 from tradeline.metrics import HaltLimits
@@ -99,14 +101,20 @@ def freeze_protocol(
     calendar: TradingCalendar,
     commit: str,
     costs_as_of_for_tests: date | None = None,
+    benchmark: BenchmarkFunds | None = None,
 ) -> FreezeResult:
     """Freeze the Protocol these state, with the data snapshot read now, at ``commit``, its
     trades priced on ``schedule`` as of the freeze: the day it is frozen, in India.
 
     ``costs_as_of_for_tests`` replaces that day, so a test's hand-worked costs do not move
-    with the day it runs; nothing else passes it."""
+    with the day it runs; nothing else passes it.
+
+    A Relative Drawdown Halt is measured against the Benchmark, so it is frozen with the
+    Benchmark's ``benchmark`` funds and refused without them."""
     # A Protocol states every Limit on or off (ADR 0020).
     limits.require_stated()
+    if halts.relative_drawdown is not None and benchmark is None:
+        raise ValueError("a Relative Drawdown Halt is frozen with the Benchmark's funds")
     costs_as_of = costs_as_of_for_tests or datetime.now(IST).date()
     parameters = set(strategy.parameters())
     if set(terms.grid) != parameters:
@@ -152,6 +160,7 @@ def freeze_protocol(
             calendar=calendar,
         ),
         dividends=terms.dividends,
+        benchmark=benchmark,
     )
     content = canonical(protocol.content())
     found = content_hash(protocol.content())

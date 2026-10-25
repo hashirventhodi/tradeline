@@ -21,6 +21,7 @@ dated after the day asked about.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -209,3 +210,19 @@ def benchmark_nav(conn: psycopg.Connection, funds: BenchmarkFunds, day: date) ->
     """The Benchmark's NAV as of ``day``: its scheme on ``day``, checked, at its latest NAV
     dated on or before ``day``."""
     return nav_as_of(conn, benchmark_scheme(conn, funds, day).scheme_code, day)
+
+
+def benchmark_values(
+    conn: psycopg.Connection, funds: BenchmarkFunds, days: Sequence[date]
+) -> list[Decimal]:
+    """The Benchmark's NAV as of each of ``days`` (``benchmark_nav``); refused for a day
+    before its first stored NAV."""
+    values = []
+    for day in days:
+        nav = benchmark_nav(conn, funds, day)
+        if nav is None:
+            raise LookupError(
+                f"no Benchmark NAV is stored on or before {day}; run `tradeline ingest benchmark`"
+            )
+        values.append(nav.nav)
+    return values

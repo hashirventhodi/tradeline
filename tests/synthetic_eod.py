@@ -60,18 +60,21 @@ import psycopg
 
 from checkout import TEST_COMMIT
 from limits import PULLBACK
+from tradeline.benchmark import load_benchmark_funds
 from tradeline.config import UniverseRule
 from tradeline.costs import CostModel, Slippage, load_cost_schedule
 from tradeline.dates import IST, calendar_days, month_of, next_month
 from tradeline.freeze import FreezeResult
 from tradeline.freeze import freeze_protocol as freeze
+from tradeline.ingest.benchmark import ingest_benchmark
 from tradeline.ingest.corporate_actions import ingest_corporate_actions, year_chunks
 from tradeline.ingest.eod import ingest_eod
+from tradeline.ingest.index_history import ingest_index_history
 from tradeline.metrics import HaltLimits
 from tradeline.protocol import Gate, Layout, Terms, months_between
 from tradeline.risk import Limits
 from tradeline.sectors import load_sectors
-from tradeline.sources import kite, nse
+from tradeline.sources import amfi, kite, nse
 from tradeline.strategy import Strategy
 from tradeline.strategy.pullback import PullbackV1
 from tradeline.trading_calendar import TradingCalendar, load_trading_calendar
@@ -1001,3 +1004,74 @@ def lowvol_market() -> Market:
         declaration=RuleDeclaration(start, datetime.combine(start, time(), IST)),
         stocks=(*news, *held, *others, stock("Z", "5.00", volume=500_000)),
     )
+
+
+# --- The Benchmark and the index history (ADR 0020) ------------------------------
+
+# The recorded niftyindices.com Total Return Index history, 2005-04 to 2019-09
+# (fixtures/index_history/README.md).
+INDEX_HISTORY_FIXTURES = Path(__file__).parent / "fixtures" / "index_history"
+BENCHMARK_SCHEME, FACTOR_FUND = 147625, 141596
+# Where ``lowvol_benchmark_navs`` starts rising, and by how much each trading day.
+LOWVOL_BENCHMARK_RISE = date(2022, 8, 2)
+LOWVOL_BENCHMARK_STEP = Decimal("2")
+
+
+def lowvol_benchmark_navs(calendar: TradingCalendar) -> dict[date, Decimal]:
+    """The Benchmark's synthetic NAV over ``lowvol_market``'s Protocol: Rs 100 on every
+    trading day from 2022-03-01, then from ``LOWVOL_BENCHMARK_RISE`` up by
+    ``LOWVOL_BENCHMARK_STEP`` each trading day, while the Strategy's flat stocks only swing
+    (and H20 gaps up on 2022-08-01), so its Relative Drawdown deepens through September."""
+    navs = {}
+    nav = Decimal(100)
+    for day in calendar.trading_days(date(2022, 3, 1), LOWVOL_RANGE[1]):
+        if day >= LOWVOL_BENCHMARK_RISE:
+            nav += LOWVOL_BENCHMARK_STEP
+        navs[day] = nav
+    return navs
+
+
+def write_benchmark_fixtures(directory: Path, navs: dict[date, Decimal], *, end: date) -> Path:
+    """AMFI's answers ``ingest benchmark`` asks for to ``end``: a scheme master naming the
+    Benchmark Direct and Growth, and ``navs`` as the NAV history of both the Benchmark and
+    the factor fund, from ``benchmark_funds.csv``'s first date."""
+    master = (
+        "Scheme Code;ISIN Div Payout/ ISIN Growth;ISIN Div Reinvestment;Scheme Name;Plan;"
+        "Option;Net Asset Value;Date\n"
+        f"{BENCHMARK_SCHEME};INF247L01957;-;Motilal Oswal Nifty 500 Index Fund;Direct Plan;"
+        f"Growth;100;{end:%d-%b-%Y}\n"
+        f"{FACTOR_FUND};INF109KC1Q72;-;ICICI Prudential Nifty 100 Low Volatility 30 ETF;-;-;"
+        f"100;{end:%d-%b-%Y}\n"
+    )
+    responses = {amfi.SCHEME_MASTER_URL: _ok(master.encode())}
+    funds = load_benchmark_funds(REPO_ROOT / "benchmark_funds.csv")
+    for code in (BENCHMARK_SCHEME, FACTOR_FUND):
+        for first, last in amfi.nav_windows(funds.first, end):
+            records = [
+                {"date": d.isoformat(), "nav": str(v), "upload_time": None}
+                for d, v in sorted(navs.items())
+                if first <= d <= last
+            ]
+            body = {"data": {"nav_groups": [{"historical_records": records}]}}
+            responses[amfi.nav_history_url(code, first, last)] = _ok(json.dumps(body).encode())
+    recorder = RecordingTransport(_Served(responses), directory)
+    for url in responses:
+        recorder.send(Request("GET", url))
+    return directory
+
+
+def load_benchmark(conn: psycopg.Connection, fixtures: Path, *, end: date) -> None:
+    """Load the Benchmark's fixtures through ``ingest benchmark``."""
+    ingest_benchmark(
+        conn,
+        PlaybackTransport(fixtures),
+        funds=load_benchmark_funds(REPO_ROOT / "benchmark_funds.csv"),
+        factor_fund=FACTOR_FUND,
+        end=end,
+        sleep=lambda _seconds: None,
+    )
+
+
+def load_index_history(conn: psycopg.Connection) -> None:
+    """Load the recorded index history through ``ingest index-history``."""
+    ingest_index_history(conn, PlaybackTransport(INDEX_HISTORY_FIXTURES), sleep=lambda _s: None)

@@ -193,12 +193,15 @@ class Config:
         max_new_entries: int | bool = 4
         min_reward_to_risk: float | bool = 1.5
         # The Halts a backtest reports and never applies: a day's loss on the day before's
-        # Equity, and the fall from the Equity peak.
-        daily_loss_halt: float = 0.03
-        drawdown_halt: float = 0.10
+        # Equity, and the fall from the Equity peak, each false when off.
+        daily_loss_halt: float | bool = 0.03
+        drawdown_halt: float | bool = 0.10
+        # The Relative Drawdown Halt (ADR 0020): its threshold is not configured but
+        # computed when the Protocol is frozen (``tradeline.index_history``).
+        relative_drawdown_halt: bool = False
 
         def __post_init__(self) -> None:
-            for name in _LIMIT_NAMES:
+            for name in (*_LIMIT_NAMES, "daily_loss_halt", "drawdown_halt"):
                 if name != "stop_required" and getattr(self, name) is True:
                     raise ConfigError(
                         f"{self.SECTION}.{name} is a Limit's value, or false when it is off"
@@ -225,9 +228,14 @@ class Config:
             return Limits(stop_required=self.stop_required, **values)
 
         def halts(self) -> HaltLimits:
+            """The daily-loss and drawdown Halts; the Relative Drawdown Halt's threshold is
+            added when the Protocol is frozen."""
+
+            def fraction(value: float | bool) -> Decimal | None:
+                return None if value is False else Decimal(str(value))
+
             return HaltLimits(
-                daily_loss=Decimal(str(self.daily_loss_halt)),
-                drawdown=Decimal(str(self.drawdown_halt)),
+                daily_loss=fraction(self.daily_loss_halt), drawdown=fraction(self.drawdown_halt)
             )
 
     @dataclass(frozen=True)
@@ -243,8 +251,8 @@ class Config:
     class LowvolRisk(LimitSet):
         """``lowvol_v1``'s Limits (``docs/risk-controls.md``, "Limits by family"): a
         portfolio Plan has no stop, so the Limits read off one are off, and so are the
-        entry cap and the sector Limit. Its Halts are ``pullback_v1``'s fractions until the
-        Relative Drawdown Halt replaces them (#97)."""
+        entry cap and the sector Limit. The daily-loss and drawdown Halts are off, replaced
+        by the Relative Drawdown Halt (ADR 0020)."""
 
         SECTION: ClassVar[str] = "lowvol.risk"
 
@@ -258,6 +266,9 @@ class Config:
         min_order_value: int | bool = 5000
         max_new_entries: int | bool = False
         min_reward_to_risk: float | bool = False
+        daily_loss_halt: float | bool = False
+        drawdown_halt: float | bool = False
+        relative_drawdown_halt: bool = True
 
     @dataclass(frozen=True)
     class LowvolProtocol:

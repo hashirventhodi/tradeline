@@ -4,7 +4,10 @@ A Protocol states the parameter grid, the objective and its tie-break, the
 Walk-Forward Windows and the Holdout as trading days from the Trading Calendar,
 the cost schedule's date with the rates in force on it and Slippage's
 parameters, the exit band, every Limit on with its value or off (ADR 0020), the
-daily-loss and drawdown Halt fractions a backtest reports against, whether
+daily-loss and drawdown Halt fractions a backtest reports against (null when
+off), a portfolio family's Relative Drawdown Halt with its threshold, source and
+the index history it came from, and the Benchmark's funds it is measured
+against (each stated only when there is one), whether
 dividends are credited (stated only when they are), the starting Equity, the
 risk-free rate, the Gate thresholds, the Universe Rule version, the Strategy
 family, name and code revision, the git commit it was frozen at, and the data
@@ -33,9 +36,10 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
+from tradeline.benchmark import BenchmarkFunds, FundChange
 from tradeline.costs import CHARGES, CostModel, CostSchedule, Rate, Rates, Slippage
 from tradeline.dates import month_end, month_of, next_month
-from tradeline.metrics import HaltLimits
+from tradeline.metrics import HaltLimits, IndexHistory, RelativeDrawdownHalt
 from tradeline.risk import Limits
 from tradeline.trading_calendar import TradingCalendar
 
@@ -172,6 +176,9 @@ class Protocol:
     # Ex-Date (ADR 0020). Stated in the content only when on, so a Protocol frozen before
     # it existed (``pullback_v1``'s) reads back to the same hash, with dividends off.
     dividends: bool = False
+    # The Benchmark's funds (``tradeline.benchmark``) a Relative Drawdown is measured
+    # against; stated only when there are, so older Protocols keep their hashes.
+    benchmark: BenchmarkFunds | None = None
 
     @property
     def first(self) -> date:
@@ -225,7 +232,7 @@ class Protocol:
             },
             "band": self.band,
             "limits": limits_content(self.limits),
-            "halts": dataclasses.asdict(self.halts),
+            "halts": halts_content(self.halts),
             "starting_equity": self.starting_equity,
             "risk_free_rate": self.risk_free_rate,
             "gate": dataclasses.asdict(self.gate),
@@ -240,6 +247,8 @@ class Protocol:
         }
         if self.dividends:
             content["dividends"] = True
+        if self.benchmark is not None:
+            content["benchmark"] = [dataclasses.asdict(c) for c in self.benchmark.changes]
         return content
 
     @classmethod
@@ -269,7 +278,7 @@ class Protocol:
             slippage=Slippage(**{name: Decimal(v) for name, v in costs["slippage"].items()}),
             band=Decimal(content["band"]),
             limits=read_limits(content["limits"]),
-            halts=HaltLimits(**{name: Decimal(v) for name, v in content["halts"].items()}),
+            halts=read_halts(content["halts"]),
             starting_equity=Decimal(content["starting_equity"]),
             risk_free_rate=Decimal(content["risk_free_rate"]),
             gate=Gate(
@@ -287,6 +296,7 @@ class Protocol:
                 adjusted_series=dict(snapshot["adjusted_series"]),
             ),
             dividends=content.get("dividends", False),
+            benchmark=None if "benchmark" not in content else _read_benchmark(content["benchmark"]),
         )
 
     def boundaries_text(self) -> str:
@@ -427,6 +437,68 @@ def read_limits(raw: Mapping[str, Any]) -> Limits:
     limits = Limits(stop_required=stop_required, **values)
     limits.require_stated()
     return limits
+
+
+def halts_content(halts: HaltLimits) -> dict[str, Any]:
+    """The Halts as a Protocol states them: the daily-loss and drawdown fractions, null
+    when off, and the Relative Drawdown Halt only when there is one, so the Protocols
+    frozen before it serialise, and hash, as they were frozen."""
+    content: dict[str, Any] = {"daily_loss": halts.daily_loss, "drawdown": halts.drawdown}
+    relative = halts.relative_drawdown
+    if relative is not None:
+        content["relative_drawdown"] = {
+            **{f.name: getattr(relative, f.name) for f in dataclasses.fields(relative)},
+            "history": [dataclasses.asdict(h) for h in relative.history],
+        }
+    return content
+
+
+def read_halts(raw: Mapping[str, Any]) -> HaltLimits:
+    """The Halts a Protocol states."""
+
+    def fraction(value: str | None) -> Decimal | None:
+        return None if value is None else Decimal(value)
+
+    def day(value: str | None) -> date | None:
+        return None if value is None else date.fromisoformat(value)
+
+    relative = raw.get("relative_drawdown")
+    return HaltLimits(
+        daily_loss=fraction(raw["daily_loss"]),
+        drawdown=fraction(raw["drawdown"]),
+        relative_drawdown=None
+        if relative is None
+        else RelativeDrawdownHalt(
+            threshold=Decimal(relative["threshold"]),
+            worst=Decimal(relative["worst"]),
+            source=relative["source"],
+            fallback=relative["fallback"],
+            note=relative["note"],
+            peak=day(relative["peak"]),
+            trough=day(relative["trough"]),
+            history=tuple(
+                IndexHistory(
+                    h["index_name"],
+                    date.fromisoformat(h["first"]),
+                    date.fromisoformat(h["last"]),
+                    h["days"],
+                    h["hash"],
+                )
+                for h in relative["history"]
+            ),
+        ),
+    )
+
+
+def _read_benchmark(raw: Sequence[Mapping[str, Any]]) -> BenchmarkFunds:
+    return BenchmarkFunds(
+        tuple(
+            FundChange(
+                date.fromisoformat(c["in_force_from"]), c["scheme_code"], c["event"], c["citation"]
+            )
+            for c in raw
+        )
+    )
 
 
 def _span(span: Span) -> dict[str, date]:

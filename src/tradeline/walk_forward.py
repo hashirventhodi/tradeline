@@ -56,10 +56,20 @@ import psycopg
 from tradeline import queries
 from tradeline.engine import SeriesCache, backtest_span
 from tradeline.freeze import verify_snapshot
-from tradeline.metrics import max_drawdown, sharpe
+from tradeline.metrics import RelativeDrawdownDay, max_drawdown, sharpe
 from tradeline.paper_broker import FILL_MODEL, FillModel
 from tradeline.protocol import TIE_BREAK, Protocol, Window
-from tradeline.report import FRACTION, RATIO, RUPEE, Account, read_account, rounded
+from tradeline.report import (
+    FRACTION,
+    RATIO,
+    RUPEE,
+    Account,
+    read_account,
+    relative_drawdown_days_json,
+    relative_drawdown_days_of,
+    relative_drawdown_json,
+    rounded,
+)
 from tradeline.risk import RISK_ENGINE, RiskEngine
 from tradeline.strategy.portfolio import AnyStrategy
 from tradeline.tick_sizes import TickSizes
@@ -158,16 +168,28 @@ def one_cell(grid: Mapping[str, tuple[Decimal, ...]]) -> Mapping[str, Decimal] |
 @dataclass(frozen=True)
 class WalkForwardReport:
     """A Protocol's Walk-Forward read back from the Ledger: each Window's selection and
-    out-of-sample result, and the Stitched Curve scored. Its JSON holds no backtest id and
-    no timing, so two runs of one Protocol over the same data read the same."""
+    out-of-sample result, and the Stitched Curve scored. Under a Protocol with a Relative
+    Drawdown Halt it lists, right after the Strategy, every day of the Stitched Curve that
+    Halt would have fired, with that day's Relative Drawdown (a backtest never Halts). Its
+    JSON holds no backtest id and no timing, so two runs of one Protocol over the same data
+    read the same."""
 
     frozen: queries.FrozenProtocol
     windows: tuple[queries.WalkForwardWindow, ...]
     stitched: Account | None
+    # The Stitched Curve's Relative Drawdown Halt days; None without that Halt.
+    relative_drawdown_days: tuple[RelativeDrawdownDay, ...] | None = None
 
     def as_json(self) -> dict[str, Any]:
         terms = self.frozen.protocol
         stitched = self.stitched
+        halt: dict[str, Any] = {}
+        relative = terms.halts.relative_drawdown
+        if relative is not None and self.relative_drawdown_days is not None:
+            halt["halt_would_have_fired"] = {
+                **relative_drawdown_json(relative),
+                "days": relative_drawdown_days_json(self.relative_drawdown_days),
+            }
         return {
             "protocol": self.frozen.hash,
             "strategy": {
@@ -175,6 +197,7 @@ class WalkForwardReport:
                 "name": terms.name,
                 "code_revision": terms.code_revision,
             },
+            **halt,
             "min_in_sample_trades": terms.min_in_sample_trades,
             "windows": [
                 window_json(number, window, found, terms)
@@ -343,10 +366,15 @@ def walk_forward(
             selection=selection,
         )
     stitched = None
+    halt_days: list[RelativeDrawdownDay] | None = None
     if queries.runs(conn, mode="backtest", backtest_id=backtest_id):
         stitched = read_account(conn, backtest_id)
+        halt_days = relative_drawdown_days_of(conn, terms, stitched)
     report = WalkForwardReport(
-        frozen, tuple(queries.walk_forward_windows(conn, frozen.hash)), stitched
+        frozen,
+        tuple(queries.walk_forward_windows(conn, frozen.hash)),
+        stitched,
+        None if halt_days is None else tuple(halt_days),
     )
     result = WalkForwardResult(report, backtest_id, cells_run, time.monotonic() - began)
     log.info("walk-forward finished", extra=result.summary())

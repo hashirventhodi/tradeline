@@ -19,13 +19,21 @@ A backtest never Halts (Halt needs the Operator to clear it); ``halt_days``
 lists every day the daily-loss or the drawdown Limit would have fired: a day
 whose Equity is down by at least the daily-loss fraction on the day before's
 (realised plus unrealised), or at least the drawdown fraction under the peak so
-far.
+far. A Halt that is off (None) never fires.
+
+A portfolio family's performance Halt is on Relative Drawdown (ADR 0020): the
+fall of the Strategy's value over the Benchmark's from that ratio's running
+peak, daily, before tax and with dividends counted. ``relative_drawdown_days``
+lists the days it reaches the threshold; ``worst_relative_drawdown`` is how the
+threshold is found from index history, then ``round_up_to_points`` rounds it
+up to the next 5 points.
 
 Values are exact Decimals; what reads them rounds them.
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -54,12 +62,63 @@ class Expectancy:
 
 
 @dataclass(frozen=True)
+class IndexHistory:
+    """The stored Total Return Index history a threshold was computed from: one index's
+    first and last day, its number of days, and the hash of its (day, value) rows."""
+
+    index_name: str
+    first: date
+    last: date
+    days: int
+    hash: str
+
+
+@dataclass(frozen=True)
+class RelativeDrawdownHalt:
+    """The Relative Drawdown Halt (ADR 0020): it fires on a day whose Relative Drawdown is
+    at least ``threshold``. ``worst`` is the measure the threshold was rounded up from,
+    ``source`` where it came from, ``note`` what qualifies it (the backfill before the
+    index's launch, or why the fallback is not the same measure). ``history`` is the
+    index history it was computed from; a ``fallback`` threshold has none."""
+
+    threshold: Decimal
+    worst: Decimal
+    source: str
+    fallback: bool
+    note: str
+    peak: date | None = None
+    trough: date | None = None
+    history: tuple[IndexHistory, ...] = ()
+
+
+@dataclass(frozen=True)
 class HaltLimits:
     """The Limits that Halt live (``docs/risk-controls.md``): a day's loss on the day
-    before's Equity, and the fall from the Equity peak, as fractions."""
+    before's Equity, and the fall from the Equity peak, as fractions, each None when the
+    family turns it off; and a portfolio family's Relative Drawdown Halt, None when off."""
 
-    daily_loss: Decimal
-    drawdown: Decimal
+    daily_loss: Decimal | None
+    drawdown: Decimal | None
+    relative_drawdown: RelativeDrawdownHalt | None = None
+
+
+@dataclass(frozen=True)
+class RelativeDrawdownDay:
+    """A day the Relative Drawdown Halt would have fired, with that day's Relative
+    Drawdown."""
+
+    day: date
+    relative_drawdown: Decimal
+
+
+@dataclass(frozen=True)
+class WorstRelativeDrawdown:
+    """The largest fall of a ratio from its running peak: the fall, the peak's day and the
+    trough's."""
+
+    fall: Decimal
+    peak: date
+    trough: date
 
 
 @dataclass(frozen=True)
@@ -127,7 +186,11 @@ def expectancy(trades: Sequence[PositionResult]) -> Expectancy | None:
 
 
 def halt_days(
-    days: Sequence[date], curve: Sequence[Decimal], *, daily_loss: Decimal, drawdown: Decimal
+    days: Sequence[date],
+    curve: Sequence[Decimal],
+    *,
+    daily_loss: Decimal | None,
+    drawdown: Decimal | None,
 ) -> list[HaltDay]:
     """Every day either Halt Limit would have fired on, of a curve that starts at the
     starting Equity and then holds one Equity for each of ``days``."""
@@ -137,11 +200,59 @@ def halt_days(
     falls = drawdowns(curve)[1:]
     for i, (day, equity, fall) in enumerate(zip(days, curve[1:], falls, strict=True)):
         loss = (curve[i] - equity) / curve[i]
-        checks: tuple[tuple[HaltLimit, Decimal, Decimal], ...] = (
+        checks: tuple[tuple[HaltLimit, Decimal, Decimal | None], ...] = (
             ("daily_loss", loss, daily_loss),
             ("drawdown", fall, drawdown),
         )
-        limits = tuple(name for name, value, limit in checks if value >= limit)
+        limits = tuple(
+            name for name, value, limit in checks if limit is not None and value >= limit
+        )
         if limits:
             found.append(HaltDay(day, limits, loss, fall))
     return found
+
+
+def relative_drawdowns(strategy: Sequence[Decimal], benchmark: Sequence[Decimal]) -> list[Decimal]:
+    """Each day's Relative Drawdown: the fall of ``strategy`` over ``benchmark`` (one value
+    of each a day) from that ratio's peak so far, as a fraction of the peak."""
+    if len(strategy) != len(benchmark):
+        raise ValueError("the Strategy and the Benchmark need one value each a day")
+    return drawdowns([s / b for s, b in zip(strategy, benchmark, strict=True)])
+
+
+def worst_relative_drawdown(
+    days: Sequence[date], strategy: Sequence[Decimal], benchmark: Sequence[Decimal]
+) -> WorstRelativeDrawdown:
+    """The largest Relative Drawdown over ``days`` (the first when several are equal), with
+    the day of the peak it fell from."""
+    if not days or len(days) != len(strategy):
+        raise ValueError("the worst Relative Drawdown needs one value of each a day")
+    falls = relative_drawdowns(strategy, benchmark)
+    trough = max(range(len(days)), key=lambda i: (falls[i], -i))
+    ratios = [s / b for s, b in zip(strategy[: trough + 1], benchmark[: trough + 1], strict=True)]
+    peak = max(range(len(ratios)), key=lambda i: (ratios[i], -i))
+    return WorstRelativeDrawdown(falls[trough], days[peak], days[trough])
+
+
+def round_up_to_points(fraction: Decimal, points: int = 5) -> Decimal:
+    """``fraction`` rounded up to the next multiple of ``points`` percentage points (a
+    multiple already is one)."""
+    step = Decimal(points) / 100
+    return math.ceil(fraction / step) * step
+
+
+def relative_drawdown_days(
+    days: Sequence[date],
+    strategy: Sequence[Decimal],
+    benchmark: Sequence[Decimal],
+    *,
+    threshold: Decimal,
+) -> list[RelativeDrawdownDay]:
+    """Every one of ``days`` whose Relative Drawdown is at least ``threshold``."""
+    if len(days) != len(strategy):
+        raise ValueError("the Relative Drawdown needs one Strategy value a day")
+    return [
+        RelativeDrawdownDay(day, fall)
+        for day, fall in zip(days, relative_drawdowns(strategy, benchmark), strict=True)
+        if fall >= threshold
+    ]

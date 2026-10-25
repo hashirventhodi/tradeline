@@ -13,7 +13,7 @@ import sys
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -38,6 +38,7 @@ from tradeline.engine import paper as paper_service
 from tradeline.environment import Environment
 from tradeline.freeze import freeze_protocol
 from tradeline.holdout import run_fresh_period, run_holdout
+from tradeline.index_history import relative_drawdown_threshold
 from tradeline.ingest.announcements import ingest_announcements
 from tradeline.ingest.benchmark import ingest_benchmark
 from tradeline.ingest.candles import CurrentUniverse, ingest_candles
@@ -45,6 +46,7 @@ from tradeline.ingest.cited_actions import ingest_cited_actions
 from tradeline.ingest.corporate_actions import ingest_corporate_actions
 from tradeline.ingest.delistings import ingest_delistings
 from tradeline.ingest.eod import ingest_eod
+from tradeline.ingest.index_history import ingest_index_history
 from tradeline.ingest.news import Feed, ingest_news
 from tradeline.ingest.symbol_changes import ingest_symbol_changes
 from tradeline.instruments_report import instruments_report
@@ -149,6 +151,8 @@ def ingest(ctx: Context, args: argparse.Namespace) -> int:
         return _ingest_cited_actions(ctx)
     if args.source == "benchmark":
         return _ingest_benchmark(ctx, args)
+    if args.source == "index-history":
+        return _ingest_index_history(ctx, args)
     end = args.start if args.end is None else args.end
     with _scope(args.start, end, getattr(args, "symbols", None)):
         return _ingest_range(ctx, args, end)
@@ -278,6 +282,17 @@ def _ingest_benchmark(ctx: Context, args: argparse.Namespace) -> int:
             sleep=sleep,
         )
     log.info("ingest benchmark finished", extra=result.summary())
+    return 0
+
+
+def _ingest_index_history(ctx: Context, args: argparse.Namespace) -> int:
+    """The Total Return Index history the Relative Drawdown Halt's threshold is computed
+    from; played-back fixtures are not spaced out as live calls are."""
+    transport = _transport(ctx, args)
+    sleep = (lambda _seconds: None) if args.play_fixtures is not None else time.sleep
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = ingest_index_history(conn, transport, sleep=sleep)
+    log.info("ingest index-history finished", extra=result.summary())
     return 0
 
 
@@ -574,13 +589,21 @@ def protocol(ctx: Context, args: argparse.Namespace) -> int:
         sys.stderr.write(windows_text(windows, holdout))
         return 0
     with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        halts, benchmark = limit_set.halts(), None
+        if limit_set.relative_drawdown_halt:
+            relative = relative_drawdown_threshold(conn, fallback=args.relative_drawdown_fallback)
+            halts = replace(halts, relative_drawdown=relative)
+            benchmark = load_benchmark_funds(Path(ctx.config.benchmark.funds))
+        elif args.relative_drawdown_fallback:
+            raise ValueError(f"{strategy.name}'s Protocol has no Relative Drawdown Halt")
         result = freeze_protocol(
             conn,
             terms,
             strategy=strategy,
             rule_version=ctx.config.universe.version,
             limits=limit_set.limits(),
-            halts=limit_set.halts(),
+            halts=halts,
+            benchmark=benchmark,
             schedule=load_cost_schedule(Path(ctx.config.costs.schedule)),
             slippage=ctx.config.costs.slippage(),
             calendar=calendar,
@@ -984,6 +1007,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=date.fromisoformat,
         help="the last NAV date to load; defaults to today in India",
     )
+    sources.add_parser(
+        "index-history",
+        parents=[fixtures],
+        help="niftyindices.com's NIFTY100 Low Volatility 30 and NIFTY 500 Total Return Index"
+        " history, 2005-04 to 2019-09, for the Relative Drawdown Halt's threshold",
+    )
     news = sources.add_parser(
         "news",
         parents=[fixtures],
@@ -1256,11 +1285,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=PullbackV1.name,
         help="the Strategy whose configured Protocol it is (default %(default)s)",
     )
-    protocol_actions.add_parser(
+    freeze_parser = protocol_actions.add_parser(
         "freeze",
         parents=[named],
         help="freeze the configured Protocol with the data snapshot and the cost schedule as of"
         " now, at this commit, and print its Window boundaries as trading days",
+    )
+    freeze_parser.add_argument(
+        "--relative-drawdown-fallback",
+        action="store_true",
+        help="set the Relative Drawdown Halt's threshold from NSE's 2018 white paper, recorded"
+        " as a fallback; only when no index history could be served and none is stored",
     )
     protocol_actions.add_parser(
         "windows",

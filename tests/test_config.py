@@ -6,6 +6,7 @@ import pytest
 
 from limits import LOWVOL, PULLBACK
 from tradeline.config import Config, ConfigError, UniverseRule, load_config
+from tradeline.metrics import HaltLimits
 
 
 def test_loads_settings_from_the_toml_file(tmp_path: Path) -> None:
@@ -306,8 +307,12 @@ def test_a_limit_is_stated_off_in_risk_as_false(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     ("section", "key"),
-    [("risk", "max_sector"), ("lowvol.risk", "max_open_positions")],
-    ids=["a-fraction", "a-count"],
+    [
+        ("risk", "max_sector"),
+        ("lowvol.risk", "max_open_positions"),
+        ("lowvol.risk", "daily_loss_halt"),
+    ],
+    ids=["a-fraction", "a-count", "a-halt"],
 )
 def test_a_limit_stated_true_is_refused_by_name(tmp_path: Path, section: str, key: str) -> None:
     path = tmp_path / "tradeline.toml"
@@ -330,6 +335,10 @@ def test_the_committed_config_states_lowvols_limits_and_one_cell_protocol() -> N
 
     assert config.lowvol == Config.Lowvol()
     assert config.lowvol.risk.limits() == LOWVOL
+    # The daily-loss and drawdown Halts off, the Relative Drawdown Halt on (ADR 0020).
+    assert config.lowvol.risk.halts() == HaltLimits(daily_loss=None, drawdown=None)
+    assert config.lowvol.risk.relative_drawdown_halt
+    assert not config.risk.relative_drawdown_halt
     terms = config.lowvol.protocol.terms()
     assert terms.grid == {}
     assert terms.layout.holdout_start == date(2024, 10, 1)

@@ -145,8 +145,12 @@ participation_cap = 0.01
 min_order_value = 5000
 max_new_entries = false
 min_reward_to_risk = false
-daily_loss_halt = 0.03      # reported only, until the Relative Drawdown Halt replaces both (#97)
-drawdown_halt = 0.10
+daily_loss_halt = false     # off: the Relative Drawdown Halt replaces both (ADR 0020)
+drawdown_halt = false
+# On: its threshold is computed at `protocol freeze` from the index history
+# `tradeline ingest index-history` stores (NIFTY100 Low Volatility 30 TRI against
+# NIFTY 500 TRI, 2005-04 to 2019-09), rounded up to the next 5 points.
+relative_drawdown_halt = true
 
 # `lowvol_v1`'s Protocol: one grid cell, so Walk-Forward selects nothing and the
 # Out-of-Sample Windows (2019-10 to 2024-09) are one continuous backtest, the
