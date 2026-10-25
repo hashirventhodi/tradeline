@@ -33,12 +33,14 @@ from tradeline.costs import CostModel, load_contract_notes, load_cost_schedule
 from tradeline.dates import IST, month_end, month_of, next_month, parse_month
 from tradeline.db import NotAppRoleMember, app_connection, connect
 from tradeline.demergers import load_demergers
+from tradeline.dividends import load_listed_dividends
 from tradeline.engine import WallClock
 from tradeline.engine import backtest as backtest_service
 from tradeline.engine import paper as paper_service
 from tradeline.environment import Environment
 from tradeline.freeze import freeze_protocol
 from tradeline.holdout import run_fresh_period, run_holdout
+from tradeline.holdout_checks import check_holdout
 from tradeline.ingest.announcements import ingest_announcements
 from tradeline.ingest.benchmark import ingest_benchmark
 from tradeline.ingest.candles import CurrentUniverse, ingest_candles
@@ -666,6 +668,8 @@ def backtest(ctx: Context, args: argparse.Namespace) -> int:
         return holdout(ctx, args)
     if args.backtest_command == "fresh":
         return fresh_period(ctx, args)
+    if args.backtest_command == "checks":
+        return holdout_checks(ctx, args)
     if args.start is None:
         return walk_forward(ctx, args)
     end = args.end or args.start
@@ -733,6 +737,27 @@ def holdout(ctx: Context, args: argparse.Namespace) -> int:
         )
     log.info("holdout finished", extra=result.summary())
     return 0
+
+
+def holdout_checks(ctx: Context, args: argparse.Namespace) -> int:
+    """The pre-Holdout checks of the Protocol ``--protocol`` names, each recorded with this
+    commit; exit 1 if any fails (ADR 0007, 2026-10-25 amendment)."""
+    notes = load_contract_notes(Path(ctx.config.costs.contract_notes))
+    schedule = load_cost_schedule(Path(ctx.config.costs.schedule))
+    listed = load_listed_dividends(Path(ctx.config.corporate_actions.unparsed_dividends))
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = check_holdout(
+            conn,
+            protocol=args.protocol or "",
+            contract_notes=notes,
+            schedule=schedule,
+            listed=listed,
+            accept_no_contract_notes=args.accept_no_contract_notes,
+        )
+    if result.passed:
+        return 0
+    log.error("pre-holdout checks failed", extra=result.summary())
+    return 1
 
 
 def fresh_period(ctx: Context, args: argparse.Namespace) -> int:
@@ -1263,6 +1288,18 @@ def build_parser() -> argparse.ArgumentParser:
         " from a fresh account to the last day with data, for the Backtest Gate to score",
     )
     fresh_parser.add_argument(*PROTOCOL[0], **PROTOCOL[1])
+    checks_parser = reports.add_parser(
+        "checks",
+        help="run and record the pre-Holdout checks at this commit: contract notes, dividend"
+        " subjects, the demerger table against NSE's list, the tax-ledger tests",
+    )
+    checks_parser.add_argument(*PROTOCOL[0], **PROTOCOL[1])
+    checks_parser.add_argument(
+        "--accept-no-contract-notes",
+        metavar="REASON",
+        default=None,
+        help="accept the contract-note test as unmet when no note is supplied, recording why",
+    )
     protocol_parser = subparsers.add_parser(
         "protocol", help="the Protocol a Strategy version is validated under (ADR 0007)"
     )

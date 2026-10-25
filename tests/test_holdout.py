@@ -26,6 +26,7 @@ from synthetic_eod import (
     config_text,
     freeze_protocol,
     load_market,
+    pass_holdout_checks,
     repo_calendar,
     walk_forward_market,
     walk_forward_terms,
@@ -53,7 +54,9 @@ def pullback(parameters: Mapping[str, Decimal]) -> Strategy:
 
 
 def walked(conn: psycopg.Connection, protocol: str, factory: Any = pullback) -> None:
+    """The Protocol walked forward and its pre-Holdout checks passed: ready for the Holdout."""
     walk_forward(conn, factory, protocol=protocol, calendar=CALENDAR, tick_sizes=TICK_SIZES)
+    pass_holdout_checks(conn, protocol)
 
 
 def holdout(conn: psycopg.Connection, protocol: str, factory: Any = pullback) -> Any:

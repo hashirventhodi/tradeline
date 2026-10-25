@@ -56,6 +56,9 @@ cited = "cited_corporate_actions.csv"
 # The checked-in demergers a holder is credited for (ADR 0020), each citing NSE or
 # the company (see the file's header); stored by `ingest demergers`.
 demergers = "demergers.csv"
+# The checked-in dividend subjects the parser leaves unparsed, each with the
+# Operator's reason; read by `backtest checks` before the Holdout (ADR 0007).
+unparsed_dividends = "unparsed_dividends.csv"
 
 [integrity]
 # The checked-in Trading Calendar: the weekdays NSE was closed and the Special

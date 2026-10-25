@@ -2644,6 +2644,39 @@ def holdout_attempts(
 
 
 @dataclass(frozen=True)
+class HoldoutCheck:
+    """One pre-Holdout check run for a Protocol at ``git_commit`` (ADR 0007, 2026-10-25
+    amendment): ``item`` is ``contract_notes``, ``dividends``, ``demergers`` or
+    ``tax_tests``; ``accepted`` the reason a contract-note check with no note was accepted
+    as unmet (None otherwise)."""
+
+    id: uuid.UUID
+    protocol: str
+    git_commit: str
+    item: str
+    checked_at: datetime
+    passed: bool
+    accepted: str | None
+    summary: str
+    detail: dict[str, Any]
+
+
+def holdout_checks(
+    conn: psycopg.Connection, *, protocol: str, git_commit: str | None = None
+) -> list[HoldoutCheck]:
+    """The pre-Holdout checks run for the Protocol whose full hash is ``protocol`` (at
+    ``git_commit`` when named), in the order run."""
+    rows = conn.execute(
+        "SELECT id, protocol, git_commit, item, checked_at, passed, accepted, summary, detail"
+        " FROM holdout_checks WHERE protocol = %(protocol)s"
+        " AND (%(commit)s::text IS NULL OR git_commit = %(commit)s)"
+        " ORDER BY checked_at, id",
+        {"protocol": protocol, "commit": git_commit},
+    ).fetchall()
+    return [HoldoutCheck(*row) for row in rows]
+
+
+@dataclass(frozen=True)
 class FreshPeriodRun:
     """A Not Independent version's Fresh Period account: from ``first``, at the parameters
     its Holdout ran at, in the account ``backtest_id`` (its Runs are the Ledger's)."""
