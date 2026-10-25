@@ -34,6 +34,12 @@ warm-up reads (the Protocol's last months) or the demerger table has changed. A
 portfolio Strategy's account starts with an Initial Buy decided on the trading day
 before its first, and the Benchmark is bought the day its entrants are; it carries
 the Gate once it also holds two Rebalances after it (``gate``).
+
+A Machinery Correction (ADR 0007 amendment) runs no Holdout of its own: the
+Holdout run of the Protocol it corrects stands as recorded (``holdout_run_of``),
+a request under the correction is refused and recorded, and its standing and
+Fresh Period are that version's, from the same first day. Its Fresh Period
+account is its own, rerun from that day at the fixed commit and continued.
 """
 
 from __future__ import annotations
@@ -121,6 +127,14 @@ def run_holdout(
             f"no Protocol {protocol} is frozen; `tradeline protocol freeze` freezes one"
         )
     terms, short = frozen.protocol, frozen.hash[:12]
+    if terms.correction is not None:
+        reason = (
+            f"Protocol {short} is a Machinery Correction of Protocol"
+            f" {terms.correction.corrects[:12]}, whose Holdout run stands as recorded;"
+            " a correction runs no Holdout of its own"
+        )
+        _record(conn, frozen, outcome="refused", reason=reason)
+        raise HoldoutRefused(reason)
     span = terms.holdout
     parameters = _last_parameters(conn, frozen)
     days = list(calendar.trading_days(span.first, span.last))
@@ -298,10 +312,12 @@ def standing(
     conn: psycopg.Connection, protocol: str, *, calendar: TradingCalendar
 ) -> HoldoutStanding:
     """The standing of the Holdout run by the version under the Protocol whose full hash is
-    ``protocol``; refused if it has not run the Holdout."""
-    attempt = holdout_run(conn, protocol)
+    ``protocol`` (for a Machinery Correction, the run of the Protocol it corrects, and that
+    version's Fresh Period); refused if it has not run the Holdout."""
+    attempt = holdout_run_of(conn, protocol)
     if attempt is None:
         raise ValueError(f"Protocol {protocol[:12]} has not run the Holdout")
+    protocol = attempt.protocol
     if attempt.independent:
         return HoldoutStanding(
             attempt, None, True, "independent: the family's Holdout, consumed by this run"
@@ -381,7 +397,7 @@ def run_fresh_period(
             f"no Protocol {protocol} is frozen; `tradeline protocol freeze` freezes one"
         )
     short, holdout = frozen.hash[:12], frozen.protocol.holdout
-    attempt = holdout_run(conn, frozen.hash)
+    attempt = holdout_run_of(conn, frozen.hash)
     ran = (
         []
         if attempt is None
@@ -532,6 +548,15 @@ def _corrected_since(
         if differs:
             corrected.append(attempt.id)
     return tuple(corrected)
+
+
+def holdout_run_of(conn: psycopg.Connection, protocol: str) -> queries.HoldoutAttempt | None:
+    """The Holdout run the Gate reads for the version under the Protocol whose full hash is
+    ``protocol``: its own, or a Machinery Correction's original's
+    (``queries.corrected_original``)."""
+    frozen = queries.protocol(conn, protocol)
+    assert frozen is not None
+    return holdout_run(conn, queries.corrected_original(conn, frozen).hash)
 
 
 def holdout_run(conn: psycopg.Connection, protocol: str) -> queries.HoldoutAttempt | None:

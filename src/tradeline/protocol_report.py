@@ -36,6 +36,16 @@ timing, so two runs of one Protocol over one data read the same. The Markdown,
 for posting on the Phase 2 issue, renders it in that order and adds the runtime: the time
 between the Ledger's first and last write for each stage, which includes any
 pause.
+
+A Machinery Correction's report (ADR 0007 amendment) reads the Holdout run of
+the Protocol it corrects, as recorded, with that run's c sensitivity (none is
+run again at the fixed commit). Right after the Gate it states the correction,
+its evidence and the Protocol it corrects, the Stitched Curve before and after
+it (each Protocol's Walk-Forward account) and the Fresh Period before and after
+it over the days both accounts ran, side by side as the Gate reads them; it
+marks the Holdout as computed before the correction, and flags it sensitive
+where its margin against a gated threshold is smaller than the correction's
+measured effect on the Stitched Curve (``gate.correction_sensitivity``).
 """
 
 from __future__ import annotations
@@ -55,8 +65,15 @@ import psycopg
 from tradeline import queries
 from tradeline.dates import IST
 from tradeline.freeze import verify_snapshot
-from tradeline.gate import AnyCurve, BenchmarkCurve, CurveMetrics, GateOutcome, evaluate
-from tradeline.holdout import FreshPeriod, holdout_run, rerun_holdout, standing
+from tradeline.gate import (
+    AnyCurve,
+    BenchmarkCurve,
+    CurveMetrics,
+    GateOutcome,
+    correction_sensitivity,
+    evaluate,
+)
+from tradeline.holdout import FreshPeriod, holdout_run_of, rerun_holdout, standing
 from tradeline.metrics import HaltDay, RelativeDrawdownDay
 from tradeline.paper_broker import FILL_MODEL, FillModel
 from tradeline.portfolio_report import (
@@ -121,6 +138,9 @@ class ProtocolReport:
     # curve and section, and the report's notes. None under ``pullback_v1``'s Gate.
     portfolio: Mapping[str, Mapping[str, Any]] | None = None
     notes: Mapping[str, Any] | None = None
+    # A Machinery Correction's comparison with the Protocol it corrects
+    # (``_correction_json``); None for any other Protocol.
+    correction: Mapping[str, Any] | None = None
 
     def _accounts(self) -> dict[str, Account]:
         return {"stitched_curve": self.stitched, "holdout": self.holdout}
@@ -197,7 +217,7 @@ class ProtocolReport:
         rate = terms.risk_free_rate
         accounts = self._accounts()
         halts = self._halts()
-        found = {
+        found: dict[str, Any] = {
             "protocol": frozen.hash,
             "strategy": {
                 "family": terms.family,
@@ -205,6 +225,7 @@ class ProtocolReport:
                 "code_revision": terms.code_revision,
             },
             "gate": self._gate_json(),
+            **({} if self.correction is None else {"machinery_correction": dict(self.correction)}),
             "halt_would_have_fired": self._halts_json(halts),
             "windows": [
                 window_json(number, window, found, terms)
@@ -305,7 +326,7 @@ def read_protocol_report(
     assert attempt.backtest_id is not None
     holdout_runs = queries.runs(conn, mode="backtest", backtest_id=attempt.backtest_id)
     stages.append(_stage("Holdout", attempt.attempted_at, [r.recorded_at for r in holdout_runs]))
-    for found in queries.cost_sensitivities(conn, frozen.hash):
+    for found in _sensitivities(conn, frozen):
         account = read_account(conn, found.backtest_id)
         by_impact.setdefault(found.impact, {})[found.curve] = account.scores(risk_free_rate=rate)
         runs = queries.runs(conn, mode="backtest", backtest_id=found.backtest_id)
@@ -340,6 +361,9 @@ def read_protocol_report(
             frozen.protocol,
             not_independent=None if attempt.independent else str(evaluation.standing["reason"]),
         )
+    correction = None
+    if frozen.protocol.correction is not None:
+        correction = _correction_json(conn, frozen, walked, attempt)
     return ProtocolReport(
         frozen=frozen,
         windows=windows,
@@ -353,7 +377,113 @@ def read_protocol_report(
         relative_drawdown_days=relative,
         portfolio=portfolio,
         notes=notes,
+        correction=correction,
     )
+
+
+def _sensitivities(
+    conn: psycopg.Connection, frozen: queries.FrozenProtocol
+) -> list[queries.CostSensitivity]:
+    """The c sensitivity accounts the report reads: the Protocol's own, and for a
+    Machinery Correction the Holdout's of the Protocol it corrects, whose run it reads."""
+    found = queries.cost_sensitivities(conn, frozen.hash)
+    original = queries.corrected_original(conn, frozen)
+    if original.hash == frozen.hash:
+        return found
+    return [s for s in found if s.curve != "holdout"] + [
+        s for s in queries.cost_sensitivities(conn, original.hash) if s.curve == "holdout"
+    ]
+
+
+def _correction_json(
+    conn: psycopg.Connection,
+    frozen: queries.FrozenProtocol,
+    walked: queries.WalkForward,
+    attempt: queries.HoldoutAttempt,
+) -> dict[str, Any]:
+    """A Machinery Correction beside the Protocol it corrects: its evidence, each curve
+    before and after it as the Gate reads them, and the Holdout's sensitivity to it."""
+    terms, correction = frozen.protocol, frozen.protocol.correction
+    assert correction is not None and attempt.backtest_id is not None
+    old = queries.walk_forward(conn, correction.corrects)
+    assert old is not None
+    before = _metrics(read_account(conn, old.backtest_id), terms)
+    after = _metrics(read_account(conn, walked.backtest_id), terms)
+    holdout = _metrics(read_account(conn, attempt.backtest_id), terms)
+    found = correction_sensitivity(terms.gate, before=before, after=after, holdout=holdout)
+    return {
+        "corrects": correction.corrects,
+        "description": correction.description,
+        "evidence": {
+            "test": correction.evidence.test,
+            "record": correction.evidence.record,
+            "citation": correction.evidence.citation,
+            "failed_at": correction.evidence.failed_at,
+        },
+        "holdout": {"protocol": attempt.protocol, "computed_before_correction": True},
+        "stitched_curve": {"before": _rounded_json(before), "after": _rounded_json(after)},
+        "fresh_period": _fresh_before_after(conn, frozen, correction.corrects),
+        "sensitivity": [
+            {
+                "metric": c.metric,
+                "holdout_margin": rounded(c.margin, _places(c.metric)),
+                "effect": rounded(c.effect, _places(c.metric)),
+                "sensitive": c.sensitive,
+            }
+            for c in found.checks
+        ],
+        "sensitive": found.sensitive,
+    }
+
+
+def _fresh_before_after(
+    conn: psycopg.Connection, frozen: queries.FrozenProtocol, corrected: str
+) -> dict[str, Any] | None:
+    """The Fresh Period before and after the correction, over the days both accounts ran;
+    None until both have run a day."""
+    old, new = (
+        queries.fresh_period_run(conn, corrected),
+        queries.fresh_period_run(conn, frozen.hash),
+    )
+    if old is None or new is None:
+        return None
+    accounts = []
+    for run in (old, new):
+        if not queries.runs(conn, mode="backtest", backtest_id=run.backtest_id):
+            return None
+        accounts.append(read_account(conn, run.backtest_id))
+    through = min(a.days[-1] for a in accounts)
+    terms = frozen.protocol
+    before, after = (_metrics(a.through(through), terms) for a in accounts)
+    return {
+        "from": new.first.isoformat(),
+        "through": through.isoformat(),
+        "before": _rounded_json(before),
+        "after": _rounded_json(after),
+    }
+
+
+def _places(metric: str) -> Decimal:
+    """How the report rounds a metric's value."""
+    return FRACTION if metric in ("max_drawdown", "drawdown", "annualised_excess") else RATIO
+
+
+def _rounded_json(metrics: AnyCurve) -> dict[str, Any]:
+    """What the Gate reads of a curve, rounded as the report rounds each metric."""
+    if isinstance(metrics, BenchmarkCurve):
+        return {
+            "rebalances": metrics.rebalances,
+            "annualised_excess": rounded(metrics.excess, FRACTION),
+            "drawdown": rounded(metrics.drawdown, FRACTION),
+            "benchmark_drawdown": rounded(metrics.benchmark_drawdown, FRACTION),
+            "information_ratio": rounded(metrics.information_ratio, RATIO),
+        }
+    return {
+        "trades": metrics.trades,
+        "sharpe": rounded(metrics.sharpe, RATIO),
+        "max_drawdown": rounded(metrics.max_drawdown, FRACTION),
+        "profit_factor": rounded(metrics.profit_factor, RATIO),
+    }
 
 
 def _portfolio(
@@ -420,12 +550,15 @@ def report_protocol(
         "holdout": len(queries.runs(conn, mode="backtest", backtest_id=attempt.backtest_id)),
     }
     impacts = (Decimal(0), terms.slippage.impact * 2)
+    # A Machinery Correction reads the Holdout run of the Protocol it corrects, with its c
+    # sensitivity as recorded: the Holdout is never run again at the fixed commit.
+    curves = CURVES if terms.correction is None else CURVES[:1]
     recorded = {
         (s.curve, s.impact): s.backtest_id for s in queries.cost_sensitivities(conn, frozen.hash)
     }
     pending = []
     for impact in impacts:
-        for curve in CURVES:
+        for curve in curves:
             account = recorded.get((curve, impact))
             written = (
                 [] if account is None else queries.runs(conn, mode="backtest", backtest_id=account)
@@ -632,7 +765,7 @@ def _finished(
         )
     if not queries.runs(conn, mode="backtest", backtest_id=walked.backtest_id):
         raise ValueError(f"no Window of Protocol {short}'s Walk-Forward chose parameters")
-    attempt = holdout_run(conn, frozen.hash)
+    attempt = holdout_run_of(conn, frozen.hash)
     runs = (
         []
         if attempt is None
@@ -765,6 +898,8 @@ class _Markdown:
             f" `{strategy['code_revision'][:12]}`, Protocol `{data['protocol']}`."
         )
         self._gate()
+        if "machinery_correction" in data:
+            self._correction()
         self._halts()
         self._windows()
         self._metrics()
@@ -867,6 +1002,68 @@ class _Markdown:
             ],
         )
         self._line(f"Holdout run: {gate['standing']['reason']}.")
+
+    def _correction(self) -> None:
+        found = self._json["machinery_correction"]
+        evidence = found["evidence"]
+        self._section("Machinery Correction")
+        self._line(
+            f"This Protocol corrects Protocol `{found['corrects'][:12]}`:"
+            f" {found['description']}. Shown first by `{evidence['test']}`, failing at"
+            f" `{evidence['failed_at'][:12]}` against a {evidence['record'].replace('_', ' ')}"
+            f" ({evidence['citation']})."
+        )
+        rows = [
+            [
+                "Stitched Curve",
+                metric,
+                _cell(value),
+                _cell(found["stitched_curve"]["after"][metric]),
+            ]
+            for metric, value in found["stitched_curve"]["before"].items()
+        ]
+        fresh = found["fresh_period"]
+        if fresh is not None:
+            rows += [
+                [
+                    f"Fresh Period {fresh['from']} to {fresh['through']}",
+                    metric,
+                    _cell(value),
+                    _cell(fresh["after"][metric]),
+                ]
+                for metric, value in fresh["before"].items()
+            ]
+        self._table(["Curve", "Metric", "Before", "After"], rows)
+        holdout = found["holdout"]
+        self._line(
+            f"The Holdout result stands as recorded under Protocol"
+            f" `{holdout['protocol'][:12]}`, computed before the correction. Its margin"
+            " against each gated threshold beside the correction's effect on the Stitched"
+            " Curve:"
+        )
+        self._table(
+            ["Metric", "Holdout margin", "Effect", "Sensitive"],
+            [
+                [
+                    c["metric"],
+                    _cell(c["holdout_margin"]),
+                    _cell(c["effect"]),
+                    "**yes**" if c["sensitive"] else "no",
+                ]
+                for c in found["sensitivity"]
+            ],
+        )
+        if found["sensitive"]:
+            self._line(
+                "**The Holdout outcome is sensitive to this correction**: its margin on "
+                + ", ".join(c["metric"] for c in found["sensitivity"] if c["sensitive"])
+                + " is smaller than the correction's effect."
+            )
+        else:
+            self._line(
+                "No margin is smaller than the correction's effect: the Holdout outcome is not"
+                " flagged."
+            )
 
     def _against_benchmark(self) -> None:
         self._section("Against the Benchmark")
@@ -1244,6 +1441,7 @@ class _Markdown:
             (curve, Decimal(variant["impact"]), variant[curve])
             for variant in sensitivity["variants"]
             for curve in CURVES
+            if curve in variant
         ]
         columns.sort(key=lambda column: (CURVES.index(column[0]), column[1]))
         self._scores_table(

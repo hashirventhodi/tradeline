@@ -26,6 +26,11 @@ thresholds on its own curve, and carries the Gate only once it holds the Protoco
 minimum of Rebalances after its Initial Buy (two): short of them the outcome is
 ``cannot pass``, whatever its thresholds, as a Fresh Period short of twelve months is.
 
+After a Machinery Correction (ADR 0007 amendment) the Holdout's recorded outcome
+stands; ``correction_sensitivity`` flags it sensitive to the correction when its
+margin against a gated threshold is smaller than the correction's measured effect
+on the Stitched Curve against the same threshold.
+
 This module is pure.
 """
 
@@ -222,3 +227,62 @@ def _checks(gate: AnyGate, curve: str, metrics: AnyCurve) -> list[Check]:
             factor is not None and factor > gate.profit_factor_above,
         ),
     ]
+
+
+@dataclass(frozen=True)
+class CheckSensitivity:
+    """One gated Holdout threshold after a Machinery Correction: the Holdout's ``margin``
+    (its distance from the threshold, on whichever side), the correction's ``effect`` on
+    the same check of the Stitched Curve (how far its value moved against its threshold),
+    and whether the margin is the smaller. Either is None when a curve gives no finite
+    value for it, and such a check is not flagged."""
+
+    metric: str
+    margin: Decimal | None
+    effect: Decimal | None
+    sensitive: bool
+
+
+@dataclass(frozen=True)
+class CorrectionSensitivity:
+    checks: tuple[CheckSensitivity, ...]
+
+    @property
+    def sensitive_to(self) -> tuple[str, ...]:
+        return tuple(c.metric for c in self.checks if c.sensitive)
+
+    @property
+    def sensitive(self) -> bool:
+        return bool(self.sensitive_to)
+
+
+def correction_sensitivity(
+    gate: AnyGate, *, before: AnyCurve, after: AnyCurve, holdout: AnyCurve
+) -> CorrectionSensitivity:
+    """Whether the Holdout's recorded outcome is sensitive to a Machinery Correction (ADR
+    0007 amendment): for each threshold the Gate holds the Holdout to, its margin against
+    the correction's measured effect on the Stitched Curve, ``before`` and ``after`` it.
+    The flag compares two measured numbers; it is never a threshold of its own."""
+    moved: dict[str, Decimal] = {}
+    for old, new in zip(
+        _checks(gate, "stitched_curve", before), _checks(gate, "stitched_curve", after), strict=True
+    ):
+        was, now = _distance(old), _distance(new)
+        if was is not None and now is not None:
+            moved[old.metric] = abs(now - was)
+    found = []
+    for check in _checks(gate, "holdout", holdout):
+        distance = _distance(check)
+        margin = None if distance is None else abs(distance)
+        effect = moved.get(check.metric)
+        sensitive = margin is not None and effect is not None and margin < effect
+        found.append(CheckSensitivity(check.metric, margin, effect, sensitive))
+    return CorrectionSensitivity(tuple(found))
+
+
+def _distance(check: Check) -> Decimal | None:
+    """The check's value less its threshold; None when the value is not a finite number."""
+    value = check.value
+    if value is None or (isinstance(value, Decimal) and not value.is_finite()):
+        return None
+    return Decimal(value) - Decimal(check.threshold)

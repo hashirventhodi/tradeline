@@ -14,7 +14,9 @@ with and a Relative Drawdown is measured against (stated only when either is
 on: its funds, the factor fund with its unit splits and the fund-unit rates as
 of the freeze), the starting Equity, the risk-free rate, the Gate thresholds
 (``pullback_v1``'s absolute ones, or a portfolio family's against the Benchmark
-with how it counts Rebalances), any notes it makes of itself, the Universe
+with how it counts Rebalances), any notes it makes of itself, the Machinery
+Correction it was frozen as with the Protocol it corrects and the evidence (stated
+only when it is one), the Universe
 Rule version, the Strategy family, name and code revision, the git commit it was
 frozen at, why its Holdout run is Not Independent when its family was chosen after
 reading results covering the Holdout's years (stated only then), and the data
@@ -136,6 +138,47 @@ class BenchmarkGate:
 
 
 AnyGate = Gate | BenchmarkGate
+
+# The records outside the system's own results a Machinery Correction's failing test may be
+# written against (ADR 0007 amendment of 2026-10-25).
+RECORDS = (
+    "contract_note",
+    "nse_rows",
+    "corporate_action_filing",
+    "broker_statement",
+    "tax_rule",
+)
+
+
+@dataclass(frozen=True)
+class Evidence:
+    """What shows a Machinery Correction's bug: the pytest node id of the test that failed
+    against an external record, the kind of record (one of ``RECORDS``) and where it is,
+    and the commit the test was written at, failing, before the fix."""
+
+    test: str
+    record: str
+    citation: str
+    failed_at: str
+
+    def __post_init__(self) -> None:
+        if self.record not in RECORDS:
+            raise ValueError(
+                f"a Machinery Correction's test is written against one of {', '.join(RECORDS)},"
+                f" not {self.record!r}"
+            )
+        if "::" not in self.test:
+            raise ValueError(f"name the failing test by its pytest node id, not {self.test!r}")
+
+
+@dataclass(frozen=True)
+class Correction:
+    """A Machinery Correction (ADR 0007 amendment): the Protocol it corrects (its full
+    hash), what it corrects, and the evidence that came first."""
+
+    corrects: str
+    description: str
+    evidence: Evidence
 
 
 def gate_content(gate: AnyGate) -> dict[str, Any]:
@@ -265,6 +308,9 @@ class Protocol:
     # cover the Holdout's years, as ``lowvol``'s was. It then passes the Backtest Gate only
     # with a Fresh Period. In the content only when there is one, as ``dividends`` is.
     not_independent: str | None = None
+    # The Machinery Correction this Protocol was frozen as, at the fixed commit: the
+    # Protocol it corrects and the evidence. In the content only when there is one.
+    correction: Correction | None = None
 
     def __post_init__(self) -> None:
         if self.tax is not None and self.benchmark is None:
@@ -372,6 +418,8 @@ class Protocol:
             content["notes"] = dict(self.notes)
         if self.not_independent is not None:
             content["not_independent"] = self.not_independent
+        if self.correction is not None:
+            content["correction"] = dataclasses.asdict(self.correction)
         return content
 
     @classmethod
@@ -419,6 +467,7 @@ class Protocol:
             benchmark=None if "benchmark" not in content else _read_benchmark(content["benchmark"]),
             notes=dict(content.get("notes", {})),
             not_independent=content.get("not_independent"),
+            correction=None if "correction" not in content else _read_correction(content),
         )
 
     def boundaries_text(self) -> str:
@@ -567,6 +616,11 @@ def frozen_tax_terms(schedule: TaxSchedule, as_of: date, dividend_rate: Decimal)
     rates = schedule.rates(as_of)
     rows = tuple(TaxRate(as_of, item, getattr(rates, item), "Protocol") for item in ITEMS)
     return TaxTerms(TaxSchedule(rows), rates_as_of=as_of, dividend_rate=dividend_rate)
+
+
+def _read_correction(content: Mapping[str, Any]) -> Correction:
+    raw = content["correction"]
+    return Correction(raw["corrects"], raw["description"], Evidence(**raw["evidence"]))
 
 
 def _read_tax(raw: Mapping[str, Any]) -> TaxTerms:

@@ -41,7 +41,7 @@ import time
 import uuid
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
@@ -292,6 +292,25 @@ class Account:
     def halt_days(self, halts: HaltLimits) -> list[HaltDay]:
         return halt_days(
             self.days, self.curve, daily_loss=halts.daily_loss, drawdown=halts.drawdown
+        )
+
+    def through(self, day: date) -> Account:
+        """The account as it stood after ``day``'s close, for comparing two accounts over the
+        days both ran: its days, Equity, closed trades, Runs, Liquidation Values and tax
+        debits to then. Its open Positions are left out, since one closed later was open
+        then and the Ledger marks none at that day's close."""
+        days = tuple(d for d in self.days if d <= day)
+        return replace(
+            self,
+            days=days,
+            curve=self.curve[: len(days) + 1],
+            closed=tuple(t for t in self.closed if t.closed_on <= day),
+            open=(),
+            blocks=(),
+            passes=(),
+            liquidation=tuple(v for v in self.liquidation if v.day <= day),
+            tax_debits=tuple(t for t in self.tax_debits if t.day <= day),
+            runs=tuple(r for r in self.runs if r.as_of <= day),
         )
 
     def scores(self, *, risk_free_rate: Decimal) -> Scores:

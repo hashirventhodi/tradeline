@@ -63,7 +63,14 @@ from tradeline.login import login as login_service
 from tradeline.manual_links import load_manual_links
 from tradeline.migrations import PendingMigrations, UnreadableMigrations, apply_migrations
 from tradeline.parity import parity as parity_service
-from tradeline.protocol import Terms, window_boundaries, windows_text
+from tradeline.protocol import (
+    RECORDS,
+    Correction,
+    Evidence,
+    Terms,
+    window_boundaries,
+    windows_text,
+)
 from tradeline.protocol_report import report_protocol
 from tradeline.rebuild_instruments import rebuild_instruments as rebuild_instruments_service
 from tradeline.report import report_backtest
@@ -592,8 +599,13 @@ def protocol(ctx: Context, args: argparse.Namespace) -> int:
     are ``[protocol]`` and ``[risk]``; ``lowvol_v1``'s are ``[lowvol.protocol]`` and
     ``[lowvol.risk]``.
 
+    ``protocol freeze --corrects P`` freezes it as a Machinery Correction of the Protocol
+    ``P`` (ADR 0007 amendment), stating what it corrects and the evidence that came first;
+    refused unless it is one.
+
     The boundaries go to stderr; the summary is the last JSON line on stdout.
     """
+    correction = _correction(args)
     calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
     strategy: AnyStrategy
     limit_set: Config.LimitSet
@@ -626,10 +638,34 @@ def protocol(ctx: Context, args: argparse.Namespace) -> int:
             calendar=calendar,
             commit=revision.running_commit(),
             **_tax_inputs(ctx, terms, benchmark=terms.tax or limit_set.relative_drawdown_halt),
+            correction=correction,
         )
     sys.stderr.write(result.text())
     log.info("protocol freeze finished", extra=result.summary())
     return 0
+
+
+CORRECTION_ARGUMENTS = ("correction", "test", "record", "citation", "failed_at")
+
+
+def _correction(args: argparse.Namespace) -> Correction | None:
+    """The Machinery Correction ``protocol freeze`` was asked to freeze, if any: refused
+    when ``--corrects`` comes without all of its evidence, or the evidence without it."""
+    given = {name: getattr(args, name, None) for name in CORRECTION_ARGUMENTS}
+    corrects = getattr(args, "corrects", None)
+    if corrects is None:
+        if any(given.values()):
+            raise ValueError("the correction's evidence is given only with --corrects")
+        return None
+    missing = [f"--{n.replace('_', '-')}" for n, v in given.items() if not v]
+    if missing:
+        raise ValueError(f"a Machinery Correction states its evidence; give {', '.join(missing)}")
+    stated = {name: str(value) for name, value in given.items()}
+    return Correction(
+        corrects,
+        stated["correction"],
+        Evidence(stated["test"], stated["record"], stated["citation"], stated["failed_at"]),
+    )
 
 
 def _tax_inputs(ctx: Context, terms: Terms, *, benchmark: bool) -> dict[str, Any]:
@@ -1408,6 +1444,29 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="set the Relative Drawdown Halt's threshold from NSE's 2018 white paper, recorded"
         " as a fallback; only when no index history could be served and none is stored",
+    )
+    freeze_parser.add_argument(
+        "--corrects",
+        metavar="PROTOCOL",
+        help="freeze it as a Machinery Correction of this Protocol (ADR 0007): the same"
+        " Strategy version, at the fixed commit, its Holdout run standing; needs the four"
+        " evidence options and --correction",
+    )
+    freeze_parser.add_argument("--correction", metavar="TEXT", help="what the correction fixes")
+    freeze_parser.add_argument(
+        "--test",
+        metavar="NODE",
+        help="the pytest node id of the test that failed against an external record first",
+    )
+    freeze_parser.add_argument(
+        "--record", choices=RECORDS, help="the kind of external record the test is against"
+    )
+    freeze_parser.add_argument("--citation", metavar="TEXT", help="where that record is")
+    freeze_parser.add_argument(
+        "--failed-at",
+        dest="failed_at",
+        metavar="COMMIT",
+        help="the commit the test was written at, failing, before the fix",
     )
     protocol_actions.add_parser(
         "windows",

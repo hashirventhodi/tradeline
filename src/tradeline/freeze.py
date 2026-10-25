@@ -23,14 +23,14 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
 import psycopg
 
-from tradeline import queries
+from tradeline import queries, revision
 from tradeline.benchmark import BenchmarkFunds, BenchmarkTerms, UnitSplit
 from tradeline.costs import CostSchedule, Slippage
 from tradeline.dates import IST
@@ -38,6 +38,7 @@ from tradeline.metrics import HaltLimits
 from tradeline.protocol import (
     OBJECTIVE,
     TIE_BREAK,
+    Correction,
     DataSnapshot,
     MonthSnapshot,
     Protocol,
@@ -112,6 +113,7 @@ def freeze_protocol(
     benchmark_funds: BenchmarkFunds | None = None,
     factor_fund: int | None = None,
     unit_splits: Sequence[UnitSplit] = (),
+    correction: Correction | None = None,
     costs_as_of_for_tests: date | None = None,
 ) -> FreezeResult:
     """Freeze the Protocol these state, with the data snapshot read now, at ``commit``, its
@@ -127,7 +129,10 @@ def freeze_protocol(
     with the day it runs; nothing else passes it.
 
     A Relative Drawdown Halt is measured against the Benchmark, so it is refused without
-    ``benchmark_funds`` and ``factor_fund``."""
+    ``benchmark_funds`` and ``factor_fund``.
+
+    With ``correction`` the Protocol is frozen as a Machinery Correction of the Protocol it
+    names (ADR 0007 amendment), refused unless it is one (``check_correction``)."""
     # A Protocol states every Limit on or off (ADR 0020).
     limits.require_stated()
     if halts.relative_drawdown is not None and (benchmark_funds is None or factor_fund is None):
@@ -203,7 +208,10 @@ def freeze_protocol(
         benchmark=benchmark,
         notes=terms.notes,
         not_independent=terms.not_independent,
+        correction=None if correction is None else _resolved(conn, correction),
     )
+    if protocol.correction is not None:
+        check_correction(conn, protocol)
     content = canonical(protocol.content())
     found = content_hash(protocol.content())
     with conn.transaction():
@@ -218,6 +226,62 @@ def freeze_protocol(
         extra={"protocol": found},
     )
     return result
+
+
+def _resolved(conn: psycopg.Connection, correction: Correction) -> Correction:
+    """The correction naming the Protocol it corrects by its full hash."""
+    corrected = queries.protocol(conn, correction.corrects)
+    if corrected is None:
+        raise ValueError(f"no Protocol {correction.corrects} is frozen to be corrected")
+    return replace(correction, corrects=corrected.hash)
+
+
+def check_correction(conn: psycopg.Connection, protocol: Protocol) -> None:
+    """Refuse ``protocol`` as a Machinery Correction unless it is one (ADR 0007
+    amendment): the same Strategy version hash (family, name and code revision) as the
+    Protocol it corrects, with the same grid, Windows, Holdout and Gate, so the Holdout
+    result it reads answers the same question; frozen at a commit other than that
+    Protocol's, the fixed one; correcting a version whose Holdout has run (before it, a fix
+    is a new Protocol and costs nothing); and its failing test written at a commit before
+    the fix (``revision.test_written_before``)."""
+    correction = protocol.correction
+    assert correction is not None
+    found = queries.protocol(conn, correction.corrects)
+    assert found is not None
+    corrected, short = found.protocol, found.hash[:12]
+    strategy = (protocol.family, protocol.name, protocol.code_revision)
+    if strategy != (corrected.family, corrected.name, corrected.code_revision):
+        raise ValueError(
+            f"the Strategy version hash differs from Protocol {short}'s"
+            f" ({protocol.name} at {protocol.code_revision[:12]}, not {corrected.name} at"
+            f" {corrected.code_revision[:12]}), so this is not a Machinery Correction; a"
+            " change touching the Strategy is a new version, Not Independent, whose Fresh"
+            " Period starts at its own freeze"
+        )
+    differ = [
+        name
+        for name in ("grid", "windows", "holdout", "gate")
+        if getattr(protocol, name) != getattr(corrected, name)
+    ]
+    if differ:
+        raise ValueError(
+            f"a Machinery Correction keeps Protocol {short}'s {', '.join(differ)}, so this"
+            " is not a Machinery Correction"
+        )
+    if protocol.git_commit == corrected.git_commit:
+        raise ValueError(
+            f"a Machinery Correction is frozen at the fixed commit, not at Protocol {short}'s"
+            f" own {corrected.git_commit[:12]}"
+        )
+    original = queries.corrected_original(conn, found)
+    if not any(a.outcome == "ran" for a in queries.holdout_attempts(conn, protocol=original.hash)):
+        raise ValueError(
+            f"Protocol {original.hash[:12]} has not run the Holdout, so a fix needs no"
+            " Machinery Correction: freeze a new Protocol at the fixed commit and run its"
+            " Windows again"
+        )
+    evidence = correction.evidence
+    revision.test_written_before(evidence.test, evidence.failed_at, protocol.git_commit)
 
 
 def verify_snapshot(
