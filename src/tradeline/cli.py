@@ -32,6 +32,7 @@ from tradeline.conformance import check_conformance
 from tradeline.costs import CostModel, load_contract_notes, load_cost_schedule
 from tradeline.dates import IST, month_end, month_of, next_month, parse_month
 from tradeline.db import NotAppRoleMember, app_connection, connect
+from tradeline.demergers import load_demergers
 from tradeline.engine import WallClock
 from tradeline.engine import backtest as backtest_service
 from tradeline.engine import paper as paper_service
@@ -44,6 +45,7 @@ from tradeline.ingest.candles import CurrentUniverse, ingest_candles
 from tradeline.ingest.cited_actions import ingest_cited_actions
 from tradeline.ingest.corporate_actions import ingest_corporate_actions
 from tradeline.ingest.delistings import ingest_delistings
+from tradeline.ingest.demergers import ingest_demergers
 from tradeline.ingest.eod import ingest_eod
 from tradeline.ingest.news import Feed, ingest_news
 from tradeline.ingest.symbol_changes import ingest_symbol_changes
@@ -147,6 +149,8 @@ def ingest(ctx: Context, args: argparse.Namespace) -> int:
         return _ingest_delistings(ctx, args)
     if args.source == "cited-actions":
         return _ingest_cited_actions(ctx)
+    if args.source == "demergers":
+        return _ingest_demergers(ctx)
     if args.source == "benchmark":
         return _ingest_benchmark(ctx, args)
     end = args.start if args.end is None else args.end
@@ -259,6 +263,15 @@ def _ingest_cited_actions(ctx: Context) -> int:
         extra=result.summary(),
     )
     return 1 if result.refused else 0
+
+
+def _ingest_demergers(ctx: Context) -> int:
+    """The demerger table, read whole and stored as the table in force."""
+    table = load_demergers(Path(ctx.config.corporate_actions.demergers))
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = ingest_demergers(conn, table)
+    log.info("ingest demergers finished", extra=result.summary())
+    return 0
 
 
 def _ingest_benchmark(ctx: Context, args: argparse.Namespace) -> int:
@@ -955,6 +968,11 @@ def build_parser() -> argparse.ArgumentParser:
         "cited-actions",
         help="the splits and bonuses of the cited corporate actions file, checked against the"
         " price; exits 1 if any row is refused",
+    )
+    sources.add_parser(
+        "demergers",
+        help="the demerger table, read whole and stored as the table in force; a Protocol"
+        " crediting demergers freezes its hash",
     )
     sources.add_parser(
         "announcements",

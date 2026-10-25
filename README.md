@@ -18,6 +18,7 @@ uv run tradeline login                                          # daily: prints 
 uv run tradeline ingest candles --interval day --symbol INFY --from 2024-07-01 --to 2024-07-31
 uv run tradeline ingest corporate-actions --from 2024-07-01 --to 2024-12-31   # NSE's three lists, with our factors
 uv run tradeline ingest cited-actions   # the splits and bonuses of cited_corporate_actions.csv that NSE's lists omit
+uv run tradeline ingest demergers       # demergers.csv, the table a Protocol crediting demergers freezes the hash of
 uv run tradeline universe --month 2024-08                       # needs 126 trading days of end-of-day files before the month
 uv run tradeline ingest candles --interval minute --from 2024-07-01 --to 2024-07-31   # the current month's Universe; --universe-month YYYY-MM for another
 uv run tradeline sectors                                        # NSE's sector classification, in force from today

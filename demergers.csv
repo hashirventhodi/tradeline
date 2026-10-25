@@ -1,0 +1,26 @@
+# Demergers a holder is credited for in cash (ADR 0020, #95): parent, child,
+# entitlement ratio (<child shares>:<parent shares>), Ex-Date, the child's first
+# listing day, the announced split of cost basis in percent, and the sources.
+#
+# Every row is reviewed like code. It cites NSE's circular naming the day and
+# the company's filing apportioning the cost of acquisition (or NSE's), each
+# an NSE circular number or an https URL, separated by ";". A row without a
+# citation, or whose ratio, basis or dates do not parse, refuses the whole
+# file (`tradeline.demergers`). Leave both basis columns empty when no split
+# was announced: the child's share is then zero. `tradeline ingest demergers`
+# stores the rows; its location is `corporate_actions.demergers` in
+# tradeline.toml.
+#
+# Sources: docs/research.md, "Benchmark, index method and demerger facts
+# (Phase 2b)". Each Ex-Date is the record date with NSE's special pre-open
+# session that day; under T+1 the Ex-Date equals the record date, an inference
+# (no separate NSE ex-date record was read). Each child listed in the BE series.
+parent,child,ratio,ex_date,listed_on,parent_basis,child_basis,citation
+# Jio Financial from Reliance: 1 for 1, record date 2023-07-20 (NSE/CMTR/57524);
+# listed 2023-08-21 as JIOFIN (NSE's listing press note); cost 95.32 / 4.68
+# (Reliance's apportionment intimation).
+RELIANCE,JIOFIN,1:1,2023-07-20,2023-08-21,95.32,4.68,NSE/CMTR/57524; https://nsearchives.nseindia.com/web/sites/default/files/2023-08/PR_list_18082023.pdf; https://rilstaticasset.akamaized.net/sites/default/files/2023-08/SEIntimation_ApportionmentofCost_0.pdf
+# ITC Hotels from ITC: 1 for 10, record date 2025-01-06 (NSE/CMTR/65845);
+# listed 2025-01-29 as ITCHOTELS (NSE's listing press note); cost 86.49 / 13.51
+# (ITC's cost-of-acquisition filing).
+ITC,ITCHOTELS,1:10,2025-01-06,2025-01-29,86.49,13.51,NSE/CMTR/65845; https://nsearchives.nseindia.com/web/sites/default/files/2025-01/PR_list_27012025.pdf; https://nsearchives.nseindia.com/corporate/ITC_28012025004206_SE_COA_.pdf

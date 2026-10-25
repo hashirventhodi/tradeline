@@ -29,6 +29,7 @@ that path from a day on:
 - ``CircuitLock``: the day is pinned at the previous close plus ``amount``,
   open, high, low and close equal (GLOSSARY: Circuit Lock).
 - ``Dividend``: a dividend NSE lists, by its subject; it leaves the path as it is.
+- ``Rights``: a rights issue NSE lists, by its subject; it leaves the path as it is.
 - ``Split`` and ``Bonus``: a Corporate Action. From its Ex-Date NSE publishes
   the path times the factor (a Rs 10 to Rs 5 split halves the price and
   doubles the volume), so adding an action changes no bar before its Ex-Date.
@@ -192,9 +193,18 @@ class Dividend:
     face_value: int = 10
 
 
+@dataclass(frozen=True)
+class Rights:
+    """A rights issue as NSE lists it, by its subject. The path is unchanged by it; a test
+    states the Ex-Date's fall with a ``Gap``."""
+
+    ex_date: date
+    subject: str
+
+
 PathEvent = Trend | Dip | Gap | CircuitLock | Volume
 Action = Split | Bonus
-Event = PathEvent | Action | Absent | Dividend
+Event = PathEvent | Action | Absent | Dividend | Rights
 
 
 # --- Stocks and the Market ----------------------------------------------------
@@ -242,6 +252,10 @@ class Stock:
     @property
     def dividends(self) -> list[Dividend]:
         return sorted((e for e in self.events if isinstance(e, Dividend)), key=lambda d: d.ex_date)
+
+    @property
+    def rights(self) -> list[Rights]:
+        return sorted((e for e in self.events if isinstance(e, Rights)), key=lambda r: r.ex_date)
 
     def path_bars(self, days: Sequence[date]) -> list[Bar]:
         """The path, one bar per trading day: NSE's prices had there been no action."""
@@ -475,7 +489,7 @@ def _corporate_actions(stocks: Iterable[Stock], start: date, end: date) -> list[
             "subject": a.subject,
         }
         for s in stocks
-        for a in (*s.actions, *s.dividends)
+        for a in (*s.actions, *s.dividends, *s.rights)
         if start <= a.ex_date <= end
     ]
 
