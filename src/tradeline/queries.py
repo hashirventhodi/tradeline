@@ -2805,6 +2805,17 @@ def holdout_attempts(
     ]
 
 
+def corrected_original(conn: psycopg.Connection, frozen: FrozenProtocol) -> FrozenProtocol:
+    """The Protocol whose recorded Holdout run a version's Gate reads: its own, or, for a
+    Machinery Correction (ADR 0007 amendment), the one it corrects, followed back through
+    every correction to the Protocol frozen before any."""
+    while frozen.protocol.correction is not None:
+        corrected = protocol(conn, frozen.protocol.correction.corrects)
+        assert corrected is not None, "a correction names a frozen Protocol"
+        frozen = corrected
+    return frozen
+
+
 @dataclass(frozen=True)
 class HoldoutCheck:
     """One pre-Holdout check run for a Protocol at ``git_commit`` (ADR 0007, 2026-10-25
