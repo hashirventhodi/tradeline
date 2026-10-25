@@ -9,9 +9,10 @@ from typing import Any
 import psycopg
 import pytest
 
+from tradeline import queries
 from tradeline.cli import main
 from tradeline.dates import IST
-from tradeline.db import connect
+from tradeline.db import app_connection, connect
 from tradeline.migrations import SCHEMA_MIGRATIONS_READ, apply_migrations
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -358,6 +359,30 @@ def test_ingest_cited_actions_reads_the_configured_file_and_fails_on_a_refused_r
     assert lines[-1]["level"] == "ERROR"
     assert lines[-1]["refused"] == lines[-1]["rows_seen"] > 0
     assert lines[-1]["rows_written"] == 0
+
+
+def test_ingest_demergers_stores_the_configured_table_in_force(
+    fresh_database_url: str,
+    repo_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", fresh_database_url)
+
+    code = main(["ingest", "demergers"])
+
+    assert code == 0
+    lines = json_lines(capsys.readouterr().out)
+    (finished,) = [line for line in lines if line["msg"] == "ingest run finished"]
+    assert finished["source"] == "demergers"
+    assert lines[-1]["msg"] == "ingest demergers finished"
+    assert lines[-1]["rows_written"] == 2
+    with app_connection(fresh_database_url) as conn:
+        assert [(d.parent, d.child) for d in queries.demergers(conn)] == [
+            ("RELIANCE", "JIOFIN"),
+            ("ITC", "ITCHOTELS"),
+        ]
+        assert queries.demerger_table_hash(conn) == lines[-1]["hash"]
 
 
 def test_ingest_candles_without_an_access_token_fails_by_name(
@@ -770,3 +795,30 @@ def test_rebuild_instruments_with_a_manual_link_lacking_a_citation_fails_naming_
     failure = json_lines(capsys.readouterr().out)[-1]
     assert failure["level"] == "ERROR"
     assert "manual_links.csv line 2: RUCHI to PATANJALI" in str(failure["msg"])
+
+
+BENCHMARK_FIXTURES = REPO_ROOT / "tests" / "fixtures" / "ingest_benchmark"
+
+
+def test_ingest_benchmark_plays_the_configured_funds_and_factor_fund_and_logs_the_run(
+    fresh_database_url: str,
+    repo_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", fresh_database_url)
+
+    code = main(
+        ["ingest", "benchmark", "--to", "2026-10-23", "--play-fixtures", str(BENCHMARK_FIXTURES)]
+    )
+
+    assert code == 0
+    lines = json_lines(capsys.readouterr().out)
+    (finished,) = [line for line in lines if line["msg"] == "ingest run finished"]
+    assert (finished["source"], finished["range_start"], finished["range_end"]) == (
+        "amfi",
+        "2019-09-11",
+        "2026-10-23",
+    )
+    assert lines[-1]["msg"] == "ingest benchmark finished"
+    assert (lines[-1]["rows_seen"], lines[-1]["rows_written"]) == (202, 202)

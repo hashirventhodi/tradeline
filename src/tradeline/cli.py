@@ -10,16 +10,20 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
-from datetime import date, datetime
+from dataclasses import dataclass, replace
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from tradeline import revision
+import psycopg
+
+from tradeline import queries, revision
 from tradeline import universe as universe_service
+from tradeline.benchmark import BenchmarkFunds, UnitSplit, load_benchmark_funds, load_unit_splits
 from tradeline.cited_actions import load_cited_actions
 from tradeline.collect import collect_daily as collect_daily_service
 from tradeline.compare_adjusted import compare_adjusted as compare_adjusted_service
@@ -28,18 +32,28 @@ from tradeline.conformance import check_conformance
 from tradeline.costs import CostModel, load_contract_notes, load_cost_schedule
 from tradeline.dates import IST, month_end, month_of, next_month, parse_month
 from tradeline.db import NotAppRoleMember, app_connection, connect
+from tradeline.demergers import load_demergers
+from tradeline.dividends import load_listed_dividends
+from tradeline.drift import CURVES as DRIFT_CURVES
+from tradeline.drift import HOLDOUT as HOLDOUT_CURVE
+from tradeline.drift import replay_drift
 from tradeline.engine import WallClock
 from tradeline.engine import backtest as backtest_service
 from tradeline.engine import paper as paper_service
 from tradeline.environment import Environment
 from tradeline.freeze import freeze_protocol
 from tradeline.holdout import run_fresh_period, run_holdout
+from tradeline.holdout_checks import check_holdout
+from tradeline.index_history import relative_drawdown_threshold
 from tradeline.ingest.announcements import ingest_announcements
+from tradeline.ingest.benchmark import ingest_benchmark
 from tradeline.ingest.candles import CurrentUniverse, ingest_candles
 from tradeline.ingest.cited_actions import ingest_cited_actions
 from tradeline.ingest.corporate_actions import ingest_corporate_actions
 from tradeline.ingest.delistings import ingest_delistings
+from tradeline.ingest.demergers import ingest_demergers
 from tradeline.ingest.eod import ingest_eod
+from tradeline.ingest.index_history import ingest_index_history
 from tradeline.ingest.news import Feed, ingest_news
 from tradeline.ingest.symbol_changes import ingest_symbol_changes
 from tradeline.instruments_report import instruments_report
@@ -49,7 +63,14 @@ from tradeline.login import login as login_service
 from tradeline.manual_links import load_manual_links
 from tradeline.migrations import PendingMigrations, UnreadableMigrations, apply_migrations
 from tradeline.parity import parity as parity_service
-from tradeline.protocol import window_boundaries, windows_text
+from tradeline.protocol import (
+    RECORDS,
+    Correction,
+    Evidence,
+    Terms,
+    window_boundaries,
+    windows_text,
+)
 from tradeline.protocol_report import report_protocol
 from tradeline.rebuild_instruments import rebuild_instruments as rebuild_instruments_service
 from tradeline.report import report_backtest
@@ -69,7 +90,10 @@ from tradeline.sources.kite import (
     KiteSession,
     login_url,
 )
+from tradeline.strategy.lowvol import LowvolV1
+from tradeline.strategy.portfolio import AnyStrategy
 from tradeline.strategy.pullback import PullbackV1
+from tradeline.tax import DEFAULT_DIVIDEND_RATE, TaxSchedule, load_tax_schedule
 from tradeline.tick_sizes import load_tick_sizes
 from tradeline.trading_calendar import load_trading_calendar
 from tradeline.transport import (
@@ -79,7 +103,9 @@ from tradeline.transport import (
     transport_for,
 )
 from tradeline.verify_universe import verify_universe as verify_universe_service
+from tradeline.walk_forward import StrategyFactory
 from tradeline.walk_forward import walk_forward as walk_forward_service
+from tradeline.weekly_integrity import frozen_on, weekly_integrity
 
 log = logging.getLogger(__name__)
 
@@ -138,6 +164,12 @@ def ingest(ctx: Context, args: argparse.Namespace) -> int:
         return _ingest_delistings(ctx, args)
     if args.source == "cited-actions":
         return _ingest_cited_actions(ctx)
+    if args.source == "demergers":
+        return _ingest_demergers(ctx)
+    if args.source == "benchmark":
+        return _ingest_benchmark(ctx, args)
+    if args.source == "index-history":
+        return _ingest_index_history(ctx, args)
     end = args.start if args.end is None else args.end
     with _scope(args.start, end, getattr(args, "symbols", None)):
         return _ingest_range(ctx, args, end)
@@ -248,6 +280,46 @@ def _ingest_cited_actions(ctx: Context) -> int:
         extra=result.summary(),
     )
     return 1 if result.refused else 0
+
+
+def _ingest_demergers(ctx: Context) -> int:
+    """The demerger table, read whole and stored as the table in force."""
+    table = load_demergers(Path(ctx.config.corporate_actions.demergers))
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = ingest_demergers(conn, table)
+    log.info("ingest demergers finished", extra=result.summary())
+    return 0
+
+
+def _ingest_benchmark(ctx: Context, args: argparse.Namespace) -> int:
+    """The Benchmark's and the factor fund's AMFI scheme lines and NAVs to ``--to`` (today in
+    India by default); played-back fixtures are not spaced out as live calls are."""
+    end = datetime.now(IST).date() if args.end is None else args.end
+    funds = load_benchmark_funds(Path(ctx.config.benchmark.funds))
+    transport = _transport(ctx, args)
+    sleep = (lambda _seconds: None) if args.play_fixtures is not None else time.sleep
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = ingest_benchmark(
+            conn,
+            transport,
+            funds=funds,
+            factor_fund=ctx.config.benchmark.factor_fund,
+            end=end,
+            sleep=sleep,
+        )
+    log.info("ingest benchmark finished", extra=result.summary())
+    return 0
+
+
+def _ingest_index_history(ctx: Context, args: argparse.Namespace) -> int:
+    """The Total Return Index history the Relative Drawdown Halt's threshold is computed
+    from; played-back fixtures are not spaced out as live calls are."""
+    transport = _transport(ctx, args)
+    sleep = (lambda _seconds: None) if args.play_fixtures is not None else time.sleep
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = ingest_index_history(conn, transport, sleep=sleep)
+    log.info("ingest index-history finished", extra=result.summary())
+    return 0
 
 
 def _feeds(ctx: Context, names: Sequence[str] | None = None) -> list[Feed]:
@@ -496,36 +568,141 @@ def integrity(ctx: Context, args: argparse.Namespace) -> int:
     return 0 if report.passed else 1
 
 
+def integrity_weekly(ctx: Context, args: argparse.Namespace) -> int:
+    """The weekly Integrity Check over every day after the freeze of the Protocol
+    ``--protocol`` names (or after ``--after``) to ``--to`` (today in IST by default), with
+    its Kite Parity gaps; exit 1 and log an ``integrity alert`` at ERROR if it fails.
+
+    The summary is the last JSON line on stdout; the table goes to stderr. Nothing is
+    written.
+    """
+    end = datetime.now(IST).date() if args.end is None else args.end
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        after = args.after if args.protocol is None else frozen_on(conn, args.protocol)
+        with _scope(after + timedelta(days=1), end):
+            report = weekly_integrity(
+                conn, ctx.config.integrity, ctx.config.parity, after=after, end=end
+            )
+    sys.stderr.write(report.text())
+    if report.passed:
+        log.info("weekly integrity finished", extra={"report": report.summary()})
+        return 0
+    log.error("integrity alert", extra={"report": report.summary()})
+    return 1
+
+
 def protocol(ctx: Context, args: argparse.Namespace) -> int:
-    """``protocol freeze`` freezes the configured Protocol for ``pullback_v1`` with the data
-    snapshot read now, at this commit, and prints its Window boundaries; ``protocol
-    windows`` prints the boundaries the configuration gives, writing nothing, for the
-    Operator to check before freezing.
+    """``protocol freeze`` freezes the configured Protocol for ``--strategy`` (``pullback_v1``
+    unless named) with the data snapshot read now, at this commit, and prints its Window
+    boundaries; ``protocol windows`` prints the boundaries the configuration gives, writing
+    nothing, for the Operator to check before freezing. ``pullback_v1``'s Terms and Limits
+    are ``[protocol]`` and ``[risk]``; ``lowvol_v1``'s are ``[lowvol.protocol]`` and
+    ``[lowvol.risk]``.
+
+    ``protocol freeze --corrects P`` freezes it as a Machinery Correction of the Protocol
+    ``P`` (ADR 0007 amendment), stating what it corrects and the evidence that came first;
+    refused unless it is one.
 
     The boundaries go to stderr; the summary is the last JSON line on stdout.
     """
+    correction = _correction(args)
     calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
-    terms = ctx.config.protocol.terms()
+    strategy: AnyStrategy
+    limit_set: Config.LimitSet
+    if args.strategy == LowvolV1.name:
+        strategy, limit_set = LowvolV1(), ctx.config.lowvol.risk
+        terms = ctx.config.lowvol.protocol.terms()
+    else:
+        strategy, limit_set = PullbackV1(), ctx.config.risk
+        terms = ctx.config.protocol.terms()
     if args.action == "windows":
         windows, holdout = window_boundaries(terms.layout, calendar)
         sys.stderr.write(windows_text(windows, holdout))
         return 0
+    inputs = _tax_inputs(ctx, terms, benchmark=terms.tax or limit_set.relative_drawdown_halt)
     with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        halts = limit_set.halts()
+        if limit_set.relative_drawdown_halt:
+            relative = relative_drawdown_threshold(conn, fallback=args.relative_drawdown_fallback)
+            halts = replace(halts, relative_drawdown=relative)
+        elif args.relative_drawdown_fallback:
+            raise ValueError(f"{strategy.name}'s Protocol has no Relative Drawdown Halt")
         result = freeze_protocol(
             conn,
             terms,
-            strategy=PullbackV1(),
+            strategy=strategy,
             rule_version=ctx.config.universe.version,
-            limits=ctx.config.risk.limits(),
-            halts=ctx.config.risk.halts(),
+            limits=limit_set.limits(),
+            halts=halts,
             schedule=load_cost_schedule(Path(ctx.config.costs.schedule)),
             slippage=ctx.config.costs.slippage(),
             calendar=calendar,
             commit=revision.running_commit(),
+            tax_schedule=inputs.tax_schedule,
+            dividend_rate=inputs.dividend_rate,
+            benchmark_funds=inputs.benchmark_funds,
+            factor_fund=inputs.factor_fund,
+            unit_splits=inputs.unit_splits,
+            correction=correction,
         )
     sys.stderr.write(result.text())
     log.info("protocol freeze finished", extra=result.summary())
     return 0
+
+
+CORRECTION_ARGUMENTS = ("correction", "test", "record", "citation", "failed_at")
+
+
+def _correction(args: argparse.Namespace) -> Correction | None:
+    """The Machinery Correction ``protocol freeze`` was asked to freeze, if any: refused
+    when ``--corrects`` comes without all of its evidence, or the evidence without it."""
+    given = {name: getattr(args, name, None) for name in CORRECTION_ARGUMENTS}
+    corrects = getattr(args, "corrects", None)
+    if corrects is None:
+        if any(given.values()):
+            raise ValueError("the correction's evidence is given only with --corrects")
+        return None
+    missing = [f"--{n.replace('_', '-')}" for n, v in given.items() if not v]
+    if missing:
+        raise ValueError(f"a Machinery Correction states its evidence; give {', '.join(missing)}")
+    stated = {name: str(value) for name, value in given.items()}
+    return Correction(
+        corrects,
+        stated["correction"],
+        Evidence(stated["test"], stated["record"], stated["citation"], stated["failed_at"]),
+    )
+
+
+@dataclass(frozen=True)
+class _TaxInputs:
+    """What a Protocol freezes beyond its Terms, as ``freeze_protocol`` takes it: each at
+    ``freeze_protocol``'s default when not read."""
+
+    tax_schedule: TaxSchedule | None = None
+    dividend_rate: Decimal = DEFAULT_DIVIDEND_RATE
+    benchmark_funds: BenchmarkFunds | None = None
+    factor_fund: int | None = None
+    unit_splits: tuple[UnitSplit, ...] = ()
+
+
+def _tax_inputs(ctx: Context, terms: Terms, *, benchmark: bool) -> _TaxInputs:
+    """What a Protocol freezes beyond its Terms: ``[tax]`` when it keeps tax, and
+    ``[benchmark]`` when it keeps tax or has a Relative Drawdown Halt (``benchmark``)."""
+    inputs = _TaxInputs()
+    if terms.tax:
+        inputs = replace(
+            inputs,
+            tax_schedule=load_tax_schedule(Path(ctx.config.tax.schedule)),
+            dividend_rate=Decimal(str(ctx.config.tax.dividend_rate)),
+        )
+    if benchmark:
+        inputs = replace(
+            inputs,
+            benchmark_funds=load_benchmark_funds(Path(ctx.config.benchmark.funds)),
+            factor_fund=ctx.config.benchmark.factor_fund,
+            unit_splits=tuple(load_unit_splits(Path(ctx.config.benchmark.unit_splits))),
+        )
+    return inputs
 
 
 def run(ctx: Context, args: argparse.Namespace) -> int:
@@ -590,6 +767,10 @@ def backtest(ctx: Context, args: argparse.Namespace) -> int:
         return holdout(ctx, args)
     if args.backtest_command == "fresh":
         return fresh_period(ctx, args)
+    if args.backtest_command == "drift":
+        return drift_replay(ctx, args)
+    if args.backtest_command == "checks":
+        return holdout_checks(ctx, args)
     if args.start is None:
         return walk_forward(ctx, args)
     end = args.end or args.start
@@ -623,14 +804,18 @@ def backtest(ctx: Context, args: argparse.Namespace) -> int:
 
 
 def walk_forward(ctx: Context, args: argparse.Namespace) -> int:
-    """Walk-Forward over the Protocol ``--protocol`` names, for ``pullback_v1``."""
+    """Walk-Forward over the Protocol ``--protocol`` names, for the Strategy it validates."""
     if args.end is not None:
         raise ValueError("--to needs --from; without either, backtest runs the whole Protocol")
     calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
     tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
     with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
         result = walk_forward_service(
-            conn, _pullback, protocol=args.protocol, calendar=calendar, tick_sizes=tick_sizes
+            conn,
+            _strategies(conn, args.protocol),
+            protocol=args.protocol,
+            calendar=calendar,
+            tick_sizes=tick_sizes,
         )
     if args.out is not None:
         args.out.write_text(result.report.text())
@@ -645,10 +830,35 @@ def holdout(ctx: Context, args: argparse.Namespace) -> int:
     tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
     with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
         result = run_holdout(
-            conn, _pullback, protocol=args.protocol, calendar=calendar, tick_sizes=tick_sizes
+            conn,
+            _strategies(conn, args.protocol),
+            protocol=args.protocol,
+            calendar=calendar,
+            tick_sizes=tick_sizes,
         )
     log.info("holdout finished", extra=result.summary())
     return 0
+
+
+def holdout_checks(ctx: Context, args: argparse.Namespace) -> int:
+    """The pre-Holdout checks of the Protocol ``--protocol`` names, each recorded with this
+    commit; exit 1 if any fails (ADR 0007, 2026-10-25 amendment)."""
+    notes = load_contract_notes(Path(ctx.config.costs.contract_notes))
+    schedule = load_cost_schedule(Path(ctx.config.costs.schedule))
+    listed = load_listed_dividends(Path(ctx.config.corporate_actions.unparsed_dividends))
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = check_holdout(
+            conn,
+            protocol=args.protocol or "",
+            contract_notes=notes,
+            schedule=schedule,
+            listed=listed,
+            accept_no_contract_notes=args.accept_no_contract_notes,
+        )
+    if result.passed:
+        return 0
+    log.error("pre-holdout checks failed", extra=result.summary())
+    return 1
 
 
 def fresh_period(ctx: Context, args: argparse.Namespace) -> int:
@@ -659,15 +869,66 @@ def fresh_period(ctx: Context, args: argparse.Namespace) -> int:
     tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
     with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
         result = run_fresh_period(
-            conn, _pullback, protocol=args.protocol, calendar=calendar, tick_sizes=tick_sizes
+            conn,
+            _strategies(conn, args.protocol),
+            protocol=args.protocol,
+            calendar=calendar,
+            tick_sizes=tick_sizes,
         )
     log.info("fresh period finished", extra=result.summary())
+    return 0
+
+
+def drift_replay(ctx: Context, args: argparse.Namespace) -> int:
+    """The Drift Replay of the Protocol ``--protocol`` names at this commit: its Stitched
+    Curve and Fresh Period days (or the ``--curve`` named) rerun and compared with the runs
+    at its frozen commit, or the result recorded at this commit before (ADR 0007). Exit 1
+    when they differ; a request naming the Holdout is refused and recorded."""
+    calendar = load_trading_calendar(Path(ctx.config.integrity.trading_calendar))
+    tick_sizes = load_tick_sizes(Path(ctx.config.risk.tick_sizes))
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        result = replay_drift(
+            conn,
+            _strategies(conn, args.protocol),
+            protocol=args.protocol,
+            calendar=calendar,
+            tick_sizes=tick_sizes,
+            curves=args.curves,
+        )
+    if not result.passed:
+        log.error("drift replay failed", extra=result.summary())
+        return 1
+    log.info("drift replay passed", extra=result.summary())
     return 0
 
 
 def _pullback(parameters: Mapping[str, Decimal]) -> PullbackV1:
     """``pullback_v1`` at a cell's parameters."""
     return PullbackV1(k=parameters["k"], r=parameters["r"], n=int(parameters["n"]))
+
+
+def _lowvol(parameters: Mapping[str, Decimal]) -> LowvolV1:
+    """``lowvol_v1``, which has no parameters."""
+    if parameters:
+        raise ValueError(f"lowvol_v1 has no parameters, not {sorted(parameters)}")
+    return LowvolV1()
+
+
+# Each Strategy a Protocol can validate, by name, made at a cell's parameters.
+STRATEGIES: dict[str, StrategyFactory] = {
+    PullbackV1.name: _pullback,
+    LowvolV1.name: _lowvol,
+}
+
+
+def _strategies(conn: psycopg.Connection, protocol: str | None) -> StrategyFactory:
+    """The Strategy the frozen Protocol ``protocol`` validates, at a cell's parameters;
+    ``pullback_v1``'s when no Protocol of that name is frozen, for the service to refuse."""
+    frozen = queries.protocol(conn, protocol) if protocol else None
+    name = PullbackV1.name if frozen is None else frozen.protocol.name
+    if name not in STRATEGIES:
+        raise ValueError(f"Protocol {protocol} validates {name}, which this code does not know")
+    return STRATEGIES[name]
 
 
 def backtest_report(ctx: Context, args: argparse.Namespace) -> int:
@@ -712,7 +973,7 @@ def protocol_report(ctx: Context, args: argparse.Namespace) -> int:
     with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
         result = report_protocol(
             conn,
-            _pullback,
+            _strategies(conn, args.protocol),
             protocol=args.protocol,
             calendar=calendar,
             tick_sizes=tick_sizes,
@@ -753,6 +1014,7 @@ COMMANDS: dict[str, Command] = {
     "check-universe": check_universe,
     "collect-daily": collect_daily,
     "integrity": integrity,
+    "integrity-weekly": integrity_weekly,
     "protocol": protocol,
     "run": run,
     "backtest": backtest,
@@ -857,6 +1119,11 @@ def build_parser() -> argparse.ArgumentParser:
         " price; exits 1 if any row is refused",
     )
     sources.add_parser(
+        "demergers",
+        help="the demerger table, read whole and stored as the table in force; a Protocol"
+        " crediting demergers freezes its hash",
+    )
+    sources.add_parser(
         "announcements",
         parents=[fixtures, date_range],
         help="NSE and BSE corporate announcements for each day in the range, matched to symbols",
@@ -870,6 +1137,25 @@ def build_parser() -> argparse.ArgumentParser:
         "delistings",
         parents=[fixtures],
         help="NSE's list of delisted securities as it stands today, stored as published",
+    )
+    benchmark = sources.add_parser(
+        "benchmark",
+        parents=[fixtures],
+        help="AMFI's scheme master lines and NAV history of the Benchmark and the factor fund;"
+        " fails unless AMFI names the Benchmark's scheme Direct and Growth",
+    )
+    benchmark.add_argument(
+        "--to",
+        dest="end",
+        metavar="DATE",
+        type=date.fromisoformat,
+        help="the last NAV date to load; defaults to today in India",
+    )
+    sources.add_parser(
+        "index-history",
+        parents=[fixtures],
+        help="niftyindices.com's NIFTY100 Low Volatility 30 and NIFTY 500 Total Return Index"
+        " history, 2005-04 to 2019-09, for the Relative Drawdown Halt's threshold",
     )
     news = sources.add_parser(
         "news",
@@ -1016,6 +1302,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="check NSE's end-of-day files against the Trading Calendar, never a broker;"
         " exit 1 unless every check passes",
     )
+    weekly_parser = subparsers.add_parser(
+        "integrity-weekly",
+        help="the Integrity Check over every day after a Protocol's freeze, with its Kite Parity"
+        " gaps (never failures); exit 1 and log an integrity alert if it fails",
+    )
+    after = weekly_parser.add_mutually_exclusive_group(required=True)
+    after.add_argument(
+        "--protocol",
+        metavar="HASH",
+        help="the Protocol (12 or more characters of its hash) whose freeze day the check"
+        " starts after",
+    )
+    after.add_argument(
+        "--after",
+        metavar="DATE",
+        type=date.fromisoformat,
+        help="the day the check starts after, in place of a Protocol's freeze day",
+    )
+    weekly_parser.add_argument(
+        "--to",
+        dest="end",
+        metavar="DATE",
+        type=date.fromisoformat,
+        help="the last day checked, inclusive; defaults to today in IST",
+    )
     run_parser = subparsers.add_parser(
         "run",
         help="one Run of the Strategy as of a day over stored data, written to the Ledger",
@@ -1107,17 +1418,82 @@ def build_parser() -> argparse.ArgumentParser:
         " from a fresh account to the last day with data, for the Backtest Gate to score",
     )
     fresh_parser.add_argument(*PROTOCOL[0], **PROTOCOL[1])
+    drift_parser = reports.add_parser(
+        "drift",
+        help="the Drift Replay: rerun the Protocol's Stitched Curve and Fresh Period days at"
+        " this commit, compare them with the runs at its frozen commit and record the result;"
+        " never the Holdout",
+    )
+    drift_parser.add_argument(*PROTOCOL[0], **PROTOCOL[1])
+    drift_parser.add_argument(
+        "--curve",
+        dest="curves",
+        action="append",
+        choices=[*DRIFT_CURVES, HOLDOUT_CURVE],
+        help="a curve to replay, repeatable (default: the Stitched Curve, and the Fresh Period"
+        " once it has run); naming the Holdout is refused and recorded",
+    )
+    checks_parser = reports.add_parser(
+        "checks",
+        help="run and record the pre-Holdout checks at this commit: contract notes, dividend"
+        " subjects, the demerger table against NSE's list, the tax-ledger tests",
+    )
+    checks_parser.add_argument(*PROTOCOL[0], **PROTOCOL[1])
+    checks_parser.add_argument(
+        "--accept-no-contract-notes",
+        metavar="REASON",
+        default=None,
+        help="accept the contract-note test as unmet when no note is supplied, recording why",
+    )
     protocol_parser = subparsers.add_parser(
         "protocol", help="the Protocol a Strategy version is validated under (ADR 0007)"
     )
     protocol_actions = protocol_parser.add_subparsers(dest="action", required=True)
-    protocol_actions.add_parser(
+    named = argparse.ArgumentParser(add_help=False)
+    named.add_argument(
+        "--strategy",
+        choices=sorted(STRATEGIES),
+        default=PullbackV1.name,
+        help="the Strategy whose configured Protocol it is (default %(default)s)",
+    )
+    freeze_parser = protocol_actions.add_parser(
         "freeze",
+        parents=[named],
         help="freeze the configured Protocol with the data snapshot and the cost schedule as of"
         " now, at this commit, and print its Window boundaries as trading days",
     )
+    freeze_parser.add_argument(
+        "--relative-drawdown-fallback",
+        action="store_true",
+        help="set the Relative Drawdown Halt's threshold from NSE's 2018 white paper, recorded"
+        " as a fallback; only when no index history could be served and none is stored",
+    )
+    freeze_parser.add_argument(
+        "--corrects",
+        metavar="PROTOCOL",
+        help="freeze it as a Machinery Correction of this Protocol (ADR 0007): the same"
+        " Strategy version, at the fixed commit, its Holdout run standing; needs the four"
+        " evidence options and --correction",
+    )
+    freeze_parser.add_argument("--correction", metavar="TEXT", help="what the correction fixes")
+    freeze_parser.add_argument(
+        "--test",
+        metavar="NODE",
+        help="the pytest node id of the test that failed against an external record first",
+    )
+    freeze_parser.add_argument(
+        "--record", choices=RECORDS, help="the kind of external record the test is against"
+    )
+    freeze_parser.add_argument("--citation", metavar="TEXT", help="where that record is")
+    freeze_parser.add_argument(
+        "--failed-at",
+        dest="failed_at",
+        metavar="COMMIT",
+        help="the commit the test was written at, failing, before the fix",
+    )
     protocol_actions.add_parser(
         "windows",
+        parents=[named],
         help="print the configured Window boundaries as trading days, writing nothing",
     )
     return parser

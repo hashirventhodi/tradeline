@@ -20,6 +20,10 @@ LEDGER_TABLES = (
     "orders",
     "fills",
     "positions",
+    "dividend_credits",
+    "demerger_credits",
+    "tax_debits",
+    "liquidation_values",
 )
 INSERTS = {
     "strategies": "INSERT INTO strategies (mode, backtest_id, family, name, code_revision,"
@@ -51,6 +55,21 @@ INSERTS = {
     " run_id, rank, instrument, symbol, opened_on, shares, entry, stop, target,"
     " time_stop_days) VALUES (%s, %s, gen_random_uuid(), 'opened', '2023-06-16', 2,"
     " gen_random_uuid(), 1, 'A', 'A', '2023-06-16', 50, 100, 94, 112, 10)",
+    "dividend_credits": "INSERT INTO dividend_credits (mode, backtest_id, day, seq,"
+    " position_id, instrument, symbol, ex_date, subject, shares, per_share, cash)"
+    " VALUES (%s, %s, '2023-06-16', 1, gen_random_uuid(), 'A', 'A', '2023-06-16',"
+    " 'Dividend - Rs 5 Per Share', 50, 5, 250)",
+    "demerger_credits": "INSERT INTO demerger_credits (mode, backtest_id, day, seq,"
+    " position_id, instrument, parent, child, ex_date, bought, shares, ratio_numerator,"
+    " ratio_denominator, close, cash, basis) VALUES (%s, %s, '2023-08-21', 1,"
+    " gen_random_uuid(), 'A', 'A', 'B', '2023-07-20', '2023-06-16', 50, 1, 1, 250, 12500,"
+    " 300)",
+    "tax_debits": "INSERT INTO tax_debits (mode, backtest_id, id, day, financial_year,"
+    " short_term_gain, long_term_gain, dividends, tax, settled)"
+    " VALUES (%s, %s, gen_random_uuid(), '2024-04-01', 2023, 1000, 0, 0, 208, false)",
+    "liquidation_values": "INSERT INTO liquidation_values (mode, backtest_id, id, day, value,"
+    " tax_due, dropped_short_term_loss, dropped_long_term_loss)"
+    " VALUES (%s, %s, gen_random_uuid(), '2024-04-01', 500000, 0, 0, 0)",
 }
 
 

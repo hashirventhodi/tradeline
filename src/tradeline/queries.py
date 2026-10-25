@@ -34,6 +34,7 @@ from tradeline.adjust import (
 )
 from tradeline.costs import Charges
 from tradeline.dates import IST, month_end
+from tradeline.demergers import Demerger, table_hash
 from tradeline.instruments import (
     LISTING_SERIES,
     Anomaly,
@@ -45,6 +46,7 @@ from tradeline.instruments import (
 from tradeline.paper_broker import ExitReason, OrderPurpose
 from tradeline.protocol import Protocol
 from tradeline.sources.nse import Delisting, SymbolChange
+from tradeline.tax import DemergerCredit as TaxDemergerCredit
 from tradeline.trading_calendar import TradingCalendar
 
 
@@ -1710,6 +1712,9 @@ def sectors_for_run(conn: psycopg.Connection, symbols: list[str], *, as_of: date
 # --- The Ledger (ADR 0019) --------------------------------------------------
 
 EngineMode = Literal["backtest", "paper", "live"]
+# What a portfolio Strategy's Run does (``tradeline.engine``): its account's Initial Buy, a
+# Rebalance's decision and sales, or the Rebalance's buys the trading day after.
+PortfolioStep = Literal["initial_buy", "rebalance", "rebalance_buys"]
 
 
 @dataclass(frozen=True)
@@ -1749,6 +1754,8 @@ class LedgerRun:
     # The Slippage impact c it was priced with in place of its Protocol's (a report's c
     # sensitivity, #79); None for the Protocol's own.
     impact: Decimal | None = None
+    # A portfolio Strategy's Run's step; None on any other day and for any other Strategy.
+    portfolio_step: PortfolioStep | None = None
 
 
 @dataclass(frozen=True)
@@ -1769,9 +1776,10 @@ class LedgerPlan:
     instrument: str
     symbol: str
     entry: Decimal
-    stop: Decimal
-    target: Decimal
-    time_stop_days: int
+    # None, all three, for a portfolio Strategy's Plan.
+    stop: Decimal | None
+    target: Decimal | None
+    time_stop_days: int | None
     facts: dict[str, Decimal]
 
 
@@ -1789,7 +1797,7 @@ def runs(
         "SELECT r.id, r.mode, r.backtest_id, s.id, s.mode, s.backtest_id, s.family, s.name,"
         " s.code_revision, s.protocol, s.ranking, r.as_of, r.universe_month,"
         " r.universe_rule_version, r.universe_size, r.parameters, r.recorded_at, r.cash,"
-        " r.equity, r.dry_run, r.impact"
+        " r.equity, r.dry_run, r.impact, r.portfolio_step"
         " FROM runs r JOIN strategies s ON (s.mode, s.id) = (r.mode, r.strategy_id)"
         " WHERE (%(mode)s::text IS NULL OR r.mode = %(mode)s)"
         " AND (%(backtest_id)s::uuid IS NULL OR r.backtest_id = %(backtest_id)s)"
@@ -1814,6 +1822,7 @@ def runs(
             equity=row[18],
             dry_run=row[19],
             impact=row[20],
+            portfolio_step=row[21],
         )
         for row in rows
     ]
@@ -1860,9 +1869,10 @@ class LedgerPass:
     symbol: str
     plan_hash: str
     entry: Decimal
-    stop: Decimal
-    target: Decimal
-    time_stop_days: int
+    # None, all three, for a portfolio Strategy's Plan.
+    stop: Decimal | None
+    target: Decimal | None
+    time_stop_days: int | None
     shares: int
     # The sector the sector Limit read; ``unclassified`` when none was recorded.
     sector: str
@@ -1882,9 +1892,10 @@ class LedgerBlock:
     symbol: str
     limit: str
     entry: Decimal
-    stop: Decimal
-    target: Decimal
-    time_stop_days: int
+    # None, all three, for a portfolio Strategy's Plan.
+    stop: Decimal | None
+    target: Decimal | None
+    time_stop_days: int | None
     shares: int
     sector: str
     facts: dict[str, Decimal]
@@ -2023,9 +2034,10 @@ class LedgerPosition:
     opened_on: date
     shares: int
     entry: Decimal
-    stop: Decimal
-    target: Decimal
-    time_stop_days: int
+    # None, all three, for a portfolio Strategy's Plan.
+    stop: Decimal | None
+    target: Decimal | None
+    time_stop_days: int | None
     # The day of its latest event: the day it closed, once closed.
     as_of: date
     # ``stop``, ``target``, ``time`` or ``boundary``; None while open.
@@ -2183,8 +2195,8 @@ class LedgerPositionEvent:
     symbol: str
     shares: int
     entry: Decimal
-    stop: Decimal
-    target: Decimal
+    stop: Decimal | None
+    target: Decimal | None
     # A restatement's Adjustment Factor and the cash paid for a fractional share.
     factor: Fraction | None
     cash_in_lieu: Decimal | None
@@ -2228,6 +2240,348 @@ def position_events(
     ]
 
 
+@dataclass(frozen=True)
+class HeldAtClose:
+    """A Position open after a day's close, with its shares then and the day it opened."""
+
+    position_id: uuid.UUID
+    instrument: str
+    symbol: str
+    shares: int
+    opened_on: date
+
+
+def held_at_close(
+    events: Sequence[LedgerPositionEvent], instrument: str, day: date
+) -> list[HeldAtClose]:
+    """The Positions in ``instrument`` held at the close of ``day``, among an account's
+    ``events`` (``position_events``): opened on or before it and not closed by its close,
+    with their shares after their last event by then."""
+    held: dict[uuid.UUID, HeldAtClose] = {}
+    for event in events:
+        if event.day > day or event.instrument != instrument:
+            continue
+        if event.event == "closed":
+            held.pop(event.position_id, None)
+            continue
+        opened = held.get(event.position_id)
+        held[event.position_id] = HeldAtClose(
+            event.position_id,
+            event.instrument,
+            event.symbol,
+            event.shares,
+            event.day if opened is None else opened.opened_on,
+        )
+    return list(held.values())
+
+
+@dataclass(frozen=True)
+class DividendCredit:
+    """A dividend a Position was credited on its Ex-Date (ADR 0020): its shares then times
+    the amount per share its subject states; for an unparsed subject, no amount and no
+    cash, with the reason."""
+
+    mode: EngineMode
+    backtest_id: uuid.UUID | None
+    day: date
+    seq: int
+    position_id: uuid.UUID
+    instrument: str
+    symbol: str
+    ex_date: date
+    subject: str
+    shares: int
+    per_share: Decimal | None
+    cash: Decimal | None
+    reason: str | None
+
+
+def dividend_credits(
+    conn: psycopg.Connection,
+    *,
+    mode: EngineMode,
+    backtest_id: uuid.UUID | None,
+    dry_run: bool = False,
+) -> list[DividendCredit]:
+    """Every dividend an account's Positions were credited, in the order credited."""
+    rows = conn.execute(
+        "SELECT mode, backtest_id, day, seq, position_id, instrument, symbol, ex_date, subject,"
+        " shares, per_share, cash, reason FROM dividend_credits"
+        f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
+        " AND dry_run = %(dry_run)s ORDER BY day, seq",
+        {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
+    ).fetchall()
+    return [DividendCredit(*row) for row in rows]
+
+
+def demergers(conn: psycopg.Connection) -> list[Demerger]:
+    """The demerger table in force: the rows of the latest successful ``ingest demergers``
+    run, oldest Ex-Date first; none before the first."""
+    rows = conn.execute(
+        "WITH latest AS (SELECT id FROM ingest_runs WHERE source = 'demergers'"
+        " AND error IS NULL ORDER BY finished_at DESC, id LIMIT 1)"
+        " SELECT parent, child, ratio_numerator, ratio_denominator, ex_date, listed_on,"
+        " parent_basis, child_basis, citation, line"
+        " FROM demergers d JOIN latest ON d.ingest_run_id = latest.id"
+        " ORDER BY ex_date, parent, child"
+    ).fetchall()
+    return [
+        Demerger(parent, child, Fraction(num, den), ex, listed, pb, cb, citation, line)
+        for parent, child, num, den, ex, listed, pb, cb, citation, line in rows
+    ]
+
+
+def demerger_table_hash(conn: psycopg.Connection) -> str:
+    """The hash of the demerger table in force (``demergers.table_hash``), as a Protocol
+    crediting demergers freezes it."""
+    return table_hash(demergers(conn))
+
+
+@dataclass(frozen=True)
+class DemergerCredit:
+    """A Demerger Credit (ADR 0020): a Position held at the close before ``ex_date`` credited
+    on ``day``, the child's first listing day, ``shares`` times the ratio at the child's
+    ``close`` in the Raw Series; ``basis`` is the child's share of the Position's basis."""
+
+    mode: EngineMode
+    backtest_id: uuid.UUID | None
+    day: date
+    seq: int
+    position_id: uuid.UUID
+    instrument: str
+    parent: str
+    child: str
+    ex_date: date
+    # The day the Position opened, since which the child's shares are held.
+    bought: date
+    shares: int
+    ratio: Fraction
+    close: Decimal
+    cash: Decimal
+    basis: Decimal
+
+    def tax_credit(self) -> TaxDemergerCredit:
+        """The credit as the tax ledger takes it: a sale of the child's shares."""
+        return TaxDemergerCredit(
+            day=self.day, parent_bought=self.bought, amount=self.cash, basis=self.basis
+        )
+
+
+def demerger_credits(
+    conn: psycopg.Connection,
+    *,
+    mode: EngineMode,
+    backtest_id: uuid.UUID | None,
+    dry_run: bool = False,
+) -> list[DemergerCredit]:
+    """Every Demerger Credit of an account's Positions, in the order credited."""
+    rows = conn.execute(
+        "SELECT mode, backtest_id, day, seq, position_id, instrument, parent, child, ex_date,"
+        " bought, shares, ratio_numerator, ratio_denominator, close, cash, basis"
+        f" FROM demerger_credits WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
+        " AND dry_run = %(dry_run)s ORDER BY day, seq",
+        {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
+    ).fetchall()
+    return [
+        DemergerCredit(
+            mode=row[0],
+            backtest_id=row[1],
+            day=row[2],
+            seq=row[3],
+            position_id=row[4],
+            instrument=row[5],
+            parent=row[6],
+            child=row[7],
+            ex_date=row[8],
+            bought=row[9],
+            shares=row[10],
+            ratio=Fraction(row[11], row[12]),
+            close=row[13],
+            cash=row[14],
+            basis=row[15],
+        )
+        for row in rows
+    ]
+
+
+def position_bases(
+    conn: psycopg.Connection,
+    *,
+    mode: EngineMode,
+    backtest_id: uuid.UUID | None,
+    dry_run: bool = False,
+) -> dict[uuid.UUID, Decimal]:
+    """Each of an account's Positions' basis for tax: its buy Fills' value and charges, less
+    the child's share of it each Demerger Credit moved to the credit."""
+    account: Account = {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run}
+    bases: dict[uuid.UUID, Decimal] = {}
+    for fill in fills(conn, **account):
+        if fill.side == "buy":
+            bases[fill.position_id] = bases.get(fill.position_id, Decimal(0)) - fill.cash_flow
+    for credit in demerger_credits(conn, **account):
+        bases[credit.position_id] -= credit.basis
+    return bases
+
+
+@dataclass(frozen=True)
+class PositionLot:
+    """A Position as the tax ledger takes it (``tradeline.tax``): bought on ``opened_on``
+    for ``basis`` (its buys' value and charges, less any cash paid in lieu of a fractional
+    share, which is already in cash, and less the child's share each Demerger Credit moved
+    to the credit), and, once closed, sold on ``closed_on`` for
+    ``proceeds`` (its sales' value less charges)."""
+
+    position_id: uuid.UUID
+    opened_on: date
+    closed_on: date | None
+    basis: Decimal
+    proceeds: Decimal | None
+
+
+def position_lots(
+    conn: psycopg.Connection,
+    *,
+    mode: EngineMode,
+    backtest_id: uuid.UUID | None,
+    dry_run: bool = False,
+) -> list[PositionLot]:
+    """Every Position of an account as a lot, open or closed, in the order they opened."""
+    charges = " + ".join(f"coalesce({c}, 0)" for c in _CHARGE_COLUMNS)
+    rows = conn.execute(
+        "SELECT p.position_id, p.opened_on, p.closed_on,"
+        " f.basis - p.in_lieu - coalesce(d.moved, 0), f.proceeds"
+        " FROM (SELECT position_id, min(opened_on) AS opened_on,"
+        "   max(day) FILTER (WHERE event = 'closed') AS closed_on,"
+        "   coalesce(sum(cash_in_lieu), 0) AS in_lieu FROM positions"
+        f"  WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
+        "  AND dry_run = %(dry_run)s GROUP BY position_id) p"
+        " JOIN (SELECT position_id,"
+        f"   sum(price * shares + {charges}) FILTER (WHERE side = 'buy') AS basis,"
+        f"   sum(price * shares - ({charges})) FILTER (WHERE side = 'sell') AS proceeds"
+        "  FROM fills"
+        f"  WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
+        "  AND dry_run = %(dry_run)s GROUP BY position_id) f USING (position_id)"
+        " LEFT JOIN (SELECT position_id, sum(basis) AS moved FROM demerger_credits"
+        f"  WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
+        "  AND dry_run = %(dry_run)s GROUP BY position_id) d USING (position_id)"
+        " ORDER BY p.opened_on, p.position_id",
+        {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
+    ).fetchall()
+    return [
+        PositionLot(row[0], row[1], row[2], row[3], None if row[2] is None else row[4])
+        for row in rows
+    ]
+
+
+@dataclass(frozen=True)
+class TaxDebit:
+    """A financial year's net tax debited from an account's cash (``tradeline.tax``): on the
+    first trading day after its March 31, or ``settled`` on the day a liquidation ends the
+    account, with the losses it left unused."""
+
+    day: date
+    financial_year: int
+    short_term_gain: Decimal
+    long_term_gain: Decimal
+    dividends: Decimal
+    tax: Decimal
+    settled: bool
+    dropped_short_term_loss: Decimal | None
+    dropped_long_term_loss: Decimal | None
+
+
+def tax_debits(
+    conn: psycopg.Connection,
+    *,
+    mode: EngineMode,
+    backtest_id: uuid.UUID | None,
+    dry_run: bool = False,
+) -> list[TaxDebit]:
+    """Every tax debit of an account, in the order debited."""
+    rows = conn.execute(
+        "SELECT day, financial_year, short_term_gain, long_term_gain, dividends, tax, settled,"
+        " dropped_short_term_loss, dropped_long_term_loss FROM tax_debits"
+        f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
+        " AND dry_run = %(dry_run)s ORDER BY day, financial_year",
+        {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
+    ).fetchall()
+    return [TaxDebit(*row) for row in rows]
+
+
+@dataclass(frozen=True)
+class BenchmarkDay:
+    """The Benchmark on one day of an account: its scheme, bought on ``bought_on`` at
+    ``bought_nav``, valued at ``nav``, and its Liquidation Value and the tax in it."""
+
+    scheme: int
+    bought_on: date
+    bought_nav: Decimal
+    nav: Decimal
+    value: Decimal
+    tax_due: Decimal
+
+
+@dataclass(frozen=True)
+class LiquidationDay:
+    """An account's Liquidation Value on a day, the tax in it and the losses it would drop,
+    and the Benchmark's (None on the Initial Buy's day, before the Benchmark is bought)."""
+
+    day: date
+    value: Decimal
+    tax_due: Decimal
+    dropped_short_term_loss: Decimal
+    dropped_long_term_loss: Decimal
+    benchmark: BenchmarkDay | None
+
+
+def liquidation_values(
+    conn: psycopg.Connection,
+    *,
+    mode: EngineMode,
+    backtest_id: uuid.UUID | None,
+    dry_run: bool = False,
+) -> list[LiquidationDay]:
+    """An account's Liquidation Value on each day it Ran, in day order."""
+    rows = conn.execute(
+        "SELECT day, value, tax_due, dropped_short_term_loss, dropped_long_term_loss,"
+        " benchmark_scheme, benchmark_bought_on, benchmark_bought_nav, benchmark_nav,"
+        " benchmark_value, benchmark_tax_due FROM liquidation_values"
+        f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
+        " AND dry_run = %(dry_run)s ORDER BY day",
+        {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
+    ).fetchall()
+    return [
+        LiquidationDay(
+            row[0],
+            row[1],
+            row[2],
+            row[3],
+            row[4],
+            None if row[5] is None else BenchmarkDay(*row[5:]),
+        )
+        for row in rows
+    ]
+
+
+def account_first_day(
+    conn: psycopg.Connection,
+    *,
+    mode: EngineMode,
+    backtest_id: uuid.UUID | None,
+    dry_run: bool = False,
+) -> date | None:
+    """The first day an account Ran, an Initial Buy's decision aside; None before it."""
+    row = conn.execute(
+        "SELECT min(as_of) FROM runs"
+        f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
+        " AND dry_run = %(dry_run)s AND portfolio_step IS DISTINCT FROM 'initial_buy'",
+        {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
+    ).fetchone()
+    assert row is not None
+    found: date | None = row[0]
+    return found
+
+
 def account_cash_flows(
     conn: psycopg.Connection,
     *,
@@ -2235,9 +2589,10 @@ def account_cash_flows(
     backtest_id: uuid.UUID | None,
     dry_run: bool = False,
 ) -> Decimal:
-    """The net cash an account's Fills and restatements moved: every sale's value less its
-    charges, every purchase's value and its charges taken away, plus cash paid in lieu of
-    fractional shares. An account's cash is its starting Equity plus this."""
+    """The net cash an account's Fills, restatements and credits moved: every sale's value
+    less its charges, every purchase's value and its charges taken away, plus cash paid in
+    lieu of fractional shares, every dividend and every Demerger Credit, less every tax
+    debited. An account's cash is its starting Equity plus this."""
     charges = " + ".join(f"coalesce({c}, 0)" for c in _CHARGE_COLUMNS)
     row = conn.execute(
         "SELECT coalesce((SELECT sum(CASE side WHEN 'sell' THEN price * shares"
@@ -2245,6 +2600,15 @@ def account_cash_flows(
         f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
         " AND dry_run = %(dry_run)s), 0)"
         " + coalesce((SELECT sum(cash_in_lieu) FROM positions"
+        f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
+        " AND dry_run = %(dry_run)s), 0)"
+        " + coalesce((SELECT sum(cash) FROM dividend_credits"
+        f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
+        " AND dry_run = %(dry_run)s), 0)"
+        " + coalesce((SELECT sum(cash) FROM demerger_credits"
+        f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
+        " AND dry_run = %(dry_run)s), 0)"
+        " - coalesce((SELECT sum(tax) FROM tax_debits"
         f" WHERE mode = %(mode)s AND {_account_predicate(backtest_id)}"
         " AND dry_run = %(dry_run)s), 0)",
         {"mode": mode, "backtest_id": backtest_id, "dry_run": dry_run},
@@ -2396,8 +2760,9 @@ def walk_forward_windows(conn: psycopg.Connection, protocol: str) -> list[WalkFo
 class HoldoutAttempt:
     """One request by a Strategy version (its Protocol) to run the Holdout: ``ran``, with
     the account it ran in, its parameters, whether it consumed the family's Holdout and the
-    earlier runs whose data has been corrected since; or ``refused``, with the reason.
-    ``consumes`` and ``independent`` are None for a refusal."""
+    earlier runs whose data has been corrected since, and the reason its Protocol states for
+    its being Not Independent (``not_independent``, None for none); or ``refused``, with the
+    reason. ``consumes`` and ``independent`` are None for a refusal."""
 
     id: uuid.UUID
     protocol: str
@@ -2410,6 +2775,7 @@ class HoldoutAttempt:
     corrected_since: tuple[uuid.UUID, ...]
     independent: bool | None
     reason: str | None
+    not_independent: str | None = None
 
 
 def holdout_attempts(
@@ -2419,7 +2785,7 @@ def holdout_attempts(
     Family ``family`` when named, in the order made."""
     rows = conn.execute(
         "SELECT id, protocol, family, attempted_at, outcome, backtest_id, parameters, consumes,"
-        " corrected_since, independent, reason FROM holdout_attempts"
+        " corrected_since, independent, reason, not_independent FROM holdout_attempts"
         " WHERE (%(protocol)s::text IS NULL OR protocol = %(protocol)s)"
         " AND (%(family)s::text IS NULL OR family = %(family)s)"
         " ORDER BY attempted_at, id",
@@ -2438,9 +2804,54 @@ def holdout_attempts(
             corrected_since=tuple(row[8] or ()),
             independent=row[9],
             reason=row[10],
+            not_independent=row[11],
         )
         for row in rows
     ]
+
+
+def corrected_original(conn: psycopg.Connection, frozen: FrozenProtocol) -> FrozenProtocol:
+    """The Protocol whose recorded Holdout run a version's Gate reads: its own, or, for a
+    Machinery Correction (ADR 0007 amendment), the one it corrects, followed back through
+    every correction to the Protocol frozen before any."""
+    while frozen.protocol.correction is not None:
+        corrected = protocol(conn, frozen.protocol.correction.corrects)
+        assert corrected is not None, "a correction names a frozen Protocol"
+        frozen = corrected
+    return frozen
+
+
+@dataclass(frozen=True)
+class HoldoutCheck:
+    """One pre-Holdout check run for a Protocol at ``git_commit`` (ADR 0007, 2026-10-25
+    amendment): ``item`` is ``contract_notes``, ``dividends``, ``demergers`` or
+    ``tax_tests``; ``accepted`` the reason a contract-note check with no note was accepted
+    as unmet (None otherwise)."""
+
+    id: uuid.UUID
+    protocol: str
+    git_commit: str
+    item: str
+    checked_at: datetime
+    passed: bool
+    accepted: str | None
+    summary: str
+    detail: dict[str, Any]
+
+
+def holdout_checks(
+    conn: psycopg.Connection, *, protocol: str, git_commit: str | None = None
+) -> list[HoldoutCheck]:
+    """The pre-Holdout checks run for the Protocol whose full hash is ``protocol`` (at
+    ``git_commit`` when named), in the order run."""
+    rows = conn.execute(
+        "SELECT id, protocol, git_commit, item, checked_at, passed, accepted, summary, detail"
+        " FROM holdout_checks WHERE protocol = %(protocol)s"
+        " AND (%(commit)s::text IS NULL OR git_commit = %(commit)s)"
+        " ORDER BY checked_at, id",
+        {"protocol": protocol, "commit": git_commit},
+    ).fetchall()
+    return [HoldoutCheck(*row) for row in rows]
 
 
 @dataclass(frozen=True)
@@ -2469,13 +2880,15 @@ def fresh_period_run(conn: psycopg.Connection, protocol: str) -> FreshPeriodRun 
 @dataclass(frozen=True)
 class LineageVersion:
     """A Strategy version in a lineage: its Protocol, Strategy and code revision, when it was
-    frozen, and its Holdout run, if it has one."""
+    frozen, its Holdout run, if it has one, and why its Protocol records it Not Independent,
+    if it does."""
 
     protocol: str
     name: str
     code_revision: str
     frozen_at: datetime
     holdout: HoldoutAttempt | None
+    not_independent: str | None = None
 
 
 @dataclass(frozen=True)
@@ -2516,7 +2929,12 @@ def lineage(conn: psycopg.Connection, protocol: str) -> Lineage:
             name,
             tuple(
                 LineageVersion(
-                    v.hash, v.protocol.name, v.protocol.code_revision, v.frozen_at, ran.get(v.hash)
+                    v.hash,
+                    v.protocol.name,
+                    v.protocol.code_revision,
+                    v.frozen_at,
+                    ran.get(v.hash),
+                    v.protocol.not_independent,
                 )
                 for v in versions
             ),
@@ -2592,3 +3010,75 @@ def cost_sensitivities(conn: psycopg.Connection, protocol: str) -> list[CostSens
         (protocol,),
     ).fetchall()
     return [CostSensitivity(*row) for row in rows]
+
+
+@dataclass(frozen=True)
+class DriftReplay:
+    """A Drift Replay of a frozen Protocol requested at ``git_commit`` (ADR 0007, 2026-10-25
+    amendment): ``pass`` or ``fail``, its ``curves`` rerun in ``accounts`` (by curve) and
+    compared with the runs at ``frozen_commit``, every difference listed; or ``refused``
+    with its reason, nothing run. Never a Window run, never read by a Gate."""
+
+    id: uuid.UUID
+    protocol: str
+    git_commit: str
+    frozen_commit: str
+    requested_at: datetime
+    curves: tuple[str, ...]
+    outcome: str
+    accounts: dict[str, uuid.UUID]
+    # The Fresh Period's last day compared, the frozen account's then; None without one.
+    fresh_through: date | None
+    # Each a JSON object: curve, kind, key, field, frozen, replay, money. None if refused.
+    differences: list[dict[str, Any]] | None
+    reason: str | None
+
+
+def drift_replays(
+    conn: psycopg.Connection, *, protocol: str, git_commit: str | None = None
+) -> list[DriftReplay]:
+    """The Drift Replays of the Protocol whose full hash is ``protocol``, at ``git_commit``
+    if given, in the order requested."""
+    rows = conn.execute(
+        "SELECT id, protocol, git_commit, frozen_commit, requested_at, curves, outcome,"
+        " stitched_backtest_id, fresh_backtest_id, fresh_through, differences, reason"
+        " FROM drift_replays WHERE protocol = %(protocol)s"
+        " AND (%(commit)s::text IS NULL OR git_commit = %(commit)s)"
+        " ORDER BY requested_at, id",
+        {"protocol": protocol, "commit": git_commit},
+    ).fetchall()
+    found = []
+    for row in rows:
+        accounts = {
+            curve: account
+            for curve, account in (("stitched_curve", row[7]), ("fresh_period", row[8]))
+            if account is not None
+        }
+        found.append(
+            DriftReplay(
+                id=row[0],
+                protocol=row[1],
+                git_commit=row[2],
+                frozen_commit=row[3],
+                requested_at=row[4],
+                curves=tuple(row[5]),
+                outcome=row[6],
+                accounts=accounts,
+                fresh_through=row[9],
+                differences=row[10],
+                reason=row[11],
+            )
+        )
+    return found
+
+
+def drift_replay_passed(conn: psycopg.Connection, *, protocol: str, git_commit: str) -> bool:
+    """Whether the latest Drift Replay that ran under ``protocol`` at ``git_commit`` passed:
+    what a paper Run (Phase 3) is to require before it starts at a commit other than the
+    frozen one."""
+    ran = [
+        r
+        for r in drift_replays(conn, protocol=protocol, git_commit=git_commit)
+        if r.outcome != "refused"
+    ]
+    return bool(ran) and ran[-1].outcome == "pass"

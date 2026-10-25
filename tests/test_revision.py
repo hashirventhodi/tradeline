@@ -5,6 +5,7 @@ there, and computes ``pullback_v1``'s revision from the copied ``strategy``
 package, so the edit never touches the real code.
 """
 
+import ast
 import shutil
 from pathlib import Path
 
@@ -78,6 +79,51 @@ def test_a_docstring_comment_or_formatting_change_leaves_the_revision(
     edit(tree / "strategy" / module, old, new)
 
     assert revision(tree) == before
+
+
+LOWVOL = "tradeline.strategy.lowvol"
+
+
+@pytest.mark.parametrize(
+    ("module", "old", "new"),
+    [
+        ("lowvol.py", "BUFFER = 60", "BUFFER = 61"),
+        ("lowvol.py", "REBALANCE_MONTHS = (3, 9)", "REBALANCE_MONTHS = (6, 12)"),
+        ("lowvol.py", "key=lambda f: (f[0], f[1])", "key=lambda f: (f[0], f[2])"),
+        ("portfolio.py", "    leavers: tuple[str, ...]\n", "    leavers: tuple[str, ...] = ()\n"),
+    ],
+    ids=["the-buffer", "the-timing", "the-tie-break", "the-portfolio-interface"],
+)
+def test_a_change_to_lowvols_rule_changes_its_revision(
+    tree: Path, module: str, old: str, new: str
+) -> None:
+    before = code_revision(LOWVOL, package_dir=tree / "strategy")
+    edit(tree / "strategy" / module, old, new)
+
+    assert code_revision(LOWVOL, package_dir=tree / "strategy") != before
+
+
+def test_the_portfolio_interface_is_not_in_pullbacks_revision(tree: Path) -> None:
+    before = revision(tree)
+    edit(tree / "strategy" / "portfolio.py", "    leavers: tuple[str, ...]\n", "    leavers: int\n")
+    edit(tree / "strategy" / "lowvol.py", "HELD = 30", "HELD = 31")
+
+    assert revision(tree) == before
+
+
+def test_the_engine_names_no_strategy_family() -> None:
+    """The engine tells a portfolio Strategy apart by its interface alone
+    (``PortfolioStrategy``): it imports no Strategy and names no family or version."""
+    engine = (SOURCE / "engine.py").read_text()
+    names = {"pullback", "lowvol", "tradeline.strategy.pullback", "tradeline.strategy.lowvol"}
+
+    found = {
+        node.value
+        for node in ast.walk(ast.parse(engine))
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+    assert not any(name in value for value in found for name in names)
+    assert "strategy.pullback" not in engine and "strategy.lowvol" not in engine
 
 
 def test_a_change_in_queries_or_adjust_leaves_the_revision(tree: Path) -> None:

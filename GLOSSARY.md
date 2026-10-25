@@ -51,7 +51,7 @@ A named, versioned rule set that turns market data into Candidates and Plans. A 
 _Avoid_: Algo, system, model, bot
 
 **Strategy Family**:
-The named rule shape (`pullback`) that every version of a Strategy belongs to, recorded with each version so the lineage is visible. The Holdout is consumed once for the whole family.
+The named rule shape (`pullback`, `lowvol`) that every version of a Strategy belongs to, recorded with each version so the lineage is visible. The Holdout is consumed once for the whole family.
 _Avoid_: Variant, lineage (the record of a family's versions, not the family)
 
 **Recorded Universe**:
@@ -90,7 +90,7 @@ The historical outcome statistics for a setup, computed by the engine from past 
 ### Decisions
 
 **Plan**:
-The complete trade specification for a Candidate: entry price, stop, target, size, and maximum holding period.
+The complete trade specification for a Candidate: entry price, stop, target, size, and maximum holding period. A portfolio Strategy's Plan has an entry price and size only, and is held until it leaves at a Rebalance.
 _Avoid_: Setup, trade idea, order plan
 
 **Verdict**:
@@ -100,6 +100,14 @@ _Avoid_: Signal, decision, call, recommendation
 **Run**:
 One scheduled decision cycle over the whole Universe, producing Verdicts.
 _Avoid_: Tick, cycle, iteration, scan
+
+**Rebalance**:
+The scheduled Run on which a portfolio Strategy re-ranks the Universe and replaces the holdings that no longer qualify. A portfolio Strategy enters and exits only on a Rebalance or its account's Initial Buy; between them its Runs place no Orders but those a Halt or a Corporate Action requires.
+_Avoid_: Rotation, reconstitution (the index's word), review
+
+**Initial Buy**:
+The first trading day of an account that starts holding nothing (a Holdout, a Fresh Period, paper): entrants chosen as at a Rebalance from data through the previous close, and bought that day. Nothing is sold and no holding continues, so it is not a Rebalance and never counts as one.
+_Avoid_: Initial Rebalance, seed, first Rebalance
 
 **Engine Mode**:
 Which clock and data source an engine run uses: backtest (a simulated clock over stored history), paper, or live. The Strategy, Risk Engine, sizing and cost model never differ by it.
@@ -142,8 +150,12 @@ The Risk Engine's refusal of a Plan, with the Limit that was breached.
 _Avoid_: Reject, fail, veto (veto is the Skeptic's word)
 
 **Halt**:
-The state in which no new entries are placed, pending orders are cancelled, and open Positions continue to be managed by their exits.
+The state in which no new entries are placed, pending orders are cancelled, and open Positions continue to be managed by their exits (for a portfolio Strategy, holdings leaving at a Rebalance are still sold).
 _Avoid_: Kill switch (the mechanism), stop, pause, freeze
+
+**Relative Drawdown**:
+The fall of a Strategy's value divided by the Benchmark's value from its running peak, both before tax and with dividends counted. The performance Halt of a portfolio Strategy watches it, since a fall the Benchmark shares is the risk that was chosen.
+_Avoid_: Excess drawdown, tracking drawdown, underperformance
 
 **Flatten**:
 The explicit, confirmed command to close every open Position at market. Distinct from Halt.
@@ -158,7 +170,7 @@ A confirmed execution of all or part of an Order at a price.
 _Avoid_: Execution, trade
 
 **Position**:
-The net holding in one Instrument, kept as one Position across a change of Symbol, with its cost basis, stop, target, and the Plan it came from.
+The net holding in one Instrument, kept as one Position across a change of Symbol, with its cost basis, its stop and target when its Plan has them, and the Plan it came from.
 _Avoid_: Holding, trade
 
 **Broker Adapter**:
@@ -198,12 +210,20 @@ A fixed, locked two-year period that a Strategy Family runs exactly once, by its
 _Avoid_: Test set, out-of-sample (ambiguous: walk-forward windows are also out of sample)
 
 **Not Independent**:
-A Holdout run by a later version of a family whose Holdout is already consumed. Recorded as such, and passes the Backtest Gate only together with a Fresh Period.
+A Holdout run by a later version of a family whose Holdout is already consumed, or by a first version whose family was chosen after reading published results that cover the Holdout's years. Recorded as such, with its reason, and passes the Backtest Gate only together with a Fresh Period.
 _Avoid_: Invalid, tainted, contaminated
 
 **Fresh Period**:
-The trading days after both the consumed Holdout's end and a later Strategy version's Protocol freeze: data that version's design could not have used. It must be at least twelve months long to carry a Backtest Gate.
+The trading days after both the Holdout's end and a Not Independent version's Protocol freeze: data that version's design could not have used. It must be at least twelve months long to carry a Backtest Gate, and for a portfolio Strategy must also hold at least two Rebalances after its Initial Buy.
 _Avoid_: New holdout, extended holdout, forward test
+
+**Drift Replay**:
+A rerun of a frozen Protocol's Out-of-Sample Windows and any Fresh Period days at a later commit, compared with the runs at the frozen commit to show the later engine behaves the same. Never a run of the Holdout, never counted as a Window run, and never read by a Gate.
+_Avoid_: Regression run, rerun, drift test
+
+**Machinery Correction**:
+A fix that changes money but could not have been informed by results: the Strategy version is unchanged, and the bug was shown first by a failing test against a record outside the system's own results. It is frozen as a new Protocol recording the correction and its evidence, and the Fresh Period continues. A change that is not one resets the Fresh Period as a new, Not Independent version.
+_Avoid_: Bug fix (any fix), hotfix, engine patch
 
 **Walk-Forward**:
 The validation protocol in which parameters are chosen on a rolling window and evaluated on the window that follows it.
@@ -220,6 +240,14 @@ _Avoid_: OOS curve, combined results, concatenated equity
 The frozen statement of how a Strategy version is validated: its parameter grid, objective and tie-break, Window boundaries, cost and Slippage parameters, Gate thresholds, and the data it reads. Frozen before any run and never changed; a different Protocol is a new Strategy version.
 _Avoid_: Config, settings, backtest parameters, methodology
 
+**Benchmark**:
+The passive alternative a Strategy must beat to be worth running: a real index fund tracking the NIFTY 500, valued at its published NAV (so after its expenses and tracking error), bought at a period's start with the costs a buyer of its units pays, held to its end, and taxed once on sale.
+_Avoid_: Index (the NIFTY 500 itself earns no fee and pays no tax), baseline, buy-and-hold
+
+**Liquidation Value**:
+What an account would hold in cash if it sold everything on a day and paid every tax its sales up to then owe. The Backtest Gate compares a Strategy's with the Benchmark's.
+_Avoid_: Equity (Equity is before tax and before selling), NAV, after-tax return
+
 **Expectancy**:
 Average profit per trade after all costs, in rupees or as a fraction of equity.
 
@@ -232,6 +260,10 @@ _Avoid_: Unadjusted prices, raw candles (the broker's candles are the broker's o
 **Corporate Action**:
 An event NSE lists for a Symbol, or states in a circular a reviewed row cites, that takes effect on an Ex-Date, and so for the Instrument that Symbol named that day: a split, bonus, rights issue, dividend, demerger, scheme of arrangement or amalgamation, capital reduction, buyback, or meeting. Splits and bonuses change the Adjusted Series. Rights issues, dividends, demergers, schemes and capital reductions are flagged on it, since each moves the price without being a split or bonus, and no official factor for it applies to cash equities. Buybacks, meetings and the rest are recorded only.
 _Avoid_: CA, event, announcement (an announcement is a filing, which may or may not describe a Corporate Action)
+
+**Demerger Credit**:
+The cash a holder at the close before a demerger's Ex-Date is credited on the child's first listing day: the entitled shares times the child's first close in the Raw Series. It is taken from a reviewed record citing the scheme's ratio and the announced split of cost basis, and is taxed as a sale of the child's share of that basis.
+_Avoid_: Demerger adjustment (nothing is adjusted), spin-off value
 
 **Cited Action**:
 A split or bonus taken from a reviewed record citing NSE's circulars, for one NSE's lists do not have. It is superseded, and not applied, when NSE's list has a split or bonus for the same Instrument within seven days of its Ex-Date; if that listed action's Adjustment Factor differs, the difference is reported for review.

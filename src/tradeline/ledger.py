@@ -4,8 +4,8 @@ Each row is tagged with its account (``queries.Account``: the Engine Mode, the
 backtest id in backtest mode, and whether a paper Run is a dry run). A Run
 writes its Strategy version, the Run, its Candidates, Plans, Passes and Blocks
 and a Verdict on each Candidate; the account's session and Orders write
-Orders, Fills and Positions as event rows, each with the day and a sequence
-number that orders it within the account. Nothing here decides anything: the
+Orders, Fills, Positions and dividend credits as event rows, each with the day
+and a sequence number that orders it within the account. Nothing here decides anything: the
 engine (``tradeline.engine``) decides, and these functions write what it
 decided. Reads are ``tradeline.queries``.
 """
@@ -26,10 +26,14 @@ import psycopg
 from tradeline import queries
 from tradeline.costs import Charges
 from tradeline.dates import month_of
+from tradeline.demergers import Demerger
+from tradeline.dividends import Dividend
 from tradeline.paper_broker import OrderPurpose
-from tradeline.queries import EngineMode
-from tradeline.risk import Decision, Pass, Proposal
-from tradeline.strategy import Candidate, Plan, Strategy
+from tradeline.queries import EngineMode, PortfolioStep
+from tradeline.risk import Decision, Pass, PortfolioPlan, Proposal
+from tradeline.strategy import Candidate, Plan
+from tradeline.strategy.portfolio import AnyStrategy
+from tradeline.tax import Liquidation, Losses, TaxYear
 
 
 @dataclass(frozen=True)
@@ -171,9 +175,158 @@ def insert_position(
     )
 
 
+def insert_dividend_credit(
+    conn: psycopg.Connection,
+    account: queries.Account,
+    position: queries.LedgerPosition,
+    dividend: Dividend,
+    *,
+    day: date,
+    seq: int,
+) -> None:
+    """The Position's credit of ``dividend`` on ``day``: its shares times the amount per
+    share, or nothing, with the reason, when the subject is unparsed."""
+    per_share = dividend.per_share
+    conn.execute(
+        "INSERT INTO dividend_credits (mode, backtest_id, dry_run, day, seq, position_id,"
+        " instrument, symbol, ex_date, subject, shares, per_share, cash, reason)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (
+            account["mode"],
+            account["backtest_id"],
+            account["dry_run"],
+            day,
+            seq,
+            position.id,
+            position.instrument,
+            position.symbol,
+            dividend.ex_date,
+            dividend.subject,
+            position.shares,
+            per_share,
+            None if per_share is None else per_share * position.shares,
+            dividend.reason,
+        ),
+    )
+
+
+def insert_demerger_credit(
+    conn: psycopg.Connection,
+    account: queries.Account,
+    held: queries.HeldAtClose,
+    demerger: Demerger,
+    *,
+    close: Decimal,
+    cash: Decimal,
+    basis: Decimal,
+    day: date,
+    seq: int,
+) -> None:
+    """The Demerger Credit on ``day`` of a Position ``held`` at the close before the Ex-Date:
+    ``cash`` for its entitlement at the child's ``close``, and the child's ``basis``."""
+    conn.execute(
+        "INSERT INTO demerger_credits (mode, backtest_id, dry_run, day, seq, position_id,"
+        " instrument, parent, child, ex_date, bought, shares, ratio_numerator,"
+        " ratio_denominator, close, cash, basis)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (
+            account["mode"],
+            account["backtest_id"],
+            account["dry_run"],
+            day,
+            seq,
+            held.position_id,
+            held.instrument,
+            demerger.parent,
+            demerger.child,
+            demerger.ex_date,
+            held.opened_on,
+            held.shares,
+            demerger.ratio.numerator,
+            demerger.ratio.denominator,
+            close,
+            cash,
+            basis,
+        ),
+    )
+
+
+def insert_tax_debit(
+    conn: psycopg.Connection,
+    account: queries.Account,
+    year: TaxYear,
+    *,
+    day: date,
+    dropped: Losses | None = None,
+) -> None:
+    """The financial year ``year``'s tax debited from the account's cash on ``day``; with
+    ``dropped``, a liquidation's settlement of its final year and the losses it left."""
+    conn.execute(
+        "INSERT INTO tax_debits (mode, backtest_id, dry_run, id, day, financial_year,"
+        " short_term_gain, long_term_gain, dividends, tax, settled, dropped_short_term_loss,"
+        " dropped_long_term_loss) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (
+            account["mode"],
+            account["backtest_id"],
+            account["dry_run"],
+            uuid.uuid4(),
+            day,
+            year.year,
+            year.short_term_gain,
+            year.long_term_gain,
+            year.dividends,
+            year.tax,
+            dropped is not None,
+            None if dropped is None else dropped.short_term,
+            None if dropped is None else dropped.long_term,
+        ),
+    )
+
+
+def insert_liquidation_value(
+    conn: psycopg.Connection,
+    account: queries.Account,
+    liquidation: Liquidation,
+    benchmark: queries.BenchmarkDay | None,
+    *,
+    day: date,
+) -> None:
+    """The account's Liquidation Value on ``day``, and the Benchmark's when it is held."""
+    conn.execute(
+        "INSERT INTO liquidation_values (mode, backtest_id, dry_run, id, day, value, tax_due,"
+        " dropped_short_term_loss, dropped_long_term_loss, benchmark_scheme,"
+        " benchmark_bought_on, benchmark_bought_nav, benchmark_nav, benchmark_value,"
+        " benchmark_tax_due) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
+        " %s)",
+        (
+            account["mode"],
+            account["backtest_id"],
+            account["dry_run"],
+            uuid.uuid4(),
+            day,
+            liquidation.value,
+            liquidation.tax_due,
+            liquidation.losses_dropped.short_term,
+            liquidation.losses_dropped.long_term,
+            *(
+                (None,) * 6
+                if benchmark is None
+                else (
+                    benchmark.scheme,
+                    benchmark.bought_on,
+                    benchmark.bought_nav,
+                    benchmark.nav,
+                    benchmark.value,
+                    benchmark.tax_due,
+                )
+            ),
+        ),
+    )
+
+
 def strategy_row(
     conn: psycopg.Connection,
-    strategy: Strategy,
+    strategy: AnyStrategy,
     *,
     mode: EngineMode,
     backtest_id: uuid.UUID | None,
@@ -211,7 +364,7 @@ def strategy_row(
 
 def insert_run(
     conn: psycopg.Connection,
-    strategy: Strategy,
+    strategy: AnyStrategy,
     *,
     run_id: uuid.UUID,
     mode: EngineMode,
@@ -224,11 +377,12 @@ def insert_run(
     cash: Decimal,
     equity: Decimal,
     impact: Decimal | None,
+    portfolio_step: PortfolioStep | None = None,
 ) -> None:
     conn.execute(
         "INSERT INTO runs (id, mode, backtest_id, dry_run, strategy_id, as_of, universe_month,"
-        " universe_rule_version, universe_size, parameters, cash, equity, impact)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        " universe_rule_version, universe_size, parameters, cash, equity, impact,"
+        " portfolio_step) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (
             run_id,
             mode,
@@ -243,6 +397,7 @@ def insert_run(
             cash,
             equity,
             impact,
+            portfolio_step,
         ),
     )
 
@@ -283,7 +438,7 @@ def insert_candidates(
 
 def insert_plans(
     conn: psycopg.Connection,
-    plans: Sequence[Plan],
+    plans: Sequence[Plan | PortfolioPlan],
     *,
     mode: EngineMode,
     backtest_id: uuid.UUID | None,
@@ -308,7 +463,7 @@ def insert_plans(
                     p.stop,
                     p.target,
                     p.time_stop_days,
-                    _facts(p.facts),
+                    _facts(p.facts if isinstance(p, Plan) else {}),
                 )
                 for p in plans
             ],
@@ -387,7 +542,7 @@ def insert_decisions(
 
 def insert_held_verdicts(
     conn: psycopg.Connection,
-    plans: Sequence[Plan],
+    plans: Sequence[Plan | PortfolioPlan],
     *,
     mode: EngineMode,
     backtest_id: uuid.UUID | None,

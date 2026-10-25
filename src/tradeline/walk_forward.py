@@ -18,6 +18,12 @@ out-of-sample day's close every open Position takes a Boundary Exit, after
 costs. Each Window's selection and out-of-sample result is then recorded
 (``walk_forward_windows``).
 
+A Protocol whose grid has one cell (``lowvol_v1``'s, which has no free
+parameter) has nothing to select: no In-Sample run is made, every Window
+records no selection, and its Out-of-Sample Windows run at the one cell, with
+entries, as one continuous backtest, the Stitched Curve (a portfolio
+Strategy's starting with its Initial Buy, ``engine.backtest_span``).
+
 The run is resumable per cell: a cell's summary and each out-of-sample day are
 committed as they finish, so a run interrupted and started again skips what is
 recorded, picks up at the first unfinished cell (or the day after the
@@ -50,12 +56,22 @@ import psycopg
 from tradeline import queries
 from tradeline.engine import SeriesCache, backtest_span
 from tradeline.freeze import verify_snapshot
-from tradeline.metrics import max_drawdown, sharpe
+from tradeline.metrics import RelativeDrawdownDay, max_drawdown, sharpe
 from tradeline.paper_broker import FILL_MODEL, FillModel
 from tradeline.protocol import TIE_BREAK, Protocol, Window
-from tradeline.report import FRACTION, RATIO, RUPEE, Account, read_account, rounded
+from tradeline.report import (
+    FRACTION,
+    RATIO,
+    RUPEE,
+    Account,
+    read_account,
+    relative_drawdown_days_json,
+    relative_drawdown_days_of,
+    relative_drawdown_json,
+    rounded,
+)
 from tradeline.risk import RISK_ENGINE, RiskEngine
-from tradeline.strategy import Strategy
+from tradeline.strategy.portfolio import AnyStrategy
 from tradeline.tick_sizes import TickSizes
 from tradeline.trading_calendar import TradingCalendar
 
@@ -65,7 +81,12 @@ log = logging.getLogger(__name__)
 SMALLER_FIRST = tuple(t.removeprefix("smaller ") for t in TIE_BREAK if t.startswith("smaller "))
 
 # A Strategy at one cell's parameters, by the names its ``parameters`` gives them.
-StrategyFactory = Callable[[Mapping[str, Decimal]], Strategy]
+StrategyFactory = Callable[[Mapping[str, Decimal]], AnyStrategy]
+# What a Window of a one-cell Protocol's Walk-Forward records in place of a selection.
+ONE_CELL = (
+    "the grid has one cell, so Walk-Forward selects nothing: the Out-of-Sample Windows run"
+    " at it as one continuous backtest"
+)
 
 
 @dataclass(frozen=True)
@@ -137,19 +158,38 @@ def grid_cells(grid: Mapping[str, tuple[Decimal, ...]]) -> list[dict[str, Decima
     ]
 
 
+def one_cell(grid: Mapping[str, tuple[Decimal, ...]]) -> Mapping[str, Decimal] | None:
+    """The grid's one cell, when it has exactly one (Walk-Forward then selects nothing);
+    None otherwise."""
+    cells = grid_cells(grid)
+    return cells[0] if len(cells) == 1 else None
+
+
 @dataclass(frozen=True)
 class WalkForwardReport:
     """A Protocol's Walk-Forward read back from the Ledger: each Window's selection and
-    out-of-sample result, and the Stitched Curve scored. Its JSON holds no backtest id and
-    no timing, so two runs of one Protocol over the same data read the same."""
+    out-of-sample result, and the Stitched Curve scored. Under a Protocol with a Relative
+    Drawdown Halt it lists, right after the Strategy, every day of the Stitched Curve that
+    Halt would have fired, with that day's Relative Drawdown (a backtest never Halts). Its
+    JSON holds no backtest id and no timing, so two runs of one Protocol over the same data
+    read the same."""
 
     frozen: queries.FrozenProtocol
     windows: tuple[queries.WalkForwardWindow, ...]
     stitched: Account | None
+    # The Stitched Curve's Relative Drawdown Halt days; None without that Halt.
+    relative_drawdown_days: tuple[RelativeDrawdownDay, ...] | None = None
 
     def as_json(self) -> dict[str, Any]:
         terms = self.frozen.protocol
         stitched = self.stitched
+        halt: dict[str, Any] = {}
+        relative = terms.halts.relative_drawdown
+        if relative is not None and self.relative_drawdown_days is not None:
+            halt["halt_would_have_fired"] = {
+                **relative_drawdown_json(relative),
+                "days": relative_drawdown_days_json(self.relative_drawdown_days),
+            }
         return {
             "protocol": self.frozen.hash,
             "strategy": {
@@ -157,6 +197,7 @@ class WalkForwardReport:
                 "name": terms.name,
                 "code_revision": terms.code_revision,
             },
+            **halt,
             "min_in_sample_trades": terms.min_in_sample_trades,
             "windows": [
                 window_json(number, window, found, terms)
@@ -172,12 +213,19 @@ class WalkForwardReport:
                 "trading_days": len(stitched.days),
                 "metrics": stitched.scores(risk_free_rate=terms.risk_free_rate).as_json(),
                 "boundary_exits": sum(t.exit_reason == "boundary" for t in stitched.closed),
+                **liquidation(stitched, terms),
                 "closed_positions": [t.as_json() for t in stitched.closed],
             },
         }
 
     def text(self) -> str:
         return json.dumps(self.as_json(), indent=2) + "\n"
+
+
+def liquidation(account: Account, terms: Protocol) -> dict[str, Any]:
+    """The account's Liquidation Value against the Benchmark, under a Protocol keeping tax."""
+    found = account.liquidation_json(terms.tax, terms.benchmark, invested=terms.starting_equity)
+    return {} if found is None else {"liquidation": found}
 
 
 def window_json(
@@ -203,6 +251,8 @@ def window_json(
         "selection": selection,
         "no_selection": None
         if selection is not None
+        else ONE_CELL
+        if one_cell(terms.grid) is not None
         else f"no cell reached {terms.min_in_sample_trades} in-sample trades",
         "out_of_sample_result": {
             "runs": found.out_of_sample_runs,
@@ -267,10 +317,27 @@ def walk_forward(
     chosen_before: Mapping[str, Decimal] | None = None
     cells_run = 0
     run = _Runner(conn, strategy, frozen, calendar, tick_sizes, risk_engine, fill_model)
+    only = one_cell(terms.grid)
     for number, window in enumerate(terms.windows, start=1):
         if number in done:
             if (recorded := done[number].parameters) is not None:
                 chosen_before = {a: Decimal(v) for a, v in recorded.items()}
+            continue
+        last_window = number == len(terms.windows)
+        if only is not None:
+            cache = SeriesCache(
+                conn, start=window.out_of_sample.first, end=window.out_of_sample.last
+            )
+            run.out_of_sample(backtest_id, window, cache, only, entries=True, last=last_window)
+            _record_window(
+                conn,
+                frozen,
+                backtest_id,
+                number,
+                window,
+                cells=1,
+                selection=Selection(None, None, None, None, 0),
+            )
             continue
         cache = SeriesCache(conn, start=window.in_sample.first, end=window.out_of_sample.last)
         scores, ran = run.cells(number, window, cache)
@@ -286,7 +353,6 @@ def walk_forward(
                 else _strings(selection.parameters),
             },
         )
-        last_window = number == len(terms.windows)
         if selection.parameters is not None:
             run.out_of_sample(
                 backtest_id, window, cache, selection.parameters, entries=True, last=last_window
@@ -307,10 +373,15 @@ def walk_forward(
             selection=selection,
         )
     stitched = None
+    halt_days: list[RelativeDrawdownDay] | None = None
     if queries.runs(conn, mode="backtest", backtest_id=backtest_id):
         stitched = read_account(conn, backtest_id)
+        halt_days = relative_drawdown_days_of(conn, terms, stitched)
     report = WalkForwardReport(
-        frozen, tuple(queries.walk_forward_windows(conn, frozen.hash)), stitched
+        frozen,
+        tuple(queries.walk_forward_windows(conn, frozen.hash)),
+        stitched,
+        None if halt_days is None else tuple(halt_days),
     )
     result = WalkForwardResult(report, backtest_id, cells_run, time.monotonic() - began)
     log.info("walk-forward finished", extra=result.summary())
@@ -323,14 +394,16 @@ def restitch(
     frozen: queries.FrozenProtocol,
     *,
     backtest_id: uuid.UUID,
-    impact: Decimal,
+    impact: Decimal | None,
     calendar: TradingCalendar,
     tick_sizes: TickSizes,
     risk_engine: RiskEngine = RISK_ENGINE,
     fill_model: FillModel = FILL_MODEL,
+    drift_replay: bool = False,
 ) -> None:
     """The finished Walk-Forward's Stitched Curve written again in the account
-    ``backtest_id`` with the Slippage impact c at ``impact``: each Window's Out-of-Sample
+    ``backtest_id`` with the Slippage impact c at ``impact`` (the Protocol's when None, as a
+    Drift Replay at another commit runs it, ``drift_replay``): each Window's Out-of-Sample
     days at the parameters it chose (nothing new planned where it chose none, as the
     Stitched Curve runs), no cell run again and nothing chosen again, so the c sensitivity
     differs from the Stitched Curve in its costs alone. Resumed from the account's last
@@ -342,10 +415,20 @@ def restitch(
             f"the Walk-Forward under Protocol {frozen.hash[:12]} has finished"
             f" {len(windows)} of {len(terms.windows)} Windows"
         )
-    run = _Runner(conn, strategy, frozen, calendar, tick_sizes, risk_engine, fill_model)
-    chosen: Mapping[str, Decimal] | None = None
+    run = _Runner(
+        conn,
+        strategy,
+        frozen,
+        calendar,
+        tick_sizes,
+        risk_engine,
+        fill_model,
+        drift_replay=drift_replay,
+    )
+    only = one_cell(terms.grid)
+    chosen: Mapping[str, Decimal] | None = only
     for number, (window, found) in enumerate(zip(terms.windows, windows, strict=True), start=1):
-        entries = found.parameters is not None
+        entries = found.parameters is not None or only is not None
         if found.parameters is not None:
             chosen = {a: Decimal(v) for a, v in found.parameters.items()}
         if chosen is None:
@@ -374,6 +457,8 @@ class _Runner:
         tick_sizes: TickSizes,
         risk_engine: RiskEngine,
         fill_model: FillModel,
+        *,
+        drift_replay: bool = False,
     ) -> None:
         self._conn = conn
         self._strategy = strategy
@@ -383,6 +468,7 @@ class _Runner:
             "tick_sizes": tick_sizes,
             "risk_engine": risk_engine,
             "fill_model": fill_model,
+            "drift_replay": drift_replay,
         }
 
     def cells(self, number: int, window: Window, cache: SeriesCache) -> tuple[list[CellScore], int]:

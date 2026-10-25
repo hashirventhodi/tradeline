@@ -8,9 +8,14 @@ verified first. Positions open on the Holdout's last day stay open: they are
 marked at its close, not counted as closed trades. Each day is committed as it
 is written, so a run interrupted continues where it stopped.
 
-Every request is recorded in ``holdout_attempts``. A second run by the same
+It runs only once the pre-Holdout checks (``tradeline.holdout_checks``) have
+passed at the commit it runs at; until then it is refused, naming each unmet
+check, and no attempt is recorded (the checks are, in ``holdout_checks``). Every
+other request is recorded in ``holdout_attempts``. A second run by the same
 version is refused and the refusal recorded. The family's first run consumes
-its Holdout; a later version's run is Not Independent. So is any run after a
+its Holdout; a later version's run is Not Independent. So is a first version's whose
+Protocol says so, with its reason (its family chosen after reading published results
+covering the Holdout's years: ``lowvol_v1``), though it consumes it. So is any run after a
 data correction on a period an earlier run saw: when a Universe month's or a
 member's Adjusted Series hash an earlier Holdout run verified (its Protocol's
 snapshot, over that run's Holdout) no longer matches the rows stored now,
@@ -23,7 +28,18 @@ months long (``fresh_period``, ``standing``). ``run_fresh_period`` runs it: the
 parameters the Holdout ran at, in a fresh account at the Protocol's starting
 Equity, over the Fresh Period's days to the last with data, recorded
 (``fresh_periods``) and extended as more data is collected; the Backtest Gate
-scores it with the Holdout's thresholds (``protocol_report``).
+scores it with the Holdout's thresholds (``protocol_report``). It is a backtest at
+the frozen commit, refused at any other, and refused when the frozen data its
+warm-up reads (the Protocol's last months) or the demerger table has changed. A
+portfolio Strategy's account starts with an Initial Buy decided on the trading day
+before its first, and the Benchmark is bought the day its entrants are; it carries
+the Gate once it also holds two Rebalances after it (``gate``).
+
+A Machinery Correction (ADR 0007 amendment) runs no Holdout of its own: the
+Holdout run of the Protocol it corrects stands as recorded (``holdout_run_of``),
+a request under the correction is refused and recorded, and its standing and
+Fresh Period are that version's, from the same first day. Its Fresh Period
+account is its own, rerun from that day at the fixed commit and continued.
 """
 
 from __future__ import annotations
@@ -42,14 +58,15 @@ import psycopg
 
 from tradeline import queries
 from tradeline.dates import IST
-from tradeline.engine import SeriesCache, backtest_span
-from tradeline.freeze import run_members, verify_snapshot
+from tradeline.engine import SeriesCache, backtest_span, require_fresh_period
+from tradeline.freeze import run_members, verify_snapshot, warm_up_start
+from tradeline.holdout_checks import require_passed
 from tradeline.paper_broker import FILL_MODEL, FillModel
 from tradeline.protocol import months_between
 from tradeline.risk import RISK_ENGINE, RiskEngine
 from tradeline.tick_sizes import TickSizes
 from tradeline.trading_calendar import TradingCalendar
-from tradeline.walk_forward import StrategyFactory
+from tradeline.walk_forward import StrategyFactory, one_cell
 
 log = logging.getLogger(__name__)
 
@@ -110,6 +127,14 @@ def run_holdout(
             f"no Protocol {protocol} is frozen; `tradeline protocol freeze` freezes one"
         )
     terms, short = frozen.protocol, frozen.hash[:12]
+    if terms.correction is not None:
+        reason = (
+            f"Protocol {short} is a Machinery Correction of Protocol"
+            f" {terms.correction.corrects[:12]}, whose Holdout run stands as recorded;"
+            " a correction runs no Holdout of its own"
+        )
+        _record(conn, frozen, outcome="refused", reason=reason)
+        raise HoldoutRefused(reason)
     span = terms.holdout
     parameters = _last_parameters(conn, frozen)
     days = list(calendar.trading_days(span.first, span.last))
@@ -128,6 +153,7 @@ def run_holdout(
             raise HoldoutRefused(reason)
         if runs:
             start = next(d for d in days if d > runs[-1].as_of)
+    require_passed(conn, frozen)
     verify_snapshot(conn, frozen, start=span.first, end=span.last)
     if attempt is None:
         attempt = _record(
@@ -202,7 +228,8 @@ def rerun_holdout(
 
 def _last_parameters(conn: psycopg.Connection, frozen: queries.FrozenProtocol) -> dict[str, str]:
     """The parameters the Stitched Curve ended under: the last Window's selection, or the
-    last before it; refused before the Walk-Forward has finished or if no Window chose."""
+    last before it, or a one-cell grid's cell; refused before the Walk-Forward has finished
+    or if no Window chose."""
     short, terms = frozen.hash[:12], frozen.protocol
     windows = queries.walk_forward_windows(conn, frozen.hash)
     if len(windows) < len(terms.windows):
@@ -211,6 +238,10 @@ def _last_parameters(conn: psycopg.Connection, frozen: queries.FrozenProtocol) -
             f" {len(terms.windows)} Windows; finish it (`tradeline backtest --protocol"
             f" {short}`) before the Holdout"
         )
+    only = one_cell(terms.grid)
+    if only is not None:
+        # One cell: nothing was selected, and the Stitched Curve ran at it.
+        return {name: str(value) for name, value in only.items()}
     chosen = [w.parameters for w in windows if w.parameters is not None]
     if not chosen:
         raise ValueError(
@@ -281,10 +312,12 @@ def standing(
     conn: psycopg.Connection, protocol: str, *, calendar: TradingCalendar
 ) -> HoldoutStanding:
     """The standing of the Holdout run by the version under the Protocol whose full hash is
-    ``protocol``; refused if it has not run the Holdout."""
-    attempt = holdout_run(conn, protocol)
+    ``protocol`` (for a Machinery Correction, the run of the Protocol it corrects, and that
+    version's Fresh Period); refused if it has not run the Holdout."""
+    attempt = holdout_run_of(conn, protocol)
     if attempt is None:
         raise ValueError(f"Protocol {protocol[:12]} has not run the Holdout")
+    protocol = attempt.protocol
     if attempt.independent:
         return HoldoutStanding(
             attempt, None, True, "independent: the family's Holdout, consumed by this run"
@@ -300,6 +333,8 @@ def standing(
         data_last=stored[-1] if stored else None,
     )
     why = []
+    if attempt.not_independent is not None:
+        why.append(attempt.not_independent)
     if not attempt.consumes:
         why.append(f"the family's Holdout was consumed by Protocol {consumer.hash[:12]}")
     if attempt.corrected_since:
@@ -362,7 +397,7 @@ def run_fresh_period(
             f"no Protocol {protocol} is frozen; `tradeline protocol freeze` freezes one"
         )
     short, holdout = frozen.hash[:12], frozen.protocol.holdout
-    attempt = holdout_run(conn, frozen.hash)
+    attempt = holdout_run_of(conn, frozen.hash)
     ran = (
         []
         if attempt is None
@@ -386,6 +421,9 @@ def run_fresh_period(
             f"Protocol {short}'s Fresh Period has no trading day of data yet"
             f" (it starts after {holdout.last} and after the version's freeze)"
         )
+    parameters = {a: Decimal(v) for a, v in attempt.parameters.items()}
+    require_fresh_period(conn, strategy(parameters), frozen, start=period.first, end=period.last)
+    _verify_read_snapshot(conn, frozen, period.first, calendar)
     found = queries.fresh_period_run(conn, frozen.hash)
     if found is None:
         with conn.transaction():
@@ -427,6 +465,18 @@ def run_fresh_period(
     result = FreshPeriodResult(found, period, len(results), time.monotonic() - began)
     log.info("fresh period finished", extra=result.summary())
     return result
+
+
+def _verify_read_snapshot(
+    conn: psycopg.Connection, frozen: queries.FrozenProtocol, first: date, calendar: TradingCalendar
+) -> None:
+    """Refuse a Fresh Period from ``first`` if the frozen data it reads is not the rows
+    stored now: the Universe months and Adjusted Series of its warm-up's bars, which lie in
+    the Protocol's range (its own days lie after it, and the Protocol cannot cover them),
+    and the demerger table it credits."""
+    terms = frozen.protocol
+    start = max(terms.first, warm_up_start(calendar, first, terms.warm_up_trading_days))
+    verify_snapshot(conn, frozen, start=start, end=terms.holdout.last)
 
 
 class _Hashes:
@@ -500,6 +550,15 @@ def _corrected_since(
     return tuple(corrected)
 
 
+def holdout_run_of(conn: psycopg.Connection, protocol: str) -> queries.HoldoutAttempt | None:
+    """The Holdout run the Gate reads for the version under the Protocol whose full hash is
+    ``protocol``: its own, or a Machinery Correction's original's
+    (``queries.corrected_original``)."""
+    frozen = queries.protocol(conn, protocol)
+    assert frozen is not None
+    return holdout_run(conn, queries.corrected_original(conn, frozen).hash)
+
+
 def holdout_run(conn: psycopg.Connection, protocol: str) -> queries.HoldoutAttempt | None:
     """The version's Holdout run (its ``ran`` attempt), if it has one, finished or not."""
     ran = [a for a in queries.holdout_attempts(conn, protocol=protocol) if a.outcome == "ran"]
@@ -526,8 +585,8 @@ def _record(
             consumes = not any(a.consumes for a in queries.holdout_attempts(conn, family=family))
         conn.execute(
             "INSERT INTO holdout_attempts (id, protocol, family, outcome, backtest_id,"
-            " parameters, consumes, corrected_since, reason)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            " parameters, consumes, corrected_since, reason, not_independent)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 attempt_id,
                 frozen.hash,
@@ -538,6 +597,7 @@ def _record(
                 consumes,
                 None if corrected_since is None else list(corrected_since),
                 reason,
+                frozen.protocol.not_independent if outcome == "ran" else None,
             ),
         )
     conn.commit()

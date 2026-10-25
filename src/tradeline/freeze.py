@@ -1,48 +1,59 @@
 """Freezing a Protocol, and checking at run time that its data is still the rows there now.
 
 ``freeze_protocol`` states the Protocol (``tradeline.protocol``) from the
-Operator's Terms, the configured Limits, Halt fractions and cost schedule, the
+Operator's Terms, the configured Limits, Halts (a Relative Drawdown Halt with the
+Benchmark's funds) and cost schedule, the
 Strategy, the Universe Rule version and the git commit, and the data snapshot it reads from
 the database: for each month from the first In-Sample day to the Holdout's
 last, the month's mode (Recorded or Reconstructed) and its build, whose hashes
 are checked against the rows stored now; and for every member of those months,
 the hash of its Adjusted Series from the warm-up before the first Window to the
-Holdout's last day, as of that day. The Protocol is written once under its
-content hash; a second freeze of the same content writes nothing.
+Holdout's last day, as of that day; and, when its Terms credit demergers, the
+hash of the demerger table stored then (``queries.demergers``). The Protocol is
+written once under its content hash; a second freeze of the same content
+writes nothing.
 
 ``verify_snapshot`` is the engine's check before a backtest: each Universe
-month the backtest's range touches and each member of those months is hashed
-again, and any that differs from the snapshot is named in the refusal.
+month the backtest's range touches, each member of those months and the
+demerger table are hashed again, and any that differs from the snapshot is
+named in the refusal.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 import psycopg
 
-from tradeline import queries
+from tradeline import queries, revision
+from tradeline.benchmark import BenchmarkFunds, BenchmarkTerms, UnitSplit
 from tradeline.costs import CostSchedule, Slippage
 from tradeline.dates import IST
 from tradeline.metrics import HaltLimits
 from tradeline.protocol import (
     OBJECTIVE,
     TIE_BREAK,
+    Correction,
     DataSnapshot,
+    Evidence,
     MonthSnapshot,
     Protocol,
     Terms,
     canonical,
     content_hash,
+    frozen_tax_terms,
     months_between,
     window_boundaries,
 )
 from tradeline.revision import code_revision
 from tradeline.risk import Limits
-from tradeline.strategy import Strategy
+from tradeline.strategy.portfolio import AnyStrategy
+from tradeline.tax import DEFAULT_DIVIDEND_RATE, TaxSchedule
 from tradeline.trading_calendar import TradingCalendar
 
 log = logging.getLogger(__name__)
@@ -90,7 +101,7 @@ def freeze_protocol(
     conn: psycopg.Connection,
     terms: Terms,
     *,
-    strategy: Strategy,
+    strategy: AnyStrategy,
     rule_version: str,
     limits: Limits,
     halts: HaltLimits,
@@ -98,13 +109,37 @@ def freeze_protocol(
     slippage: Slippage,
     calendar: TradingCalendar,
     commit: str,
+    tax_schedule: TaxSchedule | None = None,
+    dividend_rate: Decimal = DEFAULT_DIVIDEND_RATE,
+    benchmark_funds: BenchmarkFunds | None = None,
+    factor_fund: int | None = None,
+    unit_splits: Sequence[UnitSplit] = (),
+    correction: Correction | None = None,
     costs_as_of_for_tests: date | None = None,
 ) -> FreezeResult:
     """Freeze the Protocol these state, with the data snapshot read now, at ``commit``, its
     trades priced on ``schedule`` as of the freeze: the day it is frozen, in India.
 
+    When ``terms`` keep tax, the Protocol also states ``tax_schedule``'s rates as of the
+    freeze with ``dividend_rate``. When they keep tax or ``halts`` has a Relative Drawdown
+    Halt, it states the Benchmark: ``benchmark_funds``, ``factor_fund`` and ``schedule``'s
+    fund-unit rates as of the freeze, with the factor fund's ``unit_splits``. Otherwise
+    none is read.
+
     ``costs_as_of_for_tests`` replaces that day, so a test's hand-worked costs do not move
-    with the day it runs; nothing else passes it."""
+    with the day it runs; nothing else passes it.
+
+    A Relative Drawdown Halt is measured against the Benchmark, so it is refused without
+    ``benchmark_funds`` and ``factor_fund``.
+
+    With ``correction`` the Protocol is frozen as a Machinery Correction of the Protocol it
+    names (ADR 0007 amendment), refused unless it is one (``check_correction``)."""
+    # A Protocol states every Limit on or off (ADR 0020).
+    limits.require_stated()
+    if halts.relative_drawdown is not None and (benchmark_funds is None or factor_fund is None):
+        raise ValueError(
+            "a Relative Drawdown Halt is frozen with the Benchmark's funds and the factor fund"
+        )
     costs_as_of = costs_as_of_for_tests or datetime.now(IST).date()
     parameters = set(strategy.parameters())
     if set(terms.grid) != parameters:
@@ -118,6 +153,25 @@ def freeze_protocol(
         raise ValueError(
             f"no end-of-day file is stored for {last}, the Holdout's last trading day;"
             " a Protocol freezes data that is there"
+        )
+    tax, benchmark = None, None
+    if terms.tax:
+        if tax_schedule is None or benchmark_funds is None or factor_fund is None:
+            raise ValueError(
+                "a Protocol keeping tax freezes the tax schedule, the Benchmark's funds and"
+                " the factor fund; give all three"
+            )
+        tax = frozen_tax_terms(tax_schedule, costs_as_of, dividend_rate)
+    if (
+        benchmark_funds is not None
+        and factor_fund is not None
+        and (terms.tax or halts.relative_drawdown is not None)
+    ):
+        benchmark = BenchmarkTerms(
+            benchmark_funds,
+            factor_fund,
+            schedule.fund_rates(costs_as_of),
+            tuple(s for s in unit_splits if s.scheme_code == factor_fund),
         )
     protocol = Protocol(
         family=strategy.family,
@@ -144,12 +198,22 @@ def freeze_protocol(
         snapshot=_data_snapshot(
             conn,
             rule_version,
-            start=_warm_up_start(calendar, first, terms.warm_up_trading_days),
+            start=warm_up_start(calendar, first, terms.warm_up_trading_days),
             first=first,
             last=last,
             calendar=calendar,
+            demergers=terms.demergers,
         ),
+        dividends=terms.dividends,
+        tax=tax,
+        benchmark=benchmark,
+        notes=terms.notes,
+        not_independent=terms.not_independent,
+        correction=None if correction is None else _resolved(conn, correction),
     )
+    if protocol.correction is not None:
+        evidence = check_correction(conn, protocol)
+        protocol = replace(protocol, correction=replace(protocol.correction, evidence=evidence))
     content = canonical(protocol.content())
     found = content_hash(protocol.content())
     with conn.transaction():
@@ -164,6 +228,66 @@ def freeze_protocol(
         extra={"protocol": found},
     )
     return result
+
+
+def _resolved(conn: psycopg.Connection, correction: Correction) -> Correction:
+    """The correction naming the Protocol it corrects by its full hash."""
+    corrected = queries.protocol(conn, correction.corrects)
+    if corrected is None:
+        raise ValueError(f"no Protocol {correction.corrects} is frozen to be corrected")
+    return replace(correction, corrects=corrected.hash)
+
+
+def check_correction(conn: psycopg.Connection, protocol: Protocol) -> Evidence:
+    """Refuse ``protocol`` as a Machinery Correction unless it is one (ADR 0007
+    amendment): the same Strategy version hash (family, name and code revision) as the
+    Protocol it corrects, with the same grid, Windows, Holdout and Gate, so the Holdout
+    result it reads answers the same question; frozen at a commit other than that
+    Protocol's, the fixed one; correcting a version whose Holdout has run (before it, a fix
+    is a new Protocol and costs nothing); and its failing test written at a commit before
+    the fix, failing there and passing at the fix when pytest runs it at each
+    (``revision.test_failed_before``). The evidence with what pytest said at each."""
+    correction = protocol.correction
+    assert correction is not None
+    found = queries.protocol(conn, correction.corrects)
+    assert found is not None
+    corrected, short = found.protocol, found.hash[:12]
+    strategy = (protocol.family, protocol.name, protocol.code_revision)
+    if strategy != (corrected.family, corrected.name, corrected.code_revision):
+        raise ValueError(
+            f"the Strategy version hash differs from Protocol {short}'s"
+            f" ({protocol.name} at {protocol.code_revision[:12]}, not {corrected.name} at"
+            f" {corrected.code_revision[:12]}), so this is not a Machinery Correction; a"
+            " change touching the Strategy is a new version, Not Independent, whose Fresh"
+            " Period starts at its own freeze"
+        )
+    differ = [
+        name
+        for name in ("grid", "windows", "holdout", "gate")
+        if getattr(protocol, name) != getattr(corrected, name)
+    ]
+    if differ:
+        raise ValueError(
+            f"a Machinery Correction keeps Protocol {short}'s {', '.join(differ)}, so this"
+            " is not a Machinery Correction"
+        )
+    if protocol.git_commit == corrected.git_commit:
+        raise ValueError(
+            f"a Machinery Correction is frozen at the fixed commit, not at Protocol {short}'s"
+            f" own {corrected.git_commit[:12]}"
+        )
+    original = queries.corrected_original(conn, found)
+    if not any(a.outcome == "ran" for a in queries.holdout_attempts(conn, protocol=original.hash)):
+        raise ValueError(
+            f"Protocol {original.hash[:12]} has not run the Holdout, so a fix needs no"
+            " Machinery Correction: freeze a new Protocol at the fixed commit and run its"
+            " Windows again"
+        )
+    evidence = correction.evidence
+    failed, passed = revision.test_failed_before(
+        evidence.test, evidence.failed_at, protocol.git_commit
+    )
+    return replace(evidence, failed=failed.summary, passed=passed.summary)
 
 
 def verify_snapshot(
@@ -188,6 +312,8 @@ def verify_snapshot(
         now = queries.adjusted_series_hash(conn, instrument, start=series.start, end=series.end)
         if series.adjusted_series.get(instrument) != now:
             differ.append(f"Instrument {instrument}")
+    if series.demergers is not None and queries.demerger_table_hash(conn) != series.demergers:
+        differ.append("the demerger table")
     if differ:
         raise SnapshotChanged(
             f"the data differs from what Protocol {frozen.hash[:12]} froze: "
@@ -204,7 +330,16 @@ def _data_snapshot(
     first: date,
     last: date,
     calendar: TradingCalendar,
+    demergers: bool,
 ) -> DataSnapshot:
+    demerger_table = None
+    if demergers:
+        if not queries.demergers(conn):
+            raise ValueError(
+                "the Protocol credits demergers and no demerger table is stored;"
+                " run `tradeline ingest demergers` first"
+            )
+        demerger_table = queries.demerger_table_hash(conn)
     months = []
     instruments: set[str] = set()
     for month in months_between(first, last):
@@ -250,6 +385,7 @@ def _data_snapshot(
             i: queries.adjusted_series_hash(conn, i, start=start, end=last)
             for i in sorted(instruments)
         },
+        demergers=demerger_table,
     )
 
 
@@ -261,7 +397,7 @@ def run_members(conn: psycopg.Connection, month: date, rule_version: str) -> set
     }
 
 
-def _warm_up_start(calendar: TradingCalendar, first: date, days: int) -> date:
+def warm_up_start(calendar: TradingCalendar, first: date, days: int) -> date:
     """The trading day ``days`` trading days before ``first``, or the calendar's first day."""
     if days == 0:
         return first

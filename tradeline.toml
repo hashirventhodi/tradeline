@@ -53,6 +53,12 @@ manual_links = "manual_links.csv"
 # The checked-in splits and bonuses NSE's lists omit, each citing NSE's
 # circulars (see the file's header); stored by `ingest cited-actions`.
 cited = "cited_corporate_actions.csv"
+# The checked-in demergers a holder is credited for (ADR 0020), each citing NSE or
+# the company (see the file's header); stored by `ingest demergers`.
+demergers = "demergers.csv"
+# The checked-in dividend subjects the parser leaves unparsed, each with the
+# Operator's reason; read by `backtest checks` before the Holdout (ADR 0007).
+unparsed_dividends = "unparsed_dividends.csv"
 
 [integrity]
 # The checked-in Trading Calendar: the weekdays NSE was closed and the Special
@@ -65,9 +71,31 @@ large_moves = "large_moves.csv"
 # A close more than this many times the previous close, either way, is a Large Move.
 large_move_ratio = 1.5
 
+# The Benchmark (ADR 0015 amendment): a real NIFTY 500 index fund at its AMFI NAV,
+# loaded by `tradeline ingest benchmark` with the factor fund's NAV.
+[benchmark]
+# The checked-in file naming the Benchmark's AMFI scheme from each recorded
+# fund-change event (its merger, closure or change of index); nothing else names it.
+funds = "benchmark_funds.csv"
+# The ICICI Prudential Nifty 100 Low Vol 30 ETF, compared at NAV and never gated.
+factor_fund = 141596
+# Its unit splits, which AMFI's NAVs are not adjusted for; frozen into the Protocol.
+unit_splits = "fund_unit_splits.csv"
+
+# The tax ledger of a portfolio family (docs/risk-controls.md, "Tax (portfolio
+# families)"): a Protocol keeping tax freezes the schedule's rates as of its
+# freeze and the dividend rate, with [benchmark]'s funds and factor fund.
+[tax]
+# The checked-in dated rate schedule, each rate citing where it is enacted
+# (see the file's header).
+schedule = "tax_rates.csv"
+dividend_rate = 0.312       # the 30 percent slab plus cess; surcharge not modelled
+
 # The Risk Engine's Limits (docs/risk-controls.md), fractions of Equity where
-# they are. Every Plan of a Run is checked against them in Plan order.
+# they are: `pullback_v1`'s set, every Limit stated (ADR 0020), a Limit off
+# written `false`. Every Plan of a Run is checked against them in Plan order.
 [risk]
+stop_required = true        # a Plan without a stop under its entry is Blocked
 risk_per_trade = 0.01       # Equity at risk at the stop
 max_open_positions = 8      # held Positions plus this Run's Passes
 max_position = 0.15         # notional at entry
@@ -117,3 +145,57 @@ sharpe_above = 1.0              # the Backtest Gate, on the Stitched Curve and t
 drawdown_below = 0.15
 profit_factor_above = 1.3
 min_stitched_trades = 150
+
+# `lowvol_v1`'s Limits (docs/risk-controls.md, "Limits by family"; ADR 0020):
+# every Limit stated, `false` when off. A portfolio Plan has an entry price and
+# a size only, so the Limits read off a stop are off; the sector Limit is off
+# as in the NIFTY100 Low Volatility 30. Frozen by
+# `tradeline protocol freeze --strategy lowvol_v1`.
+[lowvol.risk]
+stop_required = false
+risk_per_trade = false
+max_open_positions = 30
+max_position = 0.15         # of Equity at entry, the cap on each buy's equal share of cash
+max_sector = false          # sector weights are reported at every Rebalance instead
+max_gross = 1.0
+participation_cap = 0.01
+min_order_value = 5000
+max_new_entries = false
+min_reward_to_risk = false
+daily_loss_halt = false     # off: the Relative Drawdown Halt replaces both (ADR 0020)
+drawdown_halt = false
+# On: its threshold is computed at `protocol freeze` from the index history
+# `tradeline ingest index-history` stores (NIFTY100 Low Volatility 30 TRI against
+# NIFTY 500 TRI, 2005-04 to 2019-09), rounded up to the next 5 points.
+relative_drawdown_halt = true
+
+# `lowvol_v1`'s Protocol: one grid cell, so Walk-Forward selects nothing and the
+# Out-of-Sample Windows (2019-10 to 2024-09) are one continuous backtest, the
+# Stitched Curve, starting with an Initial Buy decided on 2019-09-30, the one
+# In-Sample month's last day.
+[lowvol.protocol]
+holdout_start = "2024-10"
+holdout_months = 24
+windows = 5
+out_of_sample_months = 12
+in_sample_months = 1            # never run; holds the Initial Buy's decision day
+starting_equity = 500000
+risk_free_rate = 0.065
+band = 0.01                     # a Rebalance buy's limit over the close, a sale's under it
+warm_up_trading_days = 260      # the 253 trading days of bars the first decision reads
+# The Backtest Gate against the Benchmark (ADR 0015 amendment), on both the
+# Stitched Curve and the Holdout: Liquidation Value's annualised excess over the
+# Benchmark's above 0, its drawdown at most the Benchmark's plus 2 points; at
+# least 8 Rebalances on the Stitched Curve (one decided on its last day, 2024-09-30,
+# would trade only after the curve ends and is not counted: 9 of the 10 count).
+excess_above = 0.0
+drawdown_margin = 0.02
+min_stitched_rebalances = 8
+tax = true                      # the tax ledger, Liquidation Value against the Benchmark
+dividends = true                # credited in cash on the Ex-Date (ADR 0020)
+demergers = true                # the demerger table's Demerger Credits (ADR 0020)
+# not_independent: why lowvol_v1's Holdout run is Not Independent (ADR 0007,
+# 2026-10-25): required, defaulting to config.NOT_INDEPENDENT_REASON. A Not
+# Independent run passes only with a Fresh Period of twelve months holding two
+# Rebalances after its Initial Buy (the Benchmark Gate's min_fresh_period_rebalances).
+

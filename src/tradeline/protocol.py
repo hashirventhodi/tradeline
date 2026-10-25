@@ -3,12 +3,26 @@
 A Protocol states the parameter grid, the objective and its tie-break, the
 Walk-Forward Windows and the Holdout as trading days from the Trading Calendar,
 the cost schedule's date with the rates in force on it and Slippage's
-parameters, the exit band, the Limits (the Participation Cap among them), the
-daily-loss and drawdown Halt fractions a backtest reports against, the
-starting Equity, the risk-free rate, the Gate thresholds, the Universe Rule
-version, the Strategy family, name and code revision, the git commit it was
-frozen at, and the data snapshot: each Universe month's mode and build, and the
-hash of the Adjusted Series of every member over the Protocol's range.
+parameters, the exit band, every Limit on with its value or off (ADR 0020), the
+daily-loss and drawdown Halt fractions a backtest reports against (null when
+off), a portfolio family's Relative Drawdown Halt with its threshold, source and
+the index history it came from (stated only when there is one), whether
+dividends are credited (stated only when they are), whether the account keeps
+the tax ledger (stated only when it does, with the tax rates as of the freeze
+and the dividend rate), the Benchmark that a tax-keeping account is compared
+with and a Relative Drawdown is measured against (stated only when either is
+on: its funds, the factor fund with its unit splits and the fund-unit rates as
+of the freeze), the starting Equity, the risk-free rate, the Gate thresholds
+(``pullback_v1``'s absolute ones, or a portfolio family's against the Benchmark
+with how it counts Rebalances), any notes it makes of itself, the Machinery
+Correction it was frozen as with the Protocol it corrects and the evidence (stated
+only when it is one), the Universe
+Rule version, the Strategy family, name and code revision, the git commit it was
+frozen at, why its Holdout run is Not Independent when its family was chosen after
+reading results covering the Holdout's years (stated only then), and the data
+snapshot: each Universe month's mode and build, the hash of the Adjusted Series of
+every member over the Protocol's range, and, only when demergers are credited, the
+hash of the demerger table.
 
 Its identity is the SHA-256 of its canonical serialisation: JSON with sorted
 keys and no spaces, every decimal number written in one fixed form (no
@@ -32,10 +46,12 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from tradeline.costs import CHARGES, CostModel, CostSchedule, Rate, Rates, Slippage
+from tradeline.benchmark import BenchmarkFunds, BenchmarkTerms, FundChange, UnitSplit
+from tradeline.costs import CHARGES, CostModel, CostSchedule, FundRates, Rate, Rates, Slippage
 from tradeline.dates import month_end, month_of, next_month
-from tradeline.metrics import HaltLimits
+from tradeline.metrics import HaltLimits, IndexHistory, RelativeDrawdownHalt
 from tradeline.risk import Limits
+from tradeline.tax import ITEMS, TaxRate, TaxSchedule, TaxTerms
 from tradeline.trading_calendar import TradingCalendar
 
 # The layout of the serialised content; a change to it is a new format. Format 2 adds the
@@ -45,6 +61,8 @@ OBJECTIVE = (
     "in-sample Sharpe after costs, averaged with the cell's grid neighbours along each axis;"
     " a cell with fewer than min_in_sample_trades in-sample trades is ineligible"
 )
+# The one Limit a Protocol states by leaving it out, when on (``limits_content``).
+STOP_REQUIRED = "stop_required"
 TIE_BREAK = ("higher raw Sharpe", "more trades", "smaller k", "smaller r", "smaller n")
 
 
@@ -93,6 +111,102 @@ class Gate:
     min_stitched_trades: int
 
 
+# How the Benchmark Gate counts a curve's Rebalances, frozen with its thresholds.
+REBALANCES_COUNTED = (
+    "a Rebalance counts when it is decided on a trading day of the curve before its last, so"
+    " that its sales fall inside the curve; one decided on the curve's last day would trade"
+    " only after the curve ends and is not counted, and neither is the Initial Buy"
+)
+
+
+@dataclass(frozen=True)
+class BenchmarkGate:
+    """The Backtest Gate of a portfolio family (ADR 0015 amendment of 2026-10-25): on both
+    the Stitched Curve and the Holdout, the annualised excess of Liquidation Value over the
+    Benchmark's above ``excess_above`` and the drawdown of Liquidation Value no more than
+    the Benchmark's plus ``drawdown_margin``; at least ``min_stitched_rebalances``
+    Rebalances on the Stitched Curve, counted as ``rebalances_counted`` says. A Not
+    Independent run's Fresh Period carries it only once it holds at least
+    ``min_fresh_period_rebalances`` Rebalances after its Initial Buy, counted the same way
+    (ADR 0007 amendment of 2026-10-25)."""
+
+    excess_above: Decimal
+    drawdown_margin: Decimal
+    min_stitched_rebalances: int
+    rebalances_counted: str = REBALANCES_COUNTED
+    min_fresh_period_rebalances: int = 2
+
+
+AnyGate = Gate | BenchmarkGate
+
+# The records outside the system's own results a Machinery Correction's failing test may be
+# written against (ADR 0007 amendment of 2026-10-25).
+RECORDS = (
+    "contract_note",
+    "nse_rows",
+    "corporate_action_filing",
+    "broker_statement",
+    "tax_rule",
+)
+
+
+@dataclass(frozen=True)
+class Evidence:
+    """What shows a Machinery Correction's bug: the pytest node id of the test that failed
+    against an external record, the kind of record (one of ``RECORDS``) and where it is,
+    and the commit the test was written at, failing, before the fix. ``failed`` and
+    ``passed`` are what pytest said running it at that commit and at the fix, recorded by
+    the freeze (``revision.test_failed_before``); in the content only when recorded."""
+
+    test: str
+    record: str
+    citation: str
+    failed_at: str
+    failed: str | None = None
+    passed: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.record not in RECORDS:
+            raise ValueError(
+                f"a Machinery Correction's test is written against one of {', '.join(RECORDS)},"
+                f" not {self.record!r}"
+            )
+        if "::" not in self.test:
+            raise ValueError(f"name the failing test by its pytest node id, not {self.test!r}")
+
+
+@dataclass(frozen=True)
+class Correction:
+    """A Machinery Correction (ADR 0007 amendment): the Protocol it corrects (its full
+    hash), what it corrects, and the evidence that came first."""
+
+    corrects: str
+    description: str
+    evidence: Evidence
+
+
+def gate_content(gate: AnyGate) -> dict[str, Any]:
+    """The Gate as a Protocol states it; a Benchmark Gate is told apart by its keys."""
+    return dataclasses.asdict(gate)
+
+
+def read_gate(raw: Mapping[str, Any]) -> AnyGate:
+    if "excess_above" in raw:
+        return BenchmarkGate(
+            excess_above=Decimal(raw["excess_above"]),
+            drawdown_margin=Decimal(raw["drawdown_margin"]),
+            min_stitched_rebalances=raw["min_stitched_rebalances"],
+            rebalances_counted=raw["rebalances_counted"],
+            min_fresh_period_rebalances=raw["min_fresh_period_rebalances"],
+        )
+    return Gate(
+        sharpe_above=Decimal(raw["sharpe_above"]),
+        drawdown_below=Decimal(raw["drawdown_below"]),
+        profit_factor_above=Decimal(raw["profit_factor_above"]),
+        min_stitched_trades=raw["min_stitched_trades"],
+    )
+
+
 @dataclass(frozen=True)
 class Terms:
     """What the Operator chooses for a Protocol: everything in it but the costs and Limits,
@@ -105,10 +219,22 @@ class Terms:
     band: Decimal
     starting_equity: Decimal
     risk_free_rate: Decimal
-    gate: Gate
+    gate: AnyGate
     # Trading days before the first Window whose Adjusted Series the snapshot also hashes:
     # the bars the first Runs read.
     warm_up_trading_days: int
+    # Whether a holder is credited each dividend in cash on its Ex-Date (ADR 0020).
+    dividends: bool = False
+    # Whether a holder is credited each demerger of the demerger table (ADR 0020).
+    demergers: bool = False
+    # Whether the account keeps the tax ledger, its Liquidation Value and the Benchmark's
+    # computed daily (ADR 0015 amendment).
+    tax: bool = False
+    # What the Protocol says of itself beyond its numbers, by name (``Protocol.notes``).
+    notes: Mapping[str, str] = dataclasses.field(default_factory=dict)
+    # Why the version's Holdout run is Not Independent though no earlier version consumed
+    # the Holdout (``Protocol.not_independent``); None for none.
+    not_independent: str | None = None
 
 
 @dataclass(frozen=True)
@@ -136,6 +262,9 @@ class DataSnapshot:
     end: date
     months: tuple[MonthSnapshot, ...]
     adjusted_series: Mapping[str, str]
+    # The hash of the demerger table its runs credit (``tradeline.demergers``); None, and
+    # absent from the content, when the Protocol credits no demerger.
+    demergers: str | None = None
 
 
 @dataclass(frozen=True)
@@ -159,10 +288,49 @@ class Protocol:
     halts: HaltLimits
     starting_equity: Decimal
     risk_free_rate: Decimal
-    gate: Gate
+    gate: AnyGate
     rule_version: str
     warm_up_trading_days: int
     snapshot: DataSnapshot
+    # Whether a holder at the close before a dividend's Ex-Date is credited it in cash on the
+    # Ex-Date (ADR 0020). Stated in the content only when on, so a Protocol frozen before
+    # it existed (``pullback_v1``'s) reads back to the same hash, with dividends off.
+    dividends: bool = False
+    # The tax ledger's rates as of the freeze and the dividend rate (ADR 0015 amendment),
+    # and the Benchmark: its funds, the factor fund and the fund-unit rates. The Benchmark
+    # is what a tax-keeping account is compared with and what a Relative Drawdown is
+    # measured against, so tax states it; it is stated without tax for a Relative Drawdown
+    # Halt alone. Each is in the content only when there is one, as ``dividends`` is.
+    tax: TaxTerms | None = None
+    benchmark: BenchmarkTerms | None = None
+    # What the Protocol says of itself that its numbers do not, by name: ``lowvol_v1``'s
+    # ``buffer_scale``, NSE's buffer kept at a different scale. In the content only when
+    # there is one, as ``dividends`` is.
+    notes: Mapping[str, str] = dataclasses.field(default_factory=dict)
+    # Why the version's Holdout run is Not Independent whatever ran before it (ADR 0007
+    # amendment of 2026-10-25): its family was chosen after reading published results that
+    # cover the Holdout's years, as ``lowvol``'s was. It then passes the Backtest Gate only
+    # with a Fresh Period. In the content only when there is one, as ``dividends`` is.
+    not_independent: str | None = None
+    # The Machinery Correction this Protocol was frozen as, at the fixed commit: the
+    # Protocol it corrects and the evidence. In the content only when there is one.
+    correction: Correction | None = None
+
+    def __post_init__(self) -> None:
+        if self.tax is not None and self.benchmark is None:
+            raise ValueError("a Protocol keeping the tax ledger states the Benchmark")
+        if isinstance(self.gate, BenchmarkGate) and self.tax is None:
+            raise ValueError(
+                "the Benchmark Gate compares Liquidation Values, so its Protocol keeps the"
+                " tax ledger"
+            )
+
+    @property
+    def demergers(self) -> bool:
+        """Whether a holder at the close before a demerger's Ex-Date is credited the child's
+        shares in cash on its first listing day (ADR 0020): stated by the data snapshot's
+        hash of the demerger table, present only when on."""
+        return self.snapshot.demergers is not None
 
     @property
     def first(self) -> date:
@@ -190,7 +358,7 @@ class Protocol:
 
     def content(self) -> dict[str, Any]:
         snapshot = self.snapshot
-        return {
+        content: dict[str, Any] = {
             "format": FORMAT,
             "strategy": {
                 "family": self.family,
@@ -215,11 +383,11 @@ class Protocol:
                 "slippage": dataclasses.asdict(self.slippage),
             },
             "band": self.band,
-            "limits": dataclasses.asdict(self.limits),
-            "halts": dataclasses.asdict(self.halts),
+            "limits": limits_content(self.limits),
+            "halts": halts_content(self.halts),
             "starting_equity": self.starting_equity,
             "risk_free_rate": self.risk_free_rate,
-            "gate": dataclasses.asdict(self.gate),
+            "gate": gate_content(self.gate),
             "universe_rule_version": self.rule_version,
             "warm_up_trading_days": self.warm_up_trading_days,
             "data_snapshot": {
@@ -229,6 +397,38 @@ class Protocol:
                 "adjusted_series": dict(snapshot.adjusted_series),
             },
         }
+        if self.dividends:
+            content["dividends"] = True
+        if snapshot.demergers is not None:
+            content["data_snapshot"]["demergers"] = snapshot.demergers
+        if self.tax is not None:
+            rates = self.tax.schedule.rates(self.tax.rates_as_of)
+            content["tax"] = {
+                "rates_as_of": self.tax.rates_as_of,
+                "rates": dataclasses.asdict(rates),
+                "dividend_rate": self.tax.dividend_rate,
+            }
+        if self.benchmark is not None:
+            content["benchmark"] = {
+                "funds": [dataclasses.asdict(c) for c in self.benchmark.funds.changes],
+                "factor_fund": self.benchmark.factor_fund,
+                "fund_rates": dataclasses.asdict(self.benchmark.rates),
+            }
+            if self.benchmark.factor_fund_splits:
+                content["benchmark"]["factor_fund_splits"] = [
+                    dataclasses.asdict(s) for s in self.benchmark.factor_fund_splits
+                ]
+        if self.notes:
+            content["notes"] = dict(self.notes)
+        if self.not_independent is not None:
+            content["not_independent"] = self.not_independent
+        if self.correction is not None:
+            correction = dataclasses.asdict(self.correction)
+            correction["evidence"] = {
+                k: v for k, v in correction["evidence"].items() if v is not None
+            }
+            content["correction"] = correction
+        return content
 
     @classmethod
     def from_content(cls, content: Mapping[str, Any]) -> Protocol:
@@ -256,16 +456,11 @@ class Protocol:
             rates=Rates(**{name: Decimal(v) for name, v in costs["rates"].items()}),
             slippage=Slippage(**{name: Decimal(v) for name, v in costs["slippage"].items()}),
             band=Decimal(content["band"]),
-            limits=Limits(**_limits(content["limits"])),
-            halts=HaltLimits(**{name: Decimal(v) for name, v in content["halts"].items()}),
+            limits=read_limits(content["limits"]),
+            halts=read_halts(content["halts"]),
             starting_equity=Decimal(content["starting_equity"]),
             risk_free_rate=Decimal(content["risk_free_rate"]),
-            gate=Gate(
-                sharpe_above=Decimal(content["gate"]["sharpe_above"]),
-                drawdown_below=Decimal(content["gate"]["drawdown_below"]),
-                profit_factor_above=Decimal(content["gate"]["profit_factor_above"]),
-                min_stitched_trades=content["gate"]["min_stitched_trades"],
-            ),
+            gate=read_gate(content["gate"]),
             rule_version=content["universe_rule_version"],
             warm_up_trading_days=content["warm_up_trading_days"],
             snapshot=DataSnapshot(
@@ -273,7 +468,14 @@ class Protocol:
                 end=date.fromisoformat(snapshot["end"]),
                 months=tuple(_read_month(m) for m in snapshot["months"]),
                 adjusted_series=dict(snapshot["adjusted_series"]),
+                demergers=snapshot.get("demergers"),
             ),
+            dividends=content.get("dividends", False),
+            tax=None if "tax" not in content else _read_tax(content["tax"]),
+            benchmark=None if "benchmark" not in content else _read_benchmark(content["benchmark"]),
+            notes=dict(content.get("notes", {})),
+            not_independent=content.get("not_independent"),
+            correction=None if "correction" not in content else _read_correction(content),
         )
 
     def boundaries_text(self) -> str:
@@ -382,9 +584,146 @@ def fixed_decimal(value: Decimal) -> str:
     return f"{value.normalize():f}"
 
 
-def _limits(raw: Mapping[str, Any]) -> dict[str, Any]:
-    """Each Limit read back: a count stays an integer, a fraction or an amount is a decimal."""
-    return {name: v if isinstance(v, int) else Decimal(v) for name, v in raw.items()}
+def limits_content(limits: Limits) -> dict[str, Any]:
+    """Every Limit as a Protocol states it: its value, or null when off. ``stop_required``
+    appears only when off: every Protocol frozen before Limits were declared (ADR 0020)
+    required a stop and does not name it, so its absence is the stop required, and those
+    Protocols serialise, and hash, as they were frozen. It is the one exception to refusing
+    a Protocol that leaves a Limit unstated (``docs/risk-controls.md``). A freeze writes it
+    the same way, not always naming it: one that did would freeze ``pullback_v1``'s terms
+    again under a hash other than ``41e47fd39af3``."""
+    limits.require_stated()
+    content = {f.name: getattr(limits, f.name) for f in dataclasses.fields(limits)}
+    if content.pop(STOP_REQUIRED):
+        return content
+    return {**content, STOP_REQUIRED: False}
+
+
+def read_limits(raw: Mapping[str, Any]) -> Limits:
+    """The Limits a Protocol states, refusing one it leaves unstated: a count stays an
+    integer, a fraction or an amount is a decimal, and null is off."""
+    stated = dict(raw)
+    if stated.get(STOP_REQUIRED, False) is not False:
+        raise ValueError(
+            f"a Protocol states {STOP_REQUIRED} by leaving it out, or as false when off,"
+            f" not as {stated[STOP_REQUIRED]!r}"
+        )
+    stop_required = stated.pop(STOP_REQUIRED, True)
+    names = {f.name for f in dataclasses.fields(Limits)}
+    unknown = sorted(set(stated) - names)
+    if unknown:
+        raise ValueError(f"a Protocol states no Limit named {', '.join(unknown)}")
+    values: dict[str, Any] = {
+        name: v if v is None or isinstance(v, int) else Decimal(v) for name, v in stated.items()
+    }
+    limits = Limits(stop_required=stop_required, **values)
+    limits.require_stated()
+    return limits
+
+
+def frozen_tax_terms(schedule: TaxSchedule, as_of: date, dividend_rate: Decimal) -> TaxTerms:
+    """The tax terms a Protocol frozen on ``as_of`` states: the schedule's rates in force
+    then, as a schedule of one row each from that day, applied to every event."""
+    rates = schedule.rates(as_of)
+    rows = tuple(TaxRate(as_of, item, getattr(rates, item), "Protocol") for item in ITEMS)
+    return TaxTerms(TaxSchedule(rows), rates_as_of=as_of, dividend_rate=dividend_rate)
+
+
+def _read_correction(content: Mapping[str, Any]) -> Correction:
+    raw = content["correction"]
+    return Correction(raw["corrects"], raw["description"], Evidence(**raw["evidence"]))
+
+
+def _read_tax(raw: Mapping[str, Any]) -> TaxTerms:
+    as_of = date.fromisoformat(raw["rates_as_of"])
+    rows = tuple(TaxRate(as_of, item, Decimal(raw["rates"][item]), "Protocol") for item in ITEMS)
+    return TaxTerms(
+        TaxSchedule(rows), rates_as_of=as_of, dividend_rate=Decimal(raw["dividend_rate"])
+    )
+
+
+def _read_benchmark(raw: Mapping[str, Any]) -> BenchmarkTerms:
+    rates = raw["fund_rates"]
+    return BenchmarkTerms(
+        funds=BenchmarkFunds(
+            tuple(
+                FundChange(
+                    date.fromisoformat(c["in_force_from"]),
+                    c["scheme_code"],
+                    c["event"],
+                    c["citation"],
+                )
+                for c in raw["funds"]
+            )
+        ),
+        factor_fund=raw["factor_fund"],
+        rates=FundRates(
+            stamp_duty=Decimal(rates["stamp_duty"]),
+            stt=Decimal(rates["stt"]),
+            exit_load=Decimal(rates["exit_load"]),
+            exit_load_days=rates["exit_load_days"],
+        ),
+        factor_fund_splits=tuple(
+            UnitSplit(
+                s["scheme_code"],
+                date.fromisoformat(s["ex_date"]),
+                Decimal(s["ratio"]),
+                s["citation"],
+            )
+            for s in raw.get("factor_fund_splits", ())
+        ),
+    )
+
+
+def halts_content(halts: HaltLimits) -> dict[str, Any]:
+    """The Halts as a Protocol states them: the daily-loss and drawdown fractions, null
+    when off, and the Relative Drawdown Halt only when there is one, so the Protocols
+    frozen before it serialise, and hash, as they were frozen."""
+    content: dict[str, Any] = {"daily_loss": halts.daily_loss, "drawdown": halts.drawdown}
+    relative = halts.relative_drawdown
+    if relative is not None:
+        content["relative_drawdown"] = {
+            **{f.name: getattr(relative, f.name) for f in dataclasses.fields(relative)},
+            "history": [dataclasses.asdict(h) for h in relative.history],
+        }
+    return content
+
+
+def read_halts(raw: Mapping[str, Any]) -> HaltLimits:
+    """The Halts a Protocol states."""
+
+    def fraction(value: str | None) -> Decimal | None:
+        return None if value is None else Decimal(value)
+
+    def day(value: str | None) -> date | None:
+        return None if value is None else date.fromisoformat(value)
+
+    relative = raw.get("relative_drawdown")
+    return HaltLimits(
+        daily_loss=fraction(raw["daily_loss"]),
+        drawdown=fraction(raw["drawdown"]),
+        relative_drawdown=None
+        if relative is None
+        else RelativeDrawdownHalt(
+            threshold=Decimal(relative["threshold"]),
+            worst=Decimal(relative["worst"]),
+            source=relative["source"],
+            fallback=relative["fallback"],
+            note=relative["note"],
+            peak=day(relative["peak"]),
+            trough=day(relative["trough"]),
+            history=tuple(
+                IndexHistory(
+                    h["index_name"],
+                    date.fromisoformat(h["first"]),
+                    date.fromisoformat(h["last"]),
+                    h["days"],
+                    h["hash"],
+                )
+                for h in relative["history"]
+            ),
+        ),
+    )
 
 
 def _span(span: Span) -> dict[str, date]:

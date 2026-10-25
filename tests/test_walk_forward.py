@@ -39,6 +39,7 @@ import io
 import json
 import uuid
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -47,6 +48,7 @@ from typing import Any
 import psycopg
 import pytest
 
+from limits import PULLBACK
 from synthetic_eod import (
     REPO_ROOT,
     WALK_FORWARD_RANGE,
@@ -98,7 +100,7 @@ def frozen(database_url: str, tmp_path_factory: pytest.TempPathFactory) -> tuple
             market,
             *WALK_FORWARD_RANGE,
             terms=walk_forward_terms(),
-            limits=Limits(max_sector=D(1)),
+            limits=replace(PULLBACK, max_sector=D(1)),
         )
     return database_url, found.hash
 

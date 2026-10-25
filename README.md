@@ -18,12 +18,14 @@ uv run tradeline login                                          # daily: prints 
 uv run tradeline ingest candles --interval day --symbol INFY --from 2024-07-01 --to 2024-07-31
 uv run tradeline ingest corporate-actions --from 2024-07-01 --to 2024-12-31   # NSE's three lists, with our factors
 uv run tradeline ingest cited-actions   # the splits and bonuses of cited_corporate_actions.csv that NSE's lists omit
+uv run tradeline ingest demergers       # demergers.csv, the table a Protocol crediting demergers freezes the hash of
 uv run tradeline universe --month 2024-08                       # needs 126 trading days of end-of-day files before the month
 uv run tradeline ingest candles --interval minute --from 2024-07-01 --to 2024-07-31   # the current month's Universe; --universe-month YYYY-MM for another
 uv run tradeline sectors                                        # NSE's sector classification, in force from today
 uv run tradeline verify-universe                                # this month's Universe against the NIFTY 200 (a report)
 uv run tradeline parity --from 2024-07-01 --to 2024-07-31      # Kite Parity: Kite's daily candles against NSE's end-of-day files
 uv run tradeline integrity --from 2024-07-01 --to 2024-07-31   # NSE's files against the Trading Calendar, and Large Moves explained; never a broker
+uv run tradeline integrity-weekly --protocol 0123456789ab   # the same over every day after a Protocol's freeze; Kite Parity gaps listed, never failures
 uv run tradeline compare-adjusted --from 2016-10-21 --to 2026-10-20      # Factor Agreement over every ever-member
 uv run tradeline compare-adjusted --from 2024-07-01 --symbol RELIANCE   # one symbol's Ex-Dates, and its bars against Kite's
 uv run tradeline ingest news   # every feed in [news.feeds]; --feed NAME for one
@@ -48,6 +50,23 @@ CRON_TZ=Asia/Kolkata
 ```
 
 On a host whose cron ignores `CRON_TZ` (macOS), convert to the host's zone instead: 19:30 IST is 14:00 UTC. The command reads `.env` from the working directory, so the `cd` matters. Running on an exchange holiday does no harm: the missing end-of-day file is reported in the `nse_eod` run's details and not treated as a failure, and re-running a day is safe because every source is idempotent.
+
+### Weekly Integrity Check after a freeze
+
+Every day `collect-daily` loads after a Protocol's freeze is Fresh Period evidence, and a missing one is a hole in it until refetched (ADR 0007, 2026-10-25 amendment). `integrity-weekly` runs the Integrity Check over every day after the freeze day (in IST) to today, the whole span each time, so a gap keeps alerting until it is refetched with `collect-daily --date`. Each failure is one alert line naming its day; the command logs them as one `integrity alert` line at ERROR and exits 1, which is where the operational alerts go until Telegram carries them in Phase 5 (an acceptance line of Phase 5 in `docs/phases.md`). A day an Instrument has an end-of-day row and no Kite candle is listed as a Kite Parity gap, never an Integrity failure or an alert. Nothing is written.
+
+```sh
+uv run tradeline integrity-weekly --protocol 0123456789ab       # after that Protocol's freeze day, to today
+uv run tradeline integrity-weekly --after 2026-11-06 --to 2026-11-13   # after a given day, to a given day
+```
+
+It runs on the Operator's Mac from cron until Phase 6 moves the schedule to the instance (an acceptance line of Phase 6 in [docs/phases.md](docs/phases.md)). On Saturdays at 10:00, after the week's last `collect-daily`, from the working checkout like `collect-daily` (it reads `.env` from there), with the hash of `lowvol_v1`'s Protocol filled in once it is frozen. macOS cron ignores `CRON_TZ`, so the time is the host's zone: this is for a Mac set to IST; on one set to UTC, it is `30 4 * * 6`.
+
+```cron
+0 10 * * 6  cd /Users/hashir/Code/side/tradeline && /Users/hashir/.local/bin/uv run tradeline integrity-weekly --protocol <lowvol_v1's hash, 12 or more characters> >> /Users/hashir/Library/Logs/tradeline/integrity-weekly.jsonl 2>&1
+```
+
+An alert is the last line of the log with `"msg": "integrity alert"`; its `report.alerts` names each day.
 
 Settings that are not secret live in `tradeline.toml`. Secrets come from `.env` in development and the process environment in production; see `src/tradeline/secrets.py`. Tests run under `TRADELINE_ENV=test`, where the live transport refuses to be constructed and `pytest-socket` blocks every non-loopback socket; external responses come from fixtures recorded with `RecordingTransport` and served by `PlaybackTransport` (`src/tradeline/transport.py`). Every `ingest` subcommand, `sectors`, and `verify-universe` take `--record-fixtures DIR` to capture live responses and `--play-fixtures DIR` to replay them (`login` only plays back: a recording would hold the API key and a live request token). The committed fixtures under `tests/fixtures/` are real responses trimmed to a few symbols, except the login token exchange, which is hand-written with placeholder credentials because a real one would hold account details. Reads go through `src/tradeline/queries.py`, the only read path for later phases and for tests.
 

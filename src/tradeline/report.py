@@ -7,6 +7,9 @@ reading and nothing else. Its metrics are ``tradeline.metrics`` over the daily
 marked Equity curve (the starting Equity, then each Run's Equity) and the closed
 trades.
 
+A portfolio Strategy's Initial Buy is decided by a Run on the trading day before its
+account's first; that Run is not a day of the curve.
+
 A closed trade is a Position the backtest closed; its net P&L is what its Fills
 moved into cash after every charge and Slippage, plus any cash paid in lieu of a
 fractional share when it was restated. Its Equity at entry is the Equity its Pass
@@ -21,6 +24,12 @@ then (near the top: a backtest never Halts), the Candidates beyond the Passes
 Unclassified (the sector Limit on Instruments with no recorded sector), every
 Block by Limit, and whether real contract notes check the cost model.
 
+Under a Protocol that keeps tax the report adds the account's Liquidation Value
+(``liquidation_json``): each day's, the Strategy's and the Benchmark's, as the engine
+recorded them; every tax debit; the losses the last day's liquidation would drop;
+and the Benchmark's purchase and redemption on the last day, its charges, and the
+rate its gain was taxed at.
+
 The JSON holds no backtest id and no timing, so one cell reported twice over the
 same data reads the same; the ids and runtimes are logged.
 """
@@ -31,8 +40,8 @@ import json
 import time
 import uuid
 from collections import Counter, defaultdict
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
@@ -40,21 +49,27 @@ from typing import Any
 import psycopg
 
 from tradeline import queries
+from tradeline.benchmark import BenchmarkTerms, benchmark_redemption, benchmark_values
 from tradeline.costs import CostModel
 from tradeline.engine import backtest
 from tradeline.metrics import (
     HaltDay,
     HaltLimits,
     PositionResult,
+    RelativeDrawdownDay,
+    RelativeDrawdownHalt,
     expectancy,
     halt_days,
     max_drawdown,
     profit_factor,
+    relative_drawdown_days,
     sharpe,
 )
 from tradeline.paper_broker import ExitReason
+from tradeline.protocol import Protocol, fixed_decimal
 from tradeline.risk import UNCLASSIFIED
 from tradeline.strategy import Strategy
+from tradeline.tax import TaxTerms, is_short_term
 from tradeline.tick_sizes import TickSizes
 from tradeline.trading_calendar import TradingCalendar
 
@@ -73,8 +88,9 @@ class ClosedPosition:
     closed_on: date
     shares: int
     entry: Decimal
-    stop: Decimal
-    target: Decimal
+    # None, both, for a portfolio Strategy's holding.
+    stop: Decimal | None
+    target: Decimal | None
     exit_price: Decimal
     exit_reason: ExitReason
     net_pnl: Decimal
@@ -85,10 +101,12 @@ class ClosedPosition:
     @property
     def gapped(self) -> bool:
         """A Gapped Stop: the stop's exit filled under the stop."""
-        return self.exit_reason == "stop" and self.exit_price < self.stop
+        return self.exit_reason == "stop" and self.stop is not None and self.exit_price < self.stop
 
     @property
     def planned_risk(self) -> Decimal:
+        # Read only for a Gapped Stop, which has a stop.
+        assert self.stop is not None
         return self.shares * (self.entry - self.stop)
 
     def as_json(self) -> dict[str, Any]:
@@ -116,8 +134,8 @@ class OpenPosition:
     opened_on: date
     shares: int
     entry: Decimal
-    stop: Decimal
-    target: Decimal
+    stop: Decimal | None
+    target: Decimal | None
     # The last day's adjusted close it is marked at.
     close: Decimal
 
@@ -185,6 +203,54 @@ class Account:
     open: tuple[OpenPosition, ...]
     blocks: tuple[queries.LedgerBlock, ...]
     passes: tuple[queries.LedgerPass, ...] = ()
+    # Under a Protocol keeping tax: each day's Liquidation Value, the Strategy's and the
+    # Benchmark's, and every tax debit. Empty otherwise.
+    liquidation: tuple[queries.LiquidationDay, ...] = ()
+    tax_debits: tuple[queries.TaxDebit, ...] = ()
+    # Every Run of the account, an Initial Buy's decision included, in day order.
+    runs: tuple[queries.LedgerRun, ...] = ()
+
+    def liquidation_json(
+        self, tax: TaxTerms | None, benchmark: BenchmarkTerms | None, *, invested: Decimal
+    ) -> dict[str, Any] | None:
+        """The account's Liquidation Value against the Benchmark's, as the engine recorded
+        them, or None when its Protocol keeps no tax."""
+        if tax is None or benchmark is None:
+            return None
+        days = set(self.days)
+        daily = [d for d in self.liquidation if d.day in days]
+        last = daily[-1]
+        return {
+            "value": rounded(last.value, RUPEE),
+            "tax_due": rounded(last.tax_due, RUPEE),
+            "losses_dropped": {
+                "short_term": rounded(last.dropped_short_term_loss, RUPEE),
+                "long_term": rounded(last.dropped_long_term_loss, RUPEE),
+            },
+            "tax_debits": [
+                {
+                    "financial_year": t.financial_year,
+                    "day": t.day.isoformat(),
+                    "short_term_gain": rounded(t.short_term_gain, RUPEE),
+                    "long_term_gain": rounded(t.long_term_gain, RUPEE),
+                    "dividends": rounded(t.dividends, RUPEE),
+                    "tax": rounded(t.tax, RUPEE),
+                    "settled": t.settled,
+                }
+                for t in self.tax_debits
+            ],
+            "benchmark": None
+            if last.benchmark is None
+            else _benchmark_json(last.day, last.benchmark, tax, benchmark, invested=invested),
+            "daily": [
+                {
+                    "day": d.day.isoformat(),
+                    "strategy": rounded(d.value, RUPEE),
+                    "benchmark": None if d.benchmark is None else rounded(d.benchmark.value, RUPEE),
+                }
+                for d in daily
+            ],
+        }
 
     def limits_json(self) -> dict[str, Any]:
         """Where the Limits bound: the Candidates beyond the Passes (Blocked by the entry
@@ -223,9 +289,37 @@ class Account:
             if t.gapped
         ]
 
+    def before_tax(self) -> tuple[Decimal, ...]:
+        """The curve before tax: each day's Equity with every tax debit to then (a year's
+        on the first trading day after its March 31, a liquidation's settlement on its day)
+        added back. The starting Equity is as is."""
+        added = [
+            sum((t.tax for t in self.tax_debits if t.day <= day), Decimal(0)) for day in self.days
+        ]
+        return (self.curve[0], *(e + a for e, a in zip(self.curve[1:], added, strict=True)))
+
     def halt_days(self, halts: HaltLimits) -> list[HaltDay]:
         return halt_days(
             self.days, self.curve, daily_loss=halts.daily_loss, drawdown=halts.drawdown
+        )
+
+    def through(self, day: date) -> Account:
+        """The account as it stood after ``day``'s close, for comparing two accounts over the
+        days both ran: its days, Equity, closed trades, Runs, Liquidation Values and tax
+        debits to then. Its open Positions are left out, since one closed later was open
+        then and the Ledger marks none at that day's close."""
+        days = tuple(d for d in self.days if d <= day)
+        return replace(
+            self,
+            days=days,
+            curve=self.curve[: len(days) + 1],
+            closed=tuple(t for t in self.closed if t.closed_on <= day),
+            open=(),
+            blocks=(),
+            passes=(),
+            liquidation=tuple(v for v in self.liquidation if v.day <= day),
+            tax_debits=tuple(t for t in self.tax_debits if t.day <= day),
+            runs=tuple(r for r in self.runs if r.as_of <= day),
         )
 
     def scores(self, *, risk_free_rate: Decimal) -> Scores:
@@ -253,7 +347,10 @@ def read_account(conn: psycopg.Connection, backtest_id: uuid.UUID) -> Account:
     if frozen is None:
         raise ValueError(f"backtest {backtest_id} names no frozen Protocol to start it from")
     curve = [frozen.protocol.starting_equity]
-    for ran in runs:
+    # An Initial Buy's Run is the decision on the day before the account's first: its
+    # Equity is the starting Equity the curve starts at, not a day of the account's.
+    days = [r for r in runs if r.portfolio_step != "initial_buy"]
+    for ran in days:
         if ran.equity is None:
             raise ValueError(f"the Run on {ran.as_of} records no Equity; backtest it again")
         curve.append(ran.equity)
@@ -293,14 +390,55 @@ def read_account(conn: psycopg.Connection, backtest_id: uuid.UUID) -> Account:
             )
         )
     closed.sort(key=lambda t: (t.closed_on, t.opened_on, t.symbol))
+    tags: queries.Account = {"mode": "backtest", "backtest_id": backtest_id, "dry_run": False}
     return Account(
-        tuple(r.as_of for r in runs),
+        tuple(r.as_of for r in days),
         tuple(curve),
         tuple(closed),
         tuple(still_open),
         tuple(blocks),
         tuple(p for ranked in passes.values() for p in ranked.values()),
+        liquidation=tuple(queries.liquidation_values(conn, **tags)),
+        tax_debits=tuple(queries.tax_debits(conn, **tags)),
+        runs=tuple(runs),
     )
+
+
+def _benchmark_json(
+    day: date,
+    found: queries.BenchmarkDay,
+    tax: TaxTerms,
+    benchmark: BenchmarkTerms,
+    *,
+    invested: Decimal,
+) -> dict[str, Any]:
+    """The Benchmark liquidated on ``day``: what it paid on purchase and redemption and the
+    rate its gain was taxed at, with its Liquidation Value as the engine recorded it."""
+    redeemed = benchmark_redemption(
+        bought_on=found.bought_on,
+        bought_nav=found.bought_nav,
+        day=day,
+        nav=found.nav,
+        invested=invested,
+        rates=benchmark.rates,
+    )
+    short = is_short_term(found.bought_on, day)
+    rates = tax.schedule.rates(tax.rates_as_of)
+    rate = (rates.short_term if short else rates.long_term) * (1 + rates.cess)
+    return {
+        "scheme_code": found.scheme,
+        "bought_on": found.bought_on.isoformat(),
+        "invested": rounded(invested, RUPEE),
+        "bought_nav": str(found.bought_nav),
+        "nav": str(found.nav),
+        "stamp_duty": rounded(redeemed.purchase.stamp_duty, RUPEE),
+        "stt": rounded(redeemed.sale.stt, RUPEE),
+        "exit_load": rounded(redeemed.sale.exit_load, RUPEE),
+        "taxed_as": "short_term" if short else "long_term",
+        "tax_rate": fixed_decimal(rate),
+        "tax_due": rounded(found.tax_due, RUPEE),
+        "value": rounded(found.value, RUPEE),
+    }
 
 
 def _capped(granted: queries.LedgerPass) -> bool:
@@ -499,6 +637,43 @@ def report_backtest(
         contract_notes=contract_notes,
     )
     return ReportResult(report, backtest_id, variant_ids, seconds, variant_seconds)
+
+
+def relative_drawdown_days_of(
+    conn: psycopg.Connection, protocol: Protocol, account: Account
+) -> list[RelativeDrawdownDay] | None:
+    """Every day of ``account`` its Protocol's Relative Drawdown Halt would have fired on:
+    its Equity at each day's close before tax (``Account.before_tax``: a tax debit is not a
+    fall), dividends counted, over the Benchmark's NAV as of the day, fallen from that
+    ratio's peak by at least the threshold. None when the Protocol has no such Halt."""
+    relative = protocol.halts.relative_drawdown
+    if relative is None:
+        return None
+    if protocol.benchmark is None:
+        raise ValueError("a Relative Drawdown Halt's Protocol names the Benchmark's funds")
+    if not account.days:
+        return []
+    navs = benchmark_values(conn, protocol.benchmark.funds, account.days)
+    return relative_drawdown_days(
+        account.days, account.before_tax()[1:], navs, threshold=relative.threshold
+    )
+
+
+def relative_drawdown_json(relative: RelativeDrawdownHalt) -> dict[str, Any]:
+    """The Relative Drawdown Halt as the reports state it beside its days."""
+    return {
+        "relative_drawdown_limit": rounded(relative.threshold, FRACTION),
+        "source": relative.source,
+        "fallback": relative.fallback,
+        "note": relative.note,
+    }
+
+
+def relative_drawdown_days_json(days: Sequence[RelativeDrawdownDay]) -> list[dict[str, Any]]:
+    return [
+        {"day": d.day.isoformat(), "relative_drawdown": rounded(d.relative_drawdown, FRACTION)}
+        for d in days
+    ]
 
 
 def halt_days_json(days: list[HaltDay]) -> list[dict[str, Any]]:

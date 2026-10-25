@@ -28,6 +28,8 @@ that path from a day on:
   continues from there (a gap past a stop is a large negative ``Gap``).
 - ``CircuitLock``: the day is pinned at the previous close plus ``amount``,
   open, high, low and close equal (GLOSSARY: Circuit Lock).
+- ``Dividend``: a dividend NSE lists, by its subject; it leaves the path as it is.
+- ``Rights``: a rights issue NSE lists, by its subject; it leaves the path as it is.
 - ``Split`` and ``Bonus``: a Corporate Action. From its Ex-Date NSE publishes
   the path times the factor (a Rs 10 to Rs 5 split halves the price and
   doubles the volume), so adding an action changes no bar before its Ex-Date.
@@ -44,6 +46,7 @@ test from the description, never from the generator's output.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import zipfile
@@ -56,22 +59,32 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
+import pytest
 
 from checkout import TEST_COMMIT
+from limits import PULLBACK
+from tradeline.benchmark import load_benchmark_funds
+from tradeline.cli import main
 from tradeline.config import UniverseRule
 from tradeline.costs import CostModel, Slippage, load_cost_schedule
 from tradeline.dates import IST, calendar_days, month_of, next_month
+from tradeline.demergers import load_demergers
 from tradeline.freeze import FreezeResult
 from tradeline.freeze import freeze_protocol as freeze
+from tradeline.holdout_checks import TaxTestOutcome, check_holdout
+from tradeline.ingest.benchmark import ingest_benchmark
 from tradeline.ingest.corporate_actions import ingest_corporate_actions, year_chunks
+from tradeline.ingest.demergers import ingest_demergers
 from tradeline.ingest.eod import ingest_eod
+from tradeline.ingest.index_history import ingest_index_history
 from tradeline.metrics import HaltLimits
-from tradeline.protocol import Gate, Layout, Terms, months_between
+from tradeline.protocol import Correction, Gate, Layout, Terms, months_between
 from tradeline.risk import Limits
 from tradeline.sectors import load_sectors
-from tradeline.sources import kite, nse
+from tradeline.sources import amfi, kite, nse
 from tradeline.strategy import Strategy
 from tradeline.strategy.pullback import PullbackV1
+from tradeline.tax import load_tax_schedule
 from tradeline.trading_calendar import TradingCalendar, load_trading_calendar
 from tradeline.transport import PlaybackTransport, RecordingTransport, Request, Response
 from tradeline.universe import compute_universe, declare_rule_validity
@@ -89,6 +102,10 @@ def repo_calendar() -> TradingCalendar:
 COSTS_AS_OF = date(2026, 10, 24)
 # The repo's [protocol] starting Equity and exit band (tradeline.toml).
 STARTING_EQUITY = Decimal("500000")
+# The factor fund's AMFI code (tradeline.toml's [benchmark]).
+FACTOR_FUND = 141596
+# The Benchmark's AMFI code (benchmark_funds.csv).
+BENCHMARK_SCHEME = 147625
 EXIT_BAND = Decimal("0.05")
 
 
@@ -158,9 +175,59 @@ class Bonus:
         return f"Bonus {self.new}:{self.held}"
 
 
-PathEvent = Trend | Dip | Gap | CircuitLock
+@dataclass(frozen=True)
+class Absent:
+    """No row for the Stock in NSE's files from ``first`` to ``last`` (one day when ``last``
+    is None): a day it did not trade, or a suspension. Its path runs on underneath, and
+    the next published day opens at the path's previous close."""
+
+    first: date
+    last: date | None = None
+
+    def covers(self, day: date) -> bool:
+        return self.first <= day <= (self.last or self.first)
+
+
+@dataclass(frozen=True)
+class Volume:
+    """The shares a day on the path from ``day`` on."""
+
+    day: date
+    volume: int
+
+
+@dataclass(frozen=True)
+class Dividend:
+    """A dividend as NSE lists it: its Ex-Date, its subject, and the face value NSE stores
+    with it. The path is unchanged by it (no fall by the amount), so the only money it
+    moves is the cash a holder is credited."""
+
+    ex_date: date
+    subject: str
+    face_value: int = 10
+
+
+@dataclass(frozen=True)
+class Rights:
+    """A rights issue as NSE lists it, by its subject. The path is unchanged by it; a test
+    states the Ex-Date's fall with a ``Gap``."""
+
+    ex_date: date
+    subject: str
+
+
+@dataclass(frozen=True)
+class Demerger:
+    """A demerger as NSE lists it, by its subject. The path is unchanged by it; a test
+    gives the child its own Stock and the demerger table its row."""
+
+    ex_date: date
+    subject: str = "Demerger"
+
+
+PathEvent = Trend | Dip | Gap | CircuitLock | Volume
 Action = Split | Bonus
-Event = PathEvent | Action
+Event = PathEvent | Action | Absent | Dividend | Rights | Demerger
 
 
 # --- Stocks and the Market ----------------------------------------------------
@@ -191,6 +258,13 @@ class Stock:
     events: tuple[Event, ...] = ()
     # NSE's sector (the Total Market list's Industry); None: not on the list.
     sector: str | None = None
+    # A zigzag on the path: on the Market's even-numbered trading days (the first is 0)
+    # the close moves by the slope plus the swing, on odd ones by the slope less it.
+    swing: Decimal = Decimal(0)
+
+    def absent(self, day: date) -> bool:
+        """No row is published for the Stock on ``day``."""
+        return any(e.covers(day) for e in self.events if isinstance(e, Absent))
 
     @property
     def actions(self) -> list[Action]:
@@ -198,32 +272,47 @@ class Stock:
             (e for e in self.events if isinstance(e, Split | Bonus)), key=lambda a: a.ex_date
         )
 
+    @property
+    def dividends(self) -> list[Dividend]:
+        return sorted((e for e in self.events if isinstance(e, Dividend)), key=lambda d: d.ex_date)
+
+    @property
+    def rights(self) -> list[Rights]:
+        return sorted((e for e in self.events if isinstance(e, Rights)), key=lambda r: r.ex_date)
+
+    @property
+    def demergers(self) -> list[Demerger]:
+        return sorted((e for e in self.events if isinstance(e, Demerger)), key=lambda d: d.ex_date)
+
     def path_bars(self, days: Sequence[date]) -> list[Bar]:
         """The path, one bar per trading day: NSE's prices had there been no action."""
         by_day: dict[date, list[PathEvent]] = {}
         for event in self.events:
-            if not isinstance(event, Split | Bonus):
+            if isinstance(event, Trend | Dip | Gap | CircuitLock | Volume):
                 by_day.setdefault(event.day, []).append(event)
-        slope, previous, bars = self.slope, self.start, []
-        for day in days:
+        slope, previous, bars, volume = self.slope, self.start, [], self.volume
+        for index, day in enumerate(days):
             today = by_day.get(day, [])
             for event in today:
                 if isinstance(event, Trend):
                     slope = event.slope
+                elif isinstance(event, Volume):
+                    volume = event.volume
+            move = slope + (self.swing if index % 2 == 0 else -self.swing)
             gap = sum((e.amount for e in today if isinstance(e, Gap)), Decimal(0))
             lock = next((e for e in today if isinstance(e, CircuitLock)), None)
             if lock is not None:
                 price = previous + lock.amount
-                bar = Bar(day, price, price, price, price, self.volume)
+                bar = Bar(day, price, price, price, price, volume)
             else:
                 open_ = previous + gap
-                close = open_ + slope
+                close = open_ + move
                 low = min(open_, close) - self.half_range
                 for event in today:
                     if isinstance(event, Dip):
                         low = min(low, close - event.depth)
                 high = max(open_, close) + self.half_range
-                bar = Bar(day, open_, high, low, close, self.volume)
+                bar = Bar(day, open_, high, low, close, volume)
             if bar.low <= 0:
                 raise ValueError(f"{self.symbol}'s path falls to {bar.low} on {day}")
             bars.append(bar)
@@ -333,6 +422,8 @@ def _responses(market: Market, calendar: TradingCalendar) -> Iterator[tuple[str,
             continue
         lines = [",".join(_UDIFF_HEADER)]
         for stock in market.stocks:
+            if stock.absent(day):
+                continue
             bar = raw[stock.symbol][day]
             lines.append(_udiff_line(stock, bar, previous.get(stock.symbol, bar.open)))
             previous[stock.symbol] = bar.close
@@ -421,11 +512,11 @@ def _corporate_actions(stocks: Iterable[Stock], start: date, end: date) -> list[
             "isin": s.isin,
             "exDate": f"{a.ex_date:%d-%b-%Y}",
             "recDate": f"{a.ex_date:%d-%b-%Y}",
-            "faceVal": "10",
+            "faceVal": str(a.face_value) if isinstance(a, Dividend) else "10",
             "subject": a.subject,
         }
         for s in stocks
-        for a in s.actions
+        for a in (*s.actions, *s.dividends, *s.rights, *s.demergers)
         if start <= a.ex_date <= end
     ]
 
@@ -525,25 +616,30 @@ def freeze_protocol(
     limits: Limits | None = None,
     halts: HaltLimits | None = None,
     commit: str | None = None,
+    correction: Correction | None = None,
 ) -> FreezeResult:
     """Store the Universe for the months of ``first`` to ``last`` and freeze a Protocol over
     them (``protocol_terms`` unless ``terms`` is given) for ``pullback_v1`` under the
     Market's rule, the default Limits, Halts and Slippage and the checked-in schedule as of
     ``COSTS_AS_OF``, at ``TEST_COMMIT`` (the commit the tests run at) unless ``commit``
-    is given."""
+    is given, frozen as the Machinery Correction ``correction`` when one is given."""
     compute_universe_months(conn, market, first, last)
     return freeze(
         conn,
         terms or protocol_terms(first, last),
         strategy=strategy or PullbackV1(),
         rule_version=market.rule.version,
-        limits=limits or Limits(),
+        limits=limits or PULLBACK,
         halts=halts or HaltLimits(daily_loss=D("0.03"), drawdown=D("0.10")),
         schedule=load_cost_schedule(REPO_ROOT / "cost_rates.csv"),
         slippage=Slippage(),
         costs_as_of_for_tests=COSTS_AS_OF,
         calendar=repo_calendar(),
         commit=commit or TEST_COMMIT,
+        tax_schedule=load_tax_schedule(REPO_ROOT / "tax_rates.csv"),
+        benchmark_funds=load_benchmark_funds(REPO_ROOT / "benchmark_funds.csv"),
+        factor_fund=FACTOR_FUND,
+        correction=correction,
     )
 
 
@@ -767,6 +863,61 @@ def config_text(market: Market, extra_risk: str = "") -> str:
     )
 
 
+def layout_lines(layout: Layout) -> str:
+    """``layout`` as ``[lowvol.protocol]`` (or ``[protocol]``) states it in a configuration."""
+    return (
+        f'holdout_start = "{layout.holdout_start:%Y-%m}"\n'
+        f"holdout_months = {layout.holdout_months}\n"
+        f"windows = {layout.windows}\n"
+        f"out_of_sample_months = {layout.out_of_sample_months}\n"
+        f"in_sample_months = {layout.in_sample_months}\n"
+    )
+
+
+def lowvol_config(
+    directory: Path,
+    market: Market,
+    protocol: str,
+    *,
+    tax: bool = True,
+    unit_splits: Path | None = None,
+) -> Path:
+    """``directory``'s ``tradeline.toml`` for ``lowvol_v1`` over ``market``: ``config_text``,
+    the repo's tax schedule (when ``tax``) and Benchmark funds (with ``unit_splits`` when
+    given), and the lines ``protocol`` under ``[lowvol.protocol]``."""
+    text = config_text(market)
+    if tax:
+        text += f'[tax]\nschedule = "{REPO_ROOT / "tax_rates.csv"}"\n'
+    text += f'[benchmark]\nfunds = "{REPO_ROOT / "benchmark_funds.csv"}"\n'
+    if unit_splits is not None:
+        text += f'unit_splits = "{unit_splits}"\n'
+    config = directory / "tradeline.toml"
+    config.write_text(text + "[lowvol.protocol]\n" + protocol)
+    return config
+
+
+def cli(database_url: str, config: Path, *argv: str) -> tuple[int, str]:
+    """``tradeline`` with ``argv`` against ``database_url`` under ``config``: its exit code
+    and what it wrote to stdout, its log lines and summary."""
+    out = io.StringIO()
+    with (
+        pytest.MonkeyPatch.context() as patch,
+        contextlib.redirect_stdout(out),
+        contextlib.redirect_stderr(io.StringIO()),
+    ):
+        patch.setenv("TRADELINE_CONFIG", str(config))
+        patch.setenv("DATABASE_URL", database_url)
+        code = main(list(argv))
+    return code, out.getvalue()
+
+
+def cli_ok(database_url: str, config: Path, *argv: str) -> str:
+    """``cli``, which must exit 0: what it wrote to stdout."""
+    code, out = cli(database_url, config, *argv)
+    assert code == 0, out
+    return out
+
+
 def walk_forward_terms() -> Terms:
     """The spec's Terms on ``WALK_FORWARD_LAYOUT`` and ``WALK_FORWARD_GRID``, a cell eligible
     from two in-sample trades, and no risk-free rate."""
@@ -855,3 +1006,225 @@ def walk_forward_market() -> Market:
             ),
         ),
     )
+
+
+# --- The low-volatility Market ------------------------------------------------
+
+# ``lowvol_v1``'s decision days on ``lowvol_market``: the Initial Buy's (the day before
+# the account's first trading day, and a last trading day of March, which is no Rebalance
+# for it), then the one Rebalance.
+LOWVOL_INITIAL = date(2022, 3, 31)
+LOWVOL_REBALANCE = date(2022, 9, 30)
+# The Protocol's range: the one In-Sample month (March 2022) to the Holdout (2022-11).
+LOWVOL_RANGE = (date(2022, 3, 1), date(2022, 11, 30))
+LOWVOL_LAYOUT = Layout(
+    holdout_start=date(2022, 11, 1),
+    holdout_months=1,
+    windows=7,
+    out_of_sample_months=1,
+    in_sample_months=1,
+)
+LOWVOL_RULE = UniverseRule(
+    top_n=69, lookback_trading_days=20, min_listing_trading_days=20, min_presence_percent=90
+)
+# Each Stock's volume: 1,000,000 shares near Rs 100, a 20-day average traded value of
+# about Rs 10 crore, so the Participation Cap (1 percent) never binds.
+LOWVOL_VOLUME = 1_000_000
+
+
+def lowvol_terms() -> Terms:
+    """``lowvol_v1``'s one-cell Terms on ``LOWVOL_LAYOUT``: Out-of-Sample Windows each month
+    from 2022-04 to 2022-10, the Holdout 2022-11, the band 1 percent."""
+    return replace(
+        protocol_terms(*LOWVOL_RANGE),
+        grid={},
+        min_in_sample_trades=0,
+        layout=LOWVOL_LAYOUT,
+        band=Decimal("0.01"),
+        warm_up_trading_days=260,
+    )
+
+
+def lowvol_market(end: date = date(2022, 11, 30)) -> Market:
+    """Seventy EQ stocks from 2021-03-01 to ``end`` (2022-11-30) for ``lowvol_v1``, each flat at
+    Rs 100 with a ``swing``: its close alternates between 100 plus the swing and 100, so
+    its 252 daily log returns are, in turn, plus and minus ln(1 + swing / 100), and the
+    larger the swing the larger their standard deviation. Every Stock trades
+    ``LOWVOL_VOLUME`` shares a day unless stated, and ``LOWVOL_RULE`` (the 69 most traded)
+    is declared in force from the first day.
+
+    - N01 to N33: swings 0.05 to 1.65 (N0k: 0.05 k), the least volatile, each without a
+      row on 2021-07-01, inside the 253 trading days to ``LOWVOL_INITIAL`` (from
+      2021-03-24) and before those to ``LOWVOL_REBALANCE`` (from 2021-09-27); N33 is
+      suspended instead, from 2021-06-21 to 2021-07-02. So all 33 are ineligible on the
+      Initial Buy's day and rank 1 to 33 at the Rebalance.
+    - H01 to H30: swings 1.70 to 3.15 (H0j: 0.05 (33 + j)), ranks 1 to 30 on the Initial
+      Buy's day. H15 has no row on 2022-07-15, so it is ineligible at the Rebalance. H20
+      trades 1,000 shares a day from 2022-07-01, so it leaves the Universe from 2022-08,
+      and gaps Rs 4,000 up on 2022-08-01. The other 28 rank 34 to 61 at the Rebalance:
+      H29 60th, H30 61st.
+    - O01 to O06: swings 3.15 (O01, tied with H30 and after it by Symbol: 31st on the
+      Initial Buy's day, 62nd at the Rebalance) and 3.20 to 3.40.
+    - Z: swing 5.00 and 500,000 shares a day, the least traded and out of the Universe
+      until H20 trades less.
+    """
+    start = date(2021, 3, 1)
+
+    def stock(symbol: str, swing: str, *events: Event, volume: int = LOWVOL_VOLUME) -> Stock:
+        return Stock(
+            symbol,
+            f"INE{symbol:0>6}014",
+            start=D("100.00"),
+            slope=D(0),
+            half_range=D("0.50"),
+            volume=volume,
+            swing=D(swing),
+            events=events,
+        )
+
+    missing = Absent(date(2021, 7, 1))
+    news = [stock(f"N{k:02}", str(D("0.05") * k), missing) for k in range(1, 33)]
+    news.append(stock("N33", "1.65", Absent(date(2021, 6, 21), date(2021, 7, 2))))
+    held: list[Stock] = []
+    for j in range(1, 31):
+        events: tuple[Event, ...] = ()
+        if j == 15:
+            events = (Absent(date(2022, 7, 15)),)
+        elif j == 20:
+            events = (Volume(date(2022, 7, 1), 1_000), Gap(date(2022, 8, 1), D("4000.00")))
+        held.append(stock(f"H{j:02}", str(D("0.05") * (33 + j)), *events))
+    others = [stock("O01", "3.15")]
+    others += [stock(f"O{i:02}", str(D("3.15") + D("0.05") * (i - 1))) for i in range(2, 7)]
+    return Market(
+        start=start,
+        end=end,
+        rule=LOWVOL_RULE,
+        declaration=RuleDeclaration(start, datetime.combine(start, time(), IST)),
+        stocks=(*news, *held, *others, stock("Z", "5.00", volume=500_000)),
+    )
+
+
+# --- AMFI ---------------------------------------------------------------------
+
+# AMFI's scheme master lines for the Benchmark (Direct Plan, Growth) and the factor fund.
+AMFI_MASTER = (
+    "Scheme Code;ISIN Div Payout/ ISIN Growth;ISIN Div Reinvestment;Scheme Name;Plan;Option;"
+    "Net Asset Value;Date\r\n\r\nMotilal Oswal Mutual Fund\r\n\r\n"
+    "147625;INF247L01957;-;Motilal Oswal Nifty 500 Index Fund;Direct Plan;Growth;{nav};{day}\r\n"
+    "\r\nICICI Prudential Mutual Fund\r\n\r\n"
+    "141596;INF109KC19U5;-;ICICI Prudential Nifty 100 Low Volatility 30 ETF;;;{nav};{day}\r\n"
+)
+
+
+def write_amfi_fixtures(
+    navs: dict[int, dict[date, Decimal]], directory: Path, *, first: date, end: date
+) -> Path:
+    """Record AMFI's answers ``ingest benchmark`` asks for to ``end``, from ``first`` (the
+    Benchmark's first date): the scheme master naming both schemes, and each scheme's
+    NAV history window holding its NAVs in ``navs`` that fall inside it."""
+    last = max(navs[BENCHMARK_SCHEME])
+    master = AMFI_MASTER.format(nav=navs[BENCHMARK_SCHEME][last], day=f"{last:%d-%b-%Y}")
+    responses = {amfi.SCHEME_MASTER_URL: _ok(master.encode())}
+    for code, series in navs.items():
+        for start, stop in amfi.nav_windows(first, end):
+            records = [
+                {"date": d.isoformat(), "nav": str(v), "upload_time": f"{d}T21:00:00.000Z"}
+                for d, v in sorted(series.items())
+                if start <= d <= stop
+            ]
+            body = {"data": {"nav_groups": [{"historical_records": records}]}}
+            responses[amfi.nav_history_url(code, start, stop)] = _ok(json.dumps(body).encode())
+    recorder = RecordingTransport(_Served(responses), directory)
+    for url in responses:
+        recorder.send(Request("GET", url))
+    return directory
+
+
+# --- The Benchmark and the index history (ADR 0020) ------------------------------
+
+# The recorded niftyindices.com Total Return Index history, 2005-04 to 2019-09
+# (fixtures/index_history/README.md).
+INDEX_HISTORY_FIXTURES = Path(__file__).parent / "fixtures" / "index_history"
+# Where ``lowvol_benchmark_navs`` starts rising, and by how much each trading day.
+LOWVOL_BENCHMARK_RISE = date(2022, 8, 2)
+LOWVOL_BENCHMARK_STEP = Decimal("2")
+
+
+def lowvol_benchmark_navs(calendar: TradingCalendar) -> dict[date, Decimal]:
+    """The Benchmark's synthetic NAV over ``lowvol_market``'s Protocol: Rs 100 on every
+    trading day from 2022-03-01, then from ``LOWVOL_BENCHMARK_RISE`` up by
+    ``LOWVOL_BENCHMARK_STEP`` each trading day, while the Strategy's flat stocks only swing
+    (and H20 gaps up on 2022-08-01), so its Relative Drawdown deepens through September."""
+    navs = {}
+    nav = Decimal(100)
+    for day in calendar.trading_days(date(2022, 3, 1), LOWVOL_RANGE[1]):
+        if day >= LOWVOL_BENCHMARK_RISE:
+            nav += LOWVOL_BENCHMARK_STEP
+        navs[day] = nav
+    return navs
+
+
+def daily_navs(
+    calendar: TradingCalendar, end: date, step: str, *, split: date | None = None
+) -> dict[date, Decimal]:
+    """A NAV of Rs 20 on 2022-03-01 moving by ``step`` rupees each trading day to ``end``; a
+    tenth of that from ``split`` on, when its units split 1 for 10 that day."""
+    navs = {}
+    for i, day in enumerate(calendar.trading_days(date(2022, 3, 1), end)):
+        nav = Decimal(20) + Decimal(step) * i
+        navs[day] = nav / 10 if split is not None and day >= split else nav
+    return navs
+
+
+def write_benchmark_fixtures(directory: Path, navs: dict[date, Decimal], *, end: date) -> Path:
+    """AMFI's answers ``ingest benchmark`` asks for to ``end``: ``navs`` as the NAV history
+    of both the Benchmark and the factor fund, from ``benchmark_funds.csv``'s first date."""
+    funds = load_benchmark_funds(REPO_ROOT / "benchmark_funds.csv")
+    return write_amfi_fixtures(
+        {BENCHMARK_SCHEME: navs, FACTOR_FUND: navs}, directory, first=funds.first, end=end
+    )
+
+
+def load_benchmark(conn: psycopg.Connection, fixtures: Path, *, end: date) -> None:
+    """Load AMFI's recorded answers through ``ingest benchmark``, never sleeping."""
+    ingest_benchmark(
+        conn,
+        PlaybackTransport(fixtures),
+        funds=load_benchmark_funds(REPO_ROOT / "benchmark_funds.csv"),
+        factor_fund=FACTOR_FUND,
+        end=end,
+        clock=lambda: 0.0,
+        sleep=lambda seconds: None,
+    )
+
+
+# --- The pre-Holdout checks ---------------------------------------------------
+
+
+def pass_holdout_checks(conn: psycopg.Connection, protocol: str) -> None:
+    """Record every pre-Holdout check of ``protocol`` as passed at the commit the tests run
+    at, for a Market with no unparsed dividend and no demerger: no contract note, accepted
+    as unmet, and the tax-ledger tests taken as passed (``test_pre_holdout_checks`` runs
+    them)."""
+    result = check_holdout(
+        conn,
+        protocol=protocol,
+        contract_notes=(),
+        schedule=load_cost_schedule(REPO_ROOT / "cost_rates.csv"),
+        listed=(),
+        accept_no_contract_notes="a synthetic Market's test",
+        tax_tests=lambda: TaxTestOutcome(True, "taken as passed"),
+    )
+    assert result.passed, result.summary()
+
+
+def load_index_history(conn: psycopg.Connection) -> None:
+    """Load the recorded index history through ``ingest index-history``."""
+    ingest_index_history(conn, PlaybackTransport(INDEX_HISTORY_FIXTURES), sleep=lambda _s: None)
+
+
+def load_demerger_table(conn: psycopg.Connection) -> None:
+    """Store the checked-in demerger table through ``ingest_demergers``: a Protocol crediting
+    demergers (``lowvol_v1``'s) freezes its hash, and a synthetic Market holds none of its
+    parents."""
+    ingest_demergers(conn, load_demergers(REPO_ROOT / "demergers.csv"))

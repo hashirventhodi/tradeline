@@ -19,12 +19,14 @@ from typing import Any
 import psycopg
 import pytest
 
+from limits import PULLBACK
 from synthetic_eod import (
     REPO_ROOT,
     WALK_FORWARD_RANGE,
     config_text,
     freeze_protocol,
     load_market,
+    pass_holdout_checks,
     repo_calendar,
     walk_forward_market,
     walk_forward_terms,
@@ -35,7 +37,6 @@ from tradeline.cli import main
 from tradeline.dates import IST
 from tradeline.db import app_connection
 from tradeline.holdout import HoldoutRefused, run_holdout, standing
-from tradeline.risk import Limits
 from tradeline.strategy import Strategy
 from tradeline.strategy.pullback import PullbackV1
 from tradeline.tick_sizes import load_tick_sizes
@@ -45,7 +46,7 @@ D = Decimal
 CALENDAR = repo_calendar()
 TICK_SIZES = load_tick_sizes(REPO_ROOT / "tick_sizes.csv")
 HOLDOUT = (date(2023, 1, 2), date(2023, 1, 31))
-LIMITS = Limits(max_sector=D(1))
+LIMITS = replace(PULLBACK, max_sector=D(1))
 
 
 def pullback(parameters: Mapping[str, Decimal]) -> Strategy:
@@ -53,7 +54,9 @@ def pullback(parameters: Mapping[str, Decimal]) -> Strategy:
 
 
 def walked(conn: psycopg.Connection, protocol: str, factory: Any = pullback) -> None:
+    """The Protocol walked forward and its pre-Holdout checks passed: ready for the Holdout."""
     walk_forward(conn, factory, protocol=protocol, calendar=CALENDAR, tick_sizes=TICK_SIZES)
+    pass_holdout_checks(conn, protocol)
 
 
 def holdout(conn: psycopg.Connection, protocol: str, factory: Any = pullback) -> Any:

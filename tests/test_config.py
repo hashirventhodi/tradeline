@@ -4,8 +4,10 @@ from pathlib import Path
 
 import pytest
 
+from limits import LOWVOL, PULLBACK
 from tradeline.config import Config, ConfigError, UniverseRule, load_config
-from tradeline.risk import Limits
+from tradeline.metrics import HaltLimits
+from tradeline.protocol import BenchmarkGate, Gate
 
 
 def test_loads_settings_from_the_toml_file(tmp_path: Path) -> None:
@@ -268,7 +270,7 @@ def test_the_committed_config_states_the_specs_protocol_terms() -> None:
     }
     assert terms.layout.holdout_start == date(2024, 10, 1)
     assert (terms.layout.windows, terms.layout.in_sample_months) == (5, 24)
-    assert terms.gate.sharpe_above == Decimal("1.0")
+    assert isinstance(terms.gate, Gate) and terms.gate.sharpe_above == Decimal("1.0")
     assert terms.risk_free_rate == Decimal("0.065")
 
 
@@ -290,5 +292,83 @@ def test_a_protocol_grid_or_holdout_that_is_not_exact_is_refused_by_name(
 def test_the_committed_config_states_the_default_limits_and_the_tick_table() -> None:
     config = load_config(Path(__file__).resolve().parents[1] / "tradeline.toml")
 
-    assert config.risk.limits() == Limits()
+    assert config.risk.limits() == PULLBACK
     assert config.risk.tick_sizes == "tick_sizes.csv"
+
+
+def test_a_limit_is_stated_off_in_risk_as_false(tmp_path: Path) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text("[risk]\nmax_sector = false\nmax_new_entries = false\n")
+
+    limits = load_config(path).risk.limits()
+
+    assert (limits.max_sector, limits.max_new_entries) == (None, None)
+    assert limits.max_position == Decimal("0.15")
+
+
+@pytest.mark.parametrize(
+    ("section", "key"),
+    [
+        ("risk", "max_sector"),
+        ("lowvol.risk", "max_open_positions"),
+        ("lowvol.risk", "daily_loss_halt"),
+    ],
+    ids=["a-fraction", "a-count", "a-halt"],
+)
+def test_a_limit_stated_true_is_refused_by_name(tmp_path: Path, section: str, key: str) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text(f"[{section}]\n{key} = true\n")
+
+    with pytest.raises(ConfigError, match=f"{section}.{key}"):
+        load_config(path)
+
+
+def test_a_limit_read_off_the_stop_on_without_a_stop_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text("[risk]\nstop_required = false\n")
+
+    with pytest.raises(ConfigError, match="risk_per_trade"):
+        load_config(path)
+
+
+def test_the_committed_config_states_lowvols_limits_and_one_cell_protocol() -> None:
+    config = load_config(Path(__file__).resolve().parents[1] / "tradeline.toml")
+
+    assert config.lowvol == Config.Lowvol()
+    assert config.lowvol.risk.limits() == LOWVOL
+    # The daily-loss and drawdown Halts off, the Relative Drawdown Halt on (ADR 0020).
+    assert config.lowvol.risk.halts() == HaltLimits(daily_loss=None, drawdown=None)
+    assert config.lowvol.risk.relative_drawdown_halt
+    assert not config.risk.relative_drawdown_halt
+    terms = config.lowvol.protocol.terms()
+    assert terms.grid == {}
+    assert terms.layout.holdout_start == date(2024, 10, 1)
+    assert (terms.layout.holdout_months, terms.layout.windows) == (24, 5)
+    assert terms.layout.out_of_sample_months == 12
+    # The Benchmark Gate (ADR 0015 amendment), with tax, dividends and demergers on.
+    assert terms.gate == BenchmarkGate(Decimal(0), Decimal("0.02"), 8)
+    assert terms.tax and terms.dividends and terms.demergers
+    assert "buffer of 60" in terms.notes["buffer_scale"]
+
+
+def test_lowvol_without_tax_is_refused_since_its_gate_compares_liquidation_values(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text("[lowvol.protocol]\ntax = false\n")
+
+    with pytest.raises(ConfigError, match="lowvol.protocol: .*tax"):
+        load_config(path)
+
+
+def test_lowvol_v1_is_frozen_not_independent_with_its_reason_and_an_empty_one_is_refused(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tradeline.toml"
+    path.write_text("")
+    reason = load_config(path).lowvol.protocol.terms().not_independent
+    assert reason is not None and "published results covering the Holdout's years" in reason
+
+    path.write_text('[lowvol.protocol]\nnot_independent = " "\n')
+    with pytest.raises(ConfigError, match="lowvol.protocol: not_independent"):
+        load_config(path)
