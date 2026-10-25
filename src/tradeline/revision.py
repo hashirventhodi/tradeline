@@ -22,7 +22,11 @@ from __future__ import annotations
 import ast
 import functools
 import hashlib
+import os
 import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 import tradeline.strategy
@@ -73,13 +77,24 @@ def git_commit(directory: Path = PACKAGE_DIR) -> str:
     return head
 
 
-def test_written_before(
+@dataclass(frozen=True)
+class TestOutcome:
+    """Whether a test passed when pytest ran it, and pytest's last line."""
+
+    __test__ = False  # not a pytest test class, whatever its name
+
+    passed: bool
+    summary: str
+
+
+def test_failed_before(
     test: str, failed_at: str, commit: str, *, directory: Path = PACKAGE_DIR
-) -> None:
+) -> tuple[TestOutcome, TestOutcome]:
     """Refuse unless the test ``test`` (a pytest node id, ``path::name``, its path from the
-    checkout's root) is defined at ``failed_at``, a commit before ``commit`` in its history:
-    a Machinery Correction's failing test comes before its fix (ADR 0007 amendment). That it
-    failed there is the Operator's record; this checks that it was there to fail."""
+    checkout's root) is defined at ``failed_at``, a commit before ``commit`` in its history,
+    fails when pytest runs it there and passes at ``commit``: a Machinery Correction's
+    failing test comes before its fix (ADR 0007 amendment). Each run is in a checkout of
+    its own commit (``run_test``). What pytest said at each, failing then passing."""
     path, _, name = test.partition("::")
     function = name.split("::")[-1].split("[")[0]
     try:
@@ -105,6 +120,48 @@ def test_written_before(
         raise ValueError(f"commit {failed_at[:12]} has no test file {path}") from error
     if f"def {function}(" not in source:
         raise ValueError(f"commit {failed_at[:12]}'s {path} defines no test {function}")
+    failed = run_test(test, earlier, directory=directory)
+    if failed.passed:
+        raise ValueError(
+            f"{test} passed at {failed_at[:12]} ({failed.summary}): the evidence is a test"
+            " that failed before the fix"
+        )
+    passed = run_test(test, later, directory=directory)
+    if not passed.passed:
+        raise ValueError(
+            f"{test} did not pass at the fixed commit {commit[:12]} ({passed.summary}): the"
+            " fix must make its evidence pass"
+        )
+    return failed, passed
+
+
+def run_test(test: str, commit: str, *, directory: Path = PACKAGE_DIR) -> TestOutcome:
+    """The test ``test`` run by pytest at ``commit``: in a temporary ``git worktree`` of
+    the repository holding ``directory``, removed after, with that checkout's ``src`` first
+    on the import path, so the code under test is the commit's and not this process's."""
+    root = Path(_git(directory, "rev-parse", "--show-toplevel").strip())
+    with tempfile.TemporaryDirectory(prefix="tradeline-evidence-") as scratch:
+        checkout = Path(scratch) / commit[:12]
+        _git(root, "worktree", "add", "--quiet", "--detach", str(checkout), commit)
+        try:
+            source = checkout / "src"
+            found = os.environ.get("PYTHONPATH")
+            done = subprocess.run(
+                [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", test],
+                cwd=checkout,
+                capture_output=True,
+                text=True,
+                check=False,
+                env={
+                    **os.environ,
+                    "PYTHONPATH": os.pathsep.join([str(source), *([found] if found else [])]),
+                },
+            )
+        finally:
+            _git(root, "worktree", "remove", "--force", str(checkout))
+    lines = [line for line in done.stdout.splitlines() if line.strip()]
+    last = lines[-1].strip("= ") if lines else done.stderr.strip()[-200:]
+    return TestOutcome(done.returncode == 0 and "passed" in last, last)
 
 
 @functools.cache

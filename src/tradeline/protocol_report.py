@@ -419,6 +419,8 @@ def _correction_json(
             "record": correction.evidence.record,
             "citation": correction.evidence.citation,
             "failed_at": correction.evidence.failed_at,
+            "failed": correction.evidence.failed,
+            "passed": correction.evidence.passed,
         },
         "holdout": {"protocol": attempt.protocol, "computed_before_correction": True},
         "stitched_curve": {"before": _rounded_json(before), "after": _rounded_json(after)},
@@ -1011,7 +1013,8 @@ class _Markdown:
             f"This Protocol corrects Protocol `{found['corrects'][:12]}`:"
             f" {found['description']}. Shown first by `{evidence['test']}`, failing at"
             f" `{evidence['failed_at'][:12]}` against a {evidence['record'].replace('_', ' ')}"
-            f" ({evidence['citation']})."
+            f" ({evidence['citation']}). pytest at that commit: {evidence['failed']}; at the"
+            f" fix: {evidence['passed']}."
         )
         rows = [
             [

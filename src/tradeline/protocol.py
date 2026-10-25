@@ -154,12 +154,16 @@ RECORDS = (
 class Evidence:
     """What shows a Machinery Correction's bug: the pytest node id of the test that failed
     against an external record, the kind of record (one of ``RECORDS``) and where it is,
-    and the commit the test was written at, failing, before the fix."""
+    and the commit the test was written at, failing, before the fix. ``failed`` and
+    ``passed`` are what pytest said running it at that commit and at the fix, recorded by
+    the freeze (``revision.test_failed_before``); in the content only when recorded."""
 
     test: str
     record: str
     citation: str
     failed_at: str
+    failed: str | None = None
+    passed: str | None = None
 
     def __post_init__(self) -> None:
         if self.record not in RECORDS:
@@ -419,7 +423,11 @@ class Protocol:
         if self.not_independent is not None:
             content["not_independent"] = self.not_independent
         if self.correction is not None:
-            content["correction"] = dataclasses.asdict(self.correction)
+            correction = dataclasses.asdict(self.correction)
+            correction["evidence"] = {
+                k: v for k, v in correction["evidence"].items() if v is not None
+            }
+            content["correction"] = correction
         return content
 
     @classmethod
