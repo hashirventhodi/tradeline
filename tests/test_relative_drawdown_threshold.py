@@ -23,6 +23,7 @@ from synthetic_eod import (
     compute_universe_months,
     config_text,
     load_benchmark,
+    load_demerger_table,
     load_market,
     lowvol_benchmark_navs,
     lowvol_market,
@@ -51,6 +52,7 @@ def market(database_url: str, tmp_path_factory: pytest.TempPathFactory) -> tuple
         load_market(conn, fixtures, market)
         compute_universe_months(conn, market, *LOWVOL_RANGE)
         load_benchmark(conn, navs, end=LOWVOL_RANGE[1])
+        load_demerger_table(conn)
     layout = LOWVOL_LAYOUT
     config = directory / "tradeline.toml"
     config.write_text(

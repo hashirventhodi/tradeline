@@ -15,6 +15,15 @@ the same thresholds (its trades reported). Without one long enough, or with one
 not yet scored, the outcome is ``cannot pass``, whatever the metrics; they are
 still scored and recorded beside it.
 
+A portfolio family's Gate is against the Benchmark (``BenchmarkGate``, ADR 0015
+amendment of 2026-10-25): on both curves the annualised excess of Liquidation
+Value over the Benchmark's is above the Protocol's (zero), and the drawdown of
+Liquidation Value is at most the Benchmark's plus the Protocol's margin (2
+points); the Stitched Curve holds at least the minimum number of Rebalances, and
+the Holdout's are reported, never gated. The information ratio is read with them
+and reported, never gated. A Not Independent run's Fresh Period clears the same
+thresholds on its own curve.
+
 This module is pure.
 """
 
@@ -24,7 +33,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Literal
 
-from tradeline.protocol import Gate
+from tradeline.metrics import Comparison
+from tradeline.protocol import AnyGate, BenchmarkGate
 
 Outcome = Literal["pass", "fail", "cannot pass"]
 
@@ -41,9 +51,37 @@ class CurveMetrics:
 
 
 @dataclass(frozen=True)
+class BenchmarkCurve:
+    """What the Benchmark Gate reads of one curve: its Rebalances, the annualised excess of
+    its Liquidation Value over the Benchmark's, each one's drawdown, and the information
+    ratio (reported, never gated)."""
+
+    rebalances: int
+    excess: Decimal
+    drawdown: Decimal
+    benchmark_drawdown: Decimal
+    information_ratio: Decimal | None
+
+
+def benchmark_curve(*, rebalances: int, comparison: Comparison) -> BenchmarkCurve:
+    """The curve as the Benchmark Gate reads it, from its Liquidation Values compared with the
+    Benchmark's."""
+    return BenchmarkCurve(
+        rebalances=rebalances,
+        excess=comparison.excess,
+        drawdown=comparison.drawdown,
+        benchmark_drawdown=comparison.benchmark_drawdown,
+        information_ratio=comparison.information_ratio,
+    )
+
+
+AnyCurve = CurveMetrics | BenchmarkCurve
+
+
+@dataclass(frozen=True)
 class Check:
     """One threshold on one curve: the value read, the threshold, which side of it passes
-    (``above``, ``below`` or ``at least``), and whether the value is there."""
+    (``above``, ``below``, ``at least`` or ``at most``), and whether it holds."""
 
     curve: str
     metric: str
@@ -57,37 +95,28 @@ class Check:
 class GateOutcome:
     outcome: Outcome
     checks: tuple[Check, ...]
-    holdout_trades: int
-    # The Fresh Period's trades, when one was scored.
-    fresh_period_trades: int | None
+    # The Holdout's trades (a Benchmark Gate: its Rebalances), reported and never gated.
+    holdout_count: int
+    # The Fresh Period's, when one was scored.
+    fresh_period_count: int | None
     reason: str
 
 
 def evaluate(
-    gate: Gate,
+    gate: AnyGate,
     *,
-    stitched: CurveMetrics,
-    holdout: CurveMetrics,
+    stitched: AnyCurve,
+    holdout: AnyCurve,
     independent: bool,
     may_pass: bool,
     standing: str,
-    fresh_period: CurveMetrics | None = None,
+    fresh_period: AnyCurve | None = None,
 ) -> GateOutcome:
     """The Gate on the Stitched Curve and the Holdout (and the Fresh Period, for a Not
     Independent run that ``may_pass`` with one); ``standing`` says why the Holdout run is
-    or is not independent."""
+    or is not independent. Each curve is the kind its Gate reads."""
     checks = [*_checks(gate, "stitched_curve", stitched), *_checks(gate, "holdout", holdout)]
-    checks.insert(
-        3,
-        Check(
-            "stitched_curve",
-            "trades",
-            stitched.trades,
-            "at least",
-            gate.min_stitched_trades,
-            stitched.trades >= gate.min_stitched_trades,
-        ),
-    )
+    checks.insert(len(checks) // 2, _minimum(gate, stitched))
     if not independent and may_pass and fresh_period is not None:
         checks += _checks(gate, "fresh_period", fresh_period)
     missed = [f"{c.curve} {c.metric}" for c in checks if not c.passed]
@@ -111,13 +140,43 @@ def evaluate(
     return GateOutcome(
         outcome,
         tuple(checks),
-        holdout.trades,
-        None if fresh_period is None or independent else fresh_period.trades,
+        _count(holdout),
+        None if fresh_period is None or independent else _count(fresh_period),
         reason,
     )
 
 
-def _checks(gate: Gate, curve: str, metrics: CurveMetrics) -> list[Check]:
+def _count(curve: AnyCurve) -> int:
+    return curve.rebalances if isinstance(curve, BenchmarkCurve) else curve.trades
+
+
+def _minimum(gate: AnyGate, stitched: AnyCurve) -> Check:
+    """The Stitched Curve's minimum: its trades, or under a Benchmark Gate its Rebalances."""
+    if isinstance(gate, BenchmarkGate):
+        assert isinstance(stitched, BenchmarkCurve)
+        metric, value, least = "rebalances", stitched.rebalances, gate.min_stitched_rebalances
+    else:
+        assert isinstance(stitched, CurveMetrics)
+        metric, value, least = "trades", stitched.trades, gate.min_stitched_trades
+    return Check("stitched_curve", metric, value, "at least", least, value >= least)
+
+
+def _checks(gate: AnyGate, curve: str, metrics: AnyCurve) -> list[Check]:
+    if isinstance(gate, BenchmarkGate):
+        assert isinstance(metrics, BenchmarkCurve)
+        most = metrics.benchmark_drawdown + gate.drawdown_margin
+        return [
+            Check(
+                curve,
+                "annualised_excess",
+                metrics.excess,
+                "above",
+                gate.excess_above,
+                metrics.excess > gate.excess_above,
+            ),
+            Check(curve, "drawdown", metrics.drawdown, "at most", most, metrics.drawdown <= most),
+        ]
+    assert isinstance(metrics, CurveMetrics)
     sharpe, drawdown, factor = metrics.sharpe, metrics.max_drawdown, metrics.profit_factor
     return [
         Check(

@@ -79,6 +79,8 @@ large_move_ratio = 1.5
 funds = "benchmark_funds.csv"
 # The ICICI Prudential Nifty 100 Low Vol 30 ETF, compared at NAV and never gated.
 factor_fund = 141596
+# Its unit splits, which AMFI's NAVs are not adjusted for; frozen into the Protocol.
+unit_splits = "fund_unit_splits.csv"
 
 # The tax ledger of a portfolio family (docs/risk-controls.md, "Tax (portfolio
 # families)"): a Protocol keeping tax freezes the schedule's rates as of its
@@ -181,8 +183,15 @@ starting_equity = 500000
 risk_free_rate = 0.065
 band = 0.01                     # a Rebalance buy's limit over the close, a sale's under it
 warm_up_trading_days = 260      # the 253 trading days of bars the first decision reads
-sharpe_above = 1.0              # pullback_v1's Gate until the Benchmark Gate (#98)
-drawdown_below = 0.15
-profit_factor_above = 1.3
-min_stitched_trades = 150
+# The Backtest Gate against the Benchmark (ADR 0015 amendment), on both the
+# Stitched Curve and the Holdout: Liquidation Value's annualised excess over the
+# Benchmark's above 0, its drawdown at most the Benchmark's plus 2 points; at
+# least 8 Rebalances on the Stitched Curve (one decided on its last day, 2024-09-30,
+# would trade only after the curve ends and is not counted: 9 of the 10 count).
+excess_above = 0.0
+drawdown_margin = 0.02
+min_stitched_rebalances = 8
 tax = true                      # the tax ledger, Liquidation Value against the Benchmark
+dividends = true                # credited in cash on the Ex-Date (ADR 0020)
+demergers = true                # the demerger table's Demerger Credits (ADR 0020)
+

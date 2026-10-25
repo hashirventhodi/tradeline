@@ -28,6 +28,15 @@ lists the days it reaches the threshold; ``worst_relative_drawdown`` is how the
 threshold is found from index history, then ``round_up_to_points`` rounds it
 up to the next 5 points.
 
+A portfolio family's Backtest Gate compares with the Benchmark (ADR 0015
+amendment): ``benchmark_comparison`` takes the Strategy's and the Benchmark's
+daily values from one starting value and gives each one's annualised return
+(the growth to the last day raised to 252 over the number of days, less one),
+the excess of the first over the second, each one's max drawdown, and the
+information ratio: the mean of the daily active returns (the Strategy's return
+less the Benchmark's) over their sample standard deviation, times the square
+root of 252, with the tracking error, that deviation a year.
+
 Values are exact Decimals; what reads them rounds them.
 """
 
@@ -150,6 +159,63 @@ def sharpe(curve: Sequence[Decimal], *, risk_free_rate: Decimal) -> Decimal | No
         if variance == 0:
             return None
         return mean / variance.sqrt() * Decimal(TRADING_DAYS_A_YEAR).sqrt()
+
+
+@dataclass(frozen=True)
+class Comparison:
+    """A Strategy's daily values against the Benchmark's (or another fund's) from one start:
+    each one's annualised return and max drawdown, the excess of the Strategy's annualised
+    return over the other's, the information ratio and the tracking error a year (None
+    with fewer than two days, or when the active returns do not vary)."""
+
+    strategy_return: Decimal
+    benchmark_return: Decimal
+    drawdown: Decimal
+    benchmark_drawdown: Decimal
+    information_ratio: Decimal | None
+    tracking_error: Decimal | None
+
+    @property
+    def excess(self) -> Decimal:
+        return self.strategy_return - self.benchmark_return
+
+
+def annualised_return(start: Decimal, values: Sequence[Decimal]) -> Decimal:
+    """The growth from ``start`` to the last of ``values`` (one a trading day) as a yearly
+    rate, a year being 252 trading days."""
+    with localcontext() as context:
+        context.prec = 34
+        growth = values[-1] / start
+        return growth ** (Decimal(TRADING_DAYS_A_YEAR) / len(values)) - 1
+
+
+def benchmark_comparison(
+    strategy: Sequence[Decimal], benchmark: Sequence[Decimal], *, start: Decimal
+) -> Comparison:
+    """``strategy`` against ``benchmark``, each one value a trading day after ``start``,
+    which both begin from."""
+    if len(strategy) != len(benchmark) or not strategy:
+        raise ValueError("a comparison needs one value of each a day, and at least one day")
+    ours, theirs = [start, *strategy], [start, *benchmark]
+    active = [s - b for s, b in zip(returns(ours), returns(theirs), strict=True)]
+    ratio = deviation = None
+    if len(active) >= 2:
+        with localcontext() as context:
+            context.prec = 34
+            mean = sum(active, Decimal(0)) / len(active)
+            variance = sum(((a - mean) ** 2 for a in active), Decimal(0)) / (len(active) - 1)
+            if variance != 0:
+                year = Decimal(TRADING_DAYS_A_YEAR).sqrt()
+                ratio = mean / variance.sqrt() * year
+                deviation = variance.sqrt() * year
+    return Comparison(
+        strategy_return=annualised_return(start, strategy),
+        benchmark_return=annualised_return(start, benchmark),
+        drawdown=max_drawdown(ours),
+        benchmark_drawdown=max_drawdown(theirs),
+        information_ratio=ratio,
+        tracking_error=deviation,
+    )
 
 
 def drawdowns(curve: Sequence[Decimal]) -> list[Decimal]:

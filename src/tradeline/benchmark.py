@@ -26,6 +26,17 @@ redemption, and the gain over the amount paid is taxed once, as one lot
 (``tradeline.tax``), short-term or long-term by the same holding rule as a share.
 A Protocol freezes the funds, the factor fund and the fund-unit rates
 (``BenchmarkTerms``).
+
+The factor fund is reported beside the Benchmark at its NAV and never gated.
+AMFI's NAVs are not adjusted for a unit split (141596's of about 1 for 10
+between 2024-03-01 and 2024-03-04, ``docs/research.md``), so the reviewed,
+checked-in file at ``benchmark.unit_splits`` (``fund_unit_splits.csv``)::
+
+    scheme_code,ex_date,ratio,citation
+
+states each split: from its ``ex_date`` (the first NAV on the new units) one unit
+held before is ``ratio`` units. ``chained_navs`` multiplies each NAV from then by
+the ratio, so the series is the value of one unit held from before every split.
 """
 
 from __future__ import annotations
@@ -97,13 +108,66 @@ class BenchmarkFunds:
 
 
 @dataclass(frozen=True)
+class UnitSplit:
+    """A fund's unit split: from ``ex_date``, its first NAV on the new units, one unit held
+    before is ``ratio`` units."""
+
+    scheme_code: int
+    ex_date: date
+    ratio: Decimal
+    citation: str
+
+
+UNIT_SPLIT_COLUMNS = ("scheme_code", "ex_date", "ratio", "citation")
+
+
+def load_unit_splits(path: Path) -> tuple[UnitSplit, ...]:
+    """The fund unit splits file at ``path``, in Ex-Date order; any bad row refuses it."""
+    lines = read_lines(path, "fund unit splits")
+    require_header(path, lines[0] if lines else None, UNIT_SPLIT_COLUMNS, "first")
+    splits = []
+    for line in lines[1:]:
+        code, day_text, ratio_text, citation = line.columns(UNIT_SPLIT_COLUMNS)
+        if not code.isdigit():
+            raise ValueError(f"{line.where}: {code!r} is not an AMFI scheme code")
+        try:
+            ratio = Decimal(ratio_text)
+        except ArithmeticError:
+            raise ValueError(f"{line.where}: {ratio_text!r} is not a ratio") from None
+        if not ratio.is_finite() or ratio <= 0:
+            raise ValueError(f"{line.where}: the ratio {ratio_text!r} is not positive")
+        if not citation:
+            raise ValueError(f"{line.where}: no citation; cite where the split is stated")
+        splits.append(
+            UnitSplit(int(code), parse_date(line.where, "ex_date", day_text), ratio, citation)
+        )
+    return tuple(sorted(splits, key=lambda s: (s.scheme_code, s.ex_date)))
+
+
+def chained_navs(
+    navs: Sequence[tuple[date, Decimal]], splits: Sequence[UnitSplit]
+) -> list[Decimal]:
+    """Each NAV of ``navs`` (day, NAV) as the value of one unit held from before every
+    split of ``splits``: times the ratio of each split on or before its day."""
+    chained = []
+    for day, nav in navs:
+        for split in splits:
+            if split.ex_date <= day:
+                nav *= split.ratio
+        chained.append(nav)
+    return chained
+
+
+@dataclass(frozen=True)
 class BenchmarkTerms:
     """What a Protocol freezes of the Benchmark: its funds from each recorded date, the
-    factor fund reported beside it, and the fund-unit rates as of the freeze."""
+    factor fund reported beside it with its unit splits, and the fund-unit rates as of the
+    freeze."""
 
     funds: BenchmarkFunds
     factor_fund: int
     rates: FundRates
+    factor_fund_splits: tuple[UnitSplit, ...] = ()
 
 
 @dataclass(frozen=True)
