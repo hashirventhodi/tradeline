@@ -13,7 +13,7 @@ import sys
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -80,6 +80,7 @@ from tradeline.transport import (
 )
 from tradeline.verify_universe import verify_universe as verify_universe_service
 from tradeline.walk_forward import walk_forward as walk_forward_service
+from tradeline.weekly_integrity import frozen_on, weekly_integrity
 
 log = logging.getLogger(__name__)
 
@@ -496,6 +497,29 @@ def integrity(ctx: Context, args: argparse.Namespace) -> int:
     return 0 if report.passed else 1
 
 
+def integrity_weekly(ctx: Context, args: argparse.Namespace) -> int:
+    """The weekly Integrity Check over every day after the freeze of the Protocol
+    ``--protocol`` names (or after ``--after``) to ``--to`` (today in IST by default), with
+    its Kite Parity gaps; exit 1 and log an ``integrity alert`` at ERROR if it fails.
+
+    The summary is the last JSON line on stdout; the table goes to stderr. Nothing is
+    written.
+    """
+    end = datetime.now(IST).date() if args.end is None else args.end
+    with app_connection(ctx.secrets.require(DATABASE_URL)) as conn:
+        after = args.after if args.protocol is None else frozen_on(conn, args.protocol)
+        with _scope(after + timedelta(days=1), end):
+            report = weekly_integrity(
+                conn, ctx.config.integrity, ctx.config.parity, after=after, end=end
+            )
+    sys.stderr.write(report.text())
+    if report.passed:
+        log.info("weekly integrity finished", extra={"report": report.summary()})
+        return 0
+    log.error("integrity alert", extra={"report": report.summary()})
+    return 1
+
+
 def protocol(ctx: Context, args: argparse.Namespace) -> int:
     """``protocol freeze`` freezes the configured Protocol for ``pullback_v1`` with the data
     snapshot read now, at this commit, and prints its Window boundaries; ``protocol
@@ -753,6 +777,7 @@ COMMANDS: dict[str, Command] = {
     "check-universe": check_universe,
     "collect-daily": collect_daily,
     "integrity": integrity,
+    "integrity-weekly": integrity_weekly,
     "protocol": protocol,
     "run": run,
     "backtest": backtest,
@@ -1015,6 +1040,31 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[date_range],
         help="check NSE's end-of-day files against the Trading Calendar, never a broker;"
         " exit 1 unless every check passes",
+    )
+    weekly_parser = subparsers.add_parser(
+        "integrity-weekly",
+        help="the Integrity Check over every day after a Protocol's freeze, with its Kite Parity"
+        " gaps (never failures); exit 1 and log an integrity alert if it fails",
+    )
+    after = weekly_parser.add_mutually_exclusive_group(required=True)
+    after.add_argument(
+        "--protocol",
+        metavar="HASH",
+        help="the Protocol (12 or more characters of its hash) whose freeze day the check"
+        " starts after",
+    )
+    after.add_argument(
+        "--after",
+        metavar="DATE",
+        type=date.fromisoformat,
+        help="the day the check starts after, in place of a Protocol's freeze day",
+    )
+    weekly_parser.add_argument(
+        "--to",
+        dest="end",
+        metavar="DATE",
+        type=date.fromisoformat,
+        help="the last day checked, inclusive; defaults to today in IST",
     )
     run_parser = subparsers.add_parser(
         "run",
